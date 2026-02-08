@@ -36,6 +36,8 @@ public sealed class CommandTests
             string json = JsonSerializer.Serialize(result.Data);
             Assert.Contains("\"total_matches\":2", json);
             Assert.Contains("\"namespace_name\":\"Demo\"", json);
+            Assert.Contains("\"symbol_kind\":\"NamedType\"", json);
+            Assert.Contains("\"is_resolved\":true", json);
         }
         finally
         {

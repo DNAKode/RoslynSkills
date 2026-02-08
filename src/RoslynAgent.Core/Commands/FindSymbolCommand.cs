@@ -61,6 +61,12 @@ public sealed class FindSymbolCommand : IAgentCommand
         string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
         SyntaxNode root = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            assemblyName: "RoslynAgent.FindSymbol",
+            syntaxTrees: new[] { syntaxTree },
+            references: CompilationReferenceBuilder.BuildMetadataReferences(),
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        SemanticModel semanticModel = compilation.GetSemanticModel(syntaxTree);
 
         IEnumerable<SyntaxToken> matches = root
             .DescendantTokens(descendIntoTrivia: false)
@@ -72,7 +78,7 @@ public sealed class FindSymbolCommand : IAgentCommand
         foreach (SyntaxToken match in matches)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            resultMatches.Add(CreateMatch(match, sourceText, contextLines));
+            resultMatches.Add(CreateMatch(match, sourceText, contextLines, semanticModel, cancellationToken));
         }
 
         object data = new
@@ -83,6 +89,7 @@ public sealed class FindSymbolCommand : IAgentCommand
                 symbol_name = symbolName,
                 max_results = maxResults,
                 context_lines = contextLines,
+                semantic_enrichment = true,
             },
             total_matches = resultMatches.Count,
             matches = resultMatches,
@@ -91,7 +98,12 @@ public sealed class FindSymbolCommand : IAgentCommand
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 
-    private static SymbolMatch CreateMatch(SyntaxToken token, SourceText sourceText, int contextLines)
+    private static SymbolMatch CreateMatch(
+        SyntaxToken token,
+        SourceText sourceText,
+        int contextLines,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
     {
         LinePositionSpan linePositionSpan = sourceText.Lines.GetLinePositionSpan(token.Span);
         int line = linePositionSpan.Start.Line + 1;
@@ -121,6 +133,7 @@ public sealed class FindSymbolCommand : IAgentCommand
         int startLine = Math.Max(line - contextLines, 1);
         int endLine = Math.Min(line + contextLines, sourceText.Lines.Count);
         string snippet = BuildSnippet(sourceText, startLine, endLine);
+        SymbolSemanticInfo semantic = CreateSemanticInfo(token, semanticModel, cancellationToken);
 
         return new SymbolMatch(
             text: token.ValueText,
@@ -132,7 +145,8 @@ public sealed class FindSymbolCommand : IAgentCommand
                 namespace_name: namespaceName,
                 containing_types: containingTypes,
                 containing_member_kind: containingMember),
-            context: new ContextWindow(startLine, endLine, snippet));
+            context: new ContextWindow(startLine, endLine, snippet),
+            semantic: semantic);
     }
 
     private static bool IsDeclarationToken(SyntaxToken token)
@@ -167,6 +181,36 @@ public sealed class FindSymbolCommand : IAgentCommand
         return string.Join(Environment.NewLine, lines);
     }
 
+    private static SymbolSemanticInfo CreateSemanticInfo(
+        SyntaxToken token,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        ISymbol? symbol = SymbolResolution.GetSymbolForToken(token, semanticModel, cancellationToken);
+        if (symbol is null)
+        {
+            return new SymbolSemanticInfo(
+                is_resolved: false,
+                symbol_kind: null,
+                symbol_display: null,
+                symbol_id: null,
+                containing_symbol: null);
+        }
+
+        string? symbolId = symbol.GetDocumentationCommentId();
+        if (string.IsNullOrWhiteSpace(symbolId))
+        {
+            symbolId = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        }
+
+        return new SymbolSemanticInfo(
+            is_resolved: true,
+            symbol_kind: symbol.Kind.ToString(),
+            symbol_display: symbol.ToDisplayString(),
+            symbol_id: symbolId,
+            containing_symbol: symbol.ContainingSymbol?.ToDisplayString());
+    }
+
     private sealed record SymbolMatch(
         string text,
         string syntax_kind,
@@ -174,7 +218,8 @@ public sealed class FindSymbolCommand : IAgentCommand
         int line,
         int column,
         SymbolHierarchy hierarchy,
-        ContextWindow context);
+        ContextWindow context,
+        SymbolSemanticInfo semantic);
 
     private sealed record SymbolHierarchy(
         string? namespace_name,
@@ -185,4 +230,11 @@ public sealed class FindSymbolCommand : IAgentCommand
         int start_line,
         int end_line,
         string snippet);
+
+    private sealed record SymbolSemanticInfo(
+        bool is_resolved,
+        string? symbol_kind,
+        string? symbol_display,
+        string? symbol_id,
+        string? containing_symbol);
 }
