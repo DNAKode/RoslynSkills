@@ -8,6 +8,7 @@
     "edit.",
     "ctx."
   ],
+  "runs_per_cell": 3,
   "conditions": [
     {
       "id": "control-text-only",

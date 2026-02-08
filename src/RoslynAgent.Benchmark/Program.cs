@@ -57,6 +57,116 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase))
         return 0;
     }
 
+    if (string.Equals(verb, "agent-eval-worklist", StringComparison.OrdinalIgnoreCase))
+    {
+        string? manifestPath = TryGetOption(args, "--manifest");
+        string? runsPath = TryGetOption(args, "--runs");
+        string? worklistOutputDir = TryGetOption(args, "--output");
+
+        if (string.IsNullOrWhiteSpace(manifestPath) || string.IsNullOrWhiteSpace(runsPath))
+        {
+            Console.Error.WriteLine("Usage: agent-eval-worklist --manifest <path> --runs <dir> [--output <dir>]");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(worklistOutputDir))
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            worklistOutputDir = Path.Combine("artifacts", "agent-eval", stamp);
+        }
+
+        AgentEvalWorklistBuilder builder = new();
+        AgentEvalWorklistReport worklistReport;
+        try
+        {
+            worklistReport = await builder.BuildAsync(manifestPath, runsPath, worklistOutputDir, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Agent eval worklist build failed: {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine("Agent eval worklist generated.");
+        Console.WriteLine($"Experiment: {worklistReport.experiment_id}");
+        Console.WriteLine($"Expected runs: {worklistReport.expected_runs}");
+        Console.WriteLine($"Observed runs: {worklistReport.observed_runs}");
+        Console.WriteLine($"Completion: {worklistReport.completion_rate:P2}");
+        Console.WriteLine($"Pending runs: {worklistReport.pending_runs.Count}");
+        Console.WriteLine($"Worklist path: {worklistReport.output_path}");
+        return 0;
+    }
+
+    if (string.Equals(verb, "agent-eval-init-runs", StringComparison.OrdinalIgnoreCase))
+    {
+        string? manifestPath = TryGetOption(args, "--manifest");
+        string? runsPath = TryGetOption(args, "--runs");
+        string? initOutputDir = TryGetOption(args, "--output");
+
+        if (string.IsNullOrWhiteSpace(manifestPath) || string.IsNullOrWhiteSpace(runsPath))
+        {
+            Console.Error.WriteLine("Usage: agent-eval-init-runs --manifest <path> --runs <dir> [--output <dir>]");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(initOutputDir))
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            initOutputDir = Path.Combine("artifacts", "agent-eval", stamp);
+        }
+
+        AgentEvalRunTemplateGenerator generator = new();
+        AgentEvalTemplateGenerationReport templateReport;
+        try
+        {
+            templateReport = await generator.GenerateAsync(manifestPath, runsPath, initOutputDir, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Agent eval run template generation failed: {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine("Agent eval run template generation completed.");
+        Console.WriteLine($"Experiment: {templateReport.experiment_id}");
+        Console.WriteLine($"Pending runs: {templateReport.pending_count}");
+        Console.WriteLine($"Template files created: {templateReport.template_files_created}");
+        Console.WriteLine($"Templates directory: {templateReport.templates_directory}");
+        Console.WriteLine($"Worklist path: {templateReport.worklist_path}");
+        return 0;
+    }
+
+    if (string.Equals(verb, "agent-eval-preflight", StringComparison.OrdinalIgnoreCase))
+    {
+        string? preflightOutputDir = TryGetOption(args, "--output");
+        if (string.IsNullOrWhiteSpace(preflightOutputDir))
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            preflightOutputDir = Path.Combine("artifacts", "agent-eval", stamp);
+        }
+
+        AgentEvalPreflightChecker checker = new();
+        AgentEvalPreflightReport preflightReport;
+        try
+        {
+            preflightReport = await checker.RunAsync(preflightOutputDir, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Agent eval preflight failed: {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine("Agent eval preflight completed.");
+        Console.WriteLine($"All required available: {preflightReport.all_required_available}");
+        foreach (var item in preflightReport.checks)
+        {
+            Console.WriteLine($"- {item.command}: {(item.available ? "available" : "missing")} (required={item.required})");
+        }
+        Console.WriteLine($"Preflight path: {preflightReport.output_path}");
+        return preflightReport.all_required_available ? 0 : 2;
+    }
+
     Console.Error.WriteLine($"Unknown command '{verb}'.");
     PrintHelp();
     return 1;
@@ -68,18 +178,18 @@ if (string.IsNullOrWhiteSpace(scenarioPath))
     scenarioPath = Path.Combine("benchmarks", "scenarios", "rq1-structured-vs-grep.json");
 }
 
-string? outputDir = TryGetOption(args, "--output");
-if (string.IsNullOrWhiteSpace(outputDir))
+string? rq1OutputDir = TryGetOption(args, "--output");
+if (string.IsNullOrWhiteSpace(rq1OutputDir))
 {
     string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-    outputDir = Path.Combine("artifacts", "rq1", stamp);
+    rq1OutputDir = Path.Combine("artifacts", "rq1", stamp);
 }
 
 Rq1BenchmarkRunner runner = new();
-Rq1BenchmarkReport report;
+Rq1BenchmarkReport rq1Report;
 try
 {
-    report = await runner.RunAsync(scenarioPath, outputDir, CancellationToken.None).ConfigureAwait(false);
+    rq1Report = await runner.RunAsync(scenarioPath, rq1OutputDir, CancellationToken.None).ConfigureAwait(false);
 }
 catch (Exception ex)
 {
@@ -88,12 +198,12 @@ catch (Exception ex)
 }
 
 Console.WriteLine($"RQ1 component benchmark completed.");
-Console.WriteLine($"Scenario count: {report.Summary.scenario_count}");
-Console.WriteLine($"Structured accuracy: {report.Summary.structured_accuracy:P2}");
-Console.WriteLine($"Grep accuracy: {report.Summary.grep_accuracy:P2}");
-Console.WriteLine($"Accuracy delta: {report.Summary.accuracy_delta:P2}");
-Console.WriteLine($"Benchmark type: {report.BenchmarkType}");
-Console.WriteLine($"Artifact path: {report.ArtifactPath}");
+Console.WriteLine($"Scenario count: {rq1Report.Summary.scenario_count}");
+Console.WriteLine($"Structured accuracy: {rq1Report.Summary.structured_accuracy:P2}");
+Console.WriteLine($"Grep accuracy: {rq1Report.Summary.grep_accuracy:P2}");
+Console.WriteLine($"Accuracy delta: {rq1Report.Summary.accuracy_delta:P2}");
+Console.WriteLine($"Benchmark type: {rq1Report.BenchmarkType}");
+Console.WriteLine($"Artifact path: {rq1Report.ArtifactPath}");
 return 0;
 
 static bool IsHelp(string value)
@@ -128,6 +238,9 @@ static void PrintHelp()
         Commands:
           rq1 [--scenario <path>] [--output <dir>]
           agent-eval-score --manifest <path> --runs <dir> [--output <dir>]
+          agent-eval-worklist --manifest <path> --runs <dir> [--output <dir>]
+          agent-eval-init-runs --manifest <path> --runs <dir> [--output <dir>]
+          agent-eval-preflight [--output <dir>]
 
         Notes:
           - Default scenario file: benchmarks/scenarios/rq1-structured-vs-grep.json

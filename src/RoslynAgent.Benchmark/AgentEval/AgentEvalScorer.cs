@@ -4,21 +4,15 @@ namespace RoslynAgent.Benchmark.AgentEval;
 
 public sealed class AgentEvalScorer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-    };
-
     public async Task<AgentEvalReport> ScoreAsync(
         string manifestPath,
         string runsDirectory,
         string outputDirectory,
         CancellationToken cancellationToken)
     {
-        AgentEvalManifest manifest = LoadManifest(manifestPath);
-        AgentEvalRun[] runs = LoadRuns(runsDirectory);
-        ValidateRuns(manifest, runs);
+        AgentEvalManifest manifest = AgentEvalStorage.LoadManifest(manifestPath);
+        AgentEvalRun[] runs = AgentEvalStorage.LoadRuns(runsDirectory);
+        AgentEvalValidation.ValidateRuns(manifest, runs);
 
         List<AgentEvalConditionSummary> summaries = manifest.Conditions
             .Select(c => BuildConditionSummary(c, runs, manifest.RoslynToolPrefixes))
@@ -36,71 +30,9 @@ public sealed class AgentEvalScorer
             primary_comparison: comparison,
             output_path: outputPath);
 
-        string json = JsonSerializer.Serialize(report, JsonOptions);
+        string json = JsonSerializer.Serialize(report, AgentEvalStorage.SerializerOptions);
         await File.WriteAllTextAsync(outputPath, json, cancellationToken).ConfigureAwait(false);
         return report;
-    }
-
-    private static AgentEvalManifest LoadManifest(string manifestPath)
-    {
-        string fullPath = Path.GetFullPath(manifestPath);
-        if (!File.Exists(fullPath))
-        {
-            throw new FileNotFoundException("Agent eval manifest was not found.", fullPath);
-        }
-
-        string json = File.ReadAllText(fullPath);
-        AgentEvalManifest? manifest = JsonSerializer.Deserialize<AgentEvalManifest>(json, JsonOptions);
-        if (manifest is null)
-        {
-            throw new InvalidOperationException("Failed to parse agent eval manifest.");
-        }
-
-        return manifest;
-    }
-
-    private static AgentEvalRun[] LoadRuns(string runsDirectory)
-    {
-        string fullDirectory = Path.GetFullPath(runsDirectory);
-        if (!Directory.Exists(fullDirectory))
-        {
-            throw new DirectoryNotFoundException($"Runs directory '{fullDirectory}' does not exist.");
-        }
-
-        string[] files = Directory.GetFiles(fullDirectory, "*.json", SearchOption.TopDirectoryOnly);
-        List<AgentEvalRun> runs = new();
-        foreach (string file in files)
-        {
-            string json = File.ReadAllText(file);
-            AgentEvalRun? run = JsonSerializer.Deserialize<AgentEvalRun>(json, JsonOptions);
-            if (run is not null)
-            {
-                runs.Add(run);
-            }
-        }
-
-        return runs.ToArray();
-    }
-
-    private static void ValidateRuns(AgentEvalManifest manifest, IReadOnlyList<AgentEvalRun> runs)
-    {
-        HashSet<string> conditionIds = manifest.Conditions.Select(c => c.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> taskIds = manifest.Tasks.Select(t => t.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (AgentEvalRun run in runs)
-        {
-            if (!conditionIds.Contains(run.ConditionId))
-            {
-                throw new InvalidOperationException(
-                    $"Run '{run.RunId}' references unknown condition id '{run.ConditionId}'.");
-            }
-
-            if (!taskIds.Contains(run.TaskId))
-            {
-                throw new InvalidOperationException(
-                    $"Run '{run.RunId}' references unknown task id '{run.TaskId}'.");
-            }
-        }
     }
 
     private static AgentEvalConditionSummary BuildConditionSummary(

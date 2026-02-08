@@ -2,6 +2,7 @@
   "run_id": "run-001",
   "task_id": "task-001",
   "condition_id": "treatment-roslyn-optional",
+  "replicate": 1,
   "agent": "codex-cli",
   "model": "gpt-5-codex",
   "succeeded": true,

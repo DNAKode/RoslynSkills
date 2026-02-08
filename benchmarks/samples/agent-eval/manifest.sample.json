@@ -6,6 +6,7 @@
     "nav.",
     "diag."
   ],
+  "runs_per_cell": 1,
   "conditions": [
     {
       "id": "control-text-only",

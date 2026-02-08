@@ -2,6 +2,7 @@
   "run_id": "run-control-001",
   "task_id": "task-001",
   "condition_id": "control-text-only",
+  "replicate": 1,
   "agent": "codex-cli",
   "model": "gpt-5-codex-fast",
   "succeeded": false,

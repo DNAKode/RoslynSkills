@@ -7,7 +7,8 @@ public sealed record AgentEvalManifest(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("roslyn_tool_prefixes")] IReadOnlyList<string> RoslynToolPrefixes,
     [property: JsonPropertyName("conditions")] IReadOnlyList<AgentEvalCondition> Conditions,
-    [property: JsonPropertyName("tasks")] IReadOnlyList<AgentEvalTask> Tasks);
+    [property: JsonPropertyName("tasks")] IReadOnlyList<AgentEvalTask> Tasks,
+    [property: JsonPropertyName("runs_per_cell")] int RunsPerCell = 1);
 
 public sealed record AgentEvalCondition(
     [property: JsonPropertyName("id")] string Id,
@@ -26,6 +27,7 @@ public sealed record AgentEvalRun(
     [property: JsonPropertyName("run_id")] string RunId,
     [property: JsonPropertyName("task_id")] string TaskId,
     [property: JsonPropertyName("condition_id")] string ConditionId,
+    [property: JsonPropertyName("replicate")] int? Replicate,
     [property: JsonPropertyName("agent")] string Agent,
     [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("succeeded")] bool Succeeded,
@@ -73,4 +75,28 @@ public sealed record AgentEvalReport(
     int total_runs,
     IReadOnlyList<AgentEvalConditionSummary> condition_summaries,
     AgentEvalComparison? primary_comparison,
+    string output_path);
+
+public sealed record AgentEvalCellSummary(
+    string task_id,
+    string condition_id,
+    int observed_runs,
+    int target_runs,
+    int missing_runs);
+
+public sealed record AgentEvalPendingRun(
+    string task_id,
+    string condition_id,
+    int replicate,
+    string suggested_run_id);
+
+public sealed record AgentEvalWorklistReport(
+    string experiment_id,
+    DateTimeOffset generated_utc,
+    int runs_per_cell,
+    int expected_runs,
+    int observed_runs,
+    double completion_rate,
+    IReadOnlyList<AgentEvalCellSummary> cells,
+    IReadOnlyList<AgentEvalPendingRun> pending_runs,
     string output_path);
