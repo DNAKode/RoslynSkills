@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RoslynAgent.Benchmark/RoslynAgent.Benchmark.csproj" />
+    <Project Path="src/RoslynAgent.Cli/RoslynAgent.Cli.csproj" />
+    <Project Path="src/RoslynAgent.Contracts/RoslynAgent.Contracts.csproj" />
+    <Project Path="src/RoslynAgent.Core/RoslynAgent.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj" />
+    <Project Path="tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj" />
+  </Folder>
+</Solution>
