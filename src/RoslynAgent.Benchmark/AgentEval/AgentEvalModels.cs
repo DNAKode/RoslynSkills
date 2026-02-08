@@ -86,12 +86,25 @@ public sealed record AgentEvalComparison(
     double? roslyn_used_rate_in_treatment,
     string? note);
 
+public sealed record AgentEvalTaskComparison(
+    string task_id,
+    string task_title,
+    bool sufficient_data,
+    int control_run_count,
+    int treatment_run_count,
+    double? success_rate_delta,
+    double? compile_rate_delta,
+    double? tests_rate_delta,
+    double? treatment_roslyn_used_rate,
+    string? note);
+
 public sealed record AgentEvalReport(
     string experiment_id,
     DateTimeOffset generated_utc,
     int total_runs,
     IReadOnlyList<AgentEvalConditionSummary> condition_summaries,
     AgentEvalComparison? primary_comparison,
+    IReadOnlyList<AgentEvalTaskComparison> task_comparisons,
     string output_path);
 
 public sealed record AgentEvalCellSummary(

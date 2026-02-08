@@ -67,6 +67,10 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase))
             }
         }
 
+        int taskComparisonsWithData = evalReport.task_comparisons.Count(t => t.sufficient_data);
+        int taskComparisonsMissingData = evalReport.task_comparisons.Count - taskComparisonsWithData;
+        Console.WriteLine($"Task comparisons: {evalReport.task_comparisons.Count} (sufficient={taskComparisonsWithData}, insufficient={taskComparisonsMissingData})");
+
         return 0;
     }
 

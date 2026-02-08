@@ -93,6 +93,7 @@ Outputs:
 
 - `agent-eval-report.json` with:
   - control/treatment deltas,
+  - per-task control/treatment comparison slices,
   - Roslyn tool adoption metrics,
   - reflection aggregates.
 

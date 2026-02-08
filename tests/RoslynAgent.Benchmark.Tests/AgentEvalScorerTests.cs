@@ -43,6 +43,9 @@ public sealed class AgentEvalScorerTests
             Assert.True(report.primary_comparison!.sufficient_data);
             Assert.True(report.primary_comparison.success_rate_delta > 0);
             Assert.True(report.primary_comparison.roslyn_used_rate_in_treatment > 0);
+            Assert.Single(report.task_comparisons);
+            Assert.True(report.task_comparisons[0].sufficient_data);
+            Assert.True(report.task_comparisons[0].success_rate_delta > 0);
             Assert.True(File.Exists(report.output_path));
         }
         finally
@@ -83,6 +86,9 @@ public sealed class AgentEvalScorerTests
             Assert.False(report.primary_comparison!.sufficient_data);
             Assert.Null(report.primary_comparison.success_rate_delta);
             Assert.NotNull(report.primary_comparison.note);
+            Assert.Single(report.task_comparisons);
+            Assert.False(report.task_comparisons[0].sufficient_data);
+            Assert.Null(report.task_comparisons[0].success_rate_delta);
         }
         finally
         {
