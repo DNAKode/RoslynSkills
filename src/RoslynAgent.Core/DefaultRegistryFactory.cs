@@ -12,6 +12,7 @@ public static class DefaultRegistryFactory
             new PingCommand(),
             new FindSymbolCommand(),
             new GetFileDiagnosticsCommand(),
+            new RenameSymbolCommand(),
         };
 
         return new CommandRegistry(commands);

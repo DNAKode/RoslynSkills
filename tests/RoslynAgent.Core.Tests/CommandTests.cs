@@ -78,6 +78,94 @@ public sealed class CommandTests
         }
     }
 
+    [Fact]
+    public async Task RenameSymbolCommand_RenamesDeclarationAndReferencesInFile()
+    {
+        string filePath = WriteTempFile(
+            """
+            namespace Demo;
+            public class Worker
+            {
+                public void Run()
+                {
+                    Run();
+                }
+            }
+            """);
+
+        try
+        {
+            RenameSymbolCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 4,
+                column = 17,
+                new_name = "Execute",
+                apply = true,
+            });
+
+            var result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"replacement_count\":2", json);
+            Assert.Contains("\"wrote_file\":true", json);
+
+            string updated = File.ReadAllText(filePath);
+            Assert.Contains("public void Execute()", updated);
+            Assert.Contains("Execute();", updated);
+            Assert.DoesNotContain("public void Run()", updated);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task RenameSymbolCommand_DryRunDoesNotWriteFile()
+    {
+        string filePath = WriteTempFile(
+            """
+            namespace Demo;
+            public class Worker
+            {
+                public void Run()
+                {
+                    Run();
+                }
+            }
+            """);
+
+        try
+        {
+            RenameSymbolCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 4,
+                column = 17,
+                new_name = "Execute",
+                apply = false,
+            });
+
+            var result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"wrote_file\":false", json);
+
+            string unchanged = File.ReadAllText(filePath);
+            Assert.Contains("public void Run()", unchanged);
+            Assert.Contains("Run();", unchanged);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
     private static string WriteTempFile(string contents)
     {
         string path = Path.Combine(Path.GetTempPath(), $"roslyn-agent-{Guid.NewGuid():N}.cs");

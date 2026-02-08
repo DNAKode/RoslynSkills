@@ -2,7 +2,6 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using RoslynAgent.Contracts;
 using System.Collections.Immutable;
-using System.Reflection;
 using System.Text.Json;
 
 namespace RoslynAgent.Core.Commands;
@@ -55,7 +54,7 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
 
-        IEnumerable<MetadataReference> references = BuildMetadataReferences();
+        IEnumerable<MetadataReference> references = CompilationReferenceBuilder.BuildMetadataReferences();
         CSharpCompilation compilation = CSharpCompilation.Create(
             assemblyName: "RoslynAgent.InMemory",
             syntaxTrees: new[] { tree },
@@ -80,28 +79,6 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
-    }
-
-    private static IEnumerable<MetadataReference> BuildMetadataReferences()
-    {
-        HashSet<string> paths = new(StringComparer.OrdinalIgnoreCase);
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.IsDynamic)
-            {
-                continue;
-            }
-
-            string? location = assembly.Location;
-            if (string.IsNullOrWhiteSpace(location))
-            {
-                continue;
-            }
-
-            paths.Add(location);
-        }
-
-        return paths.Select(path => MetadataReference.CreateFromFile(path));
     }
 
     private static DiagnosticPayload ToPayload(Diagnostic diagnostic)

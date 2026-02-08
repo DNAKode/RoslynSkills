@@ -57,4 +57,52 @@ internal static class InputParsing
 
         return value;
     }
+
+    public static bool TryGetRequiredInt(
+        JsonElement input,
+        string propertyName,
+        List<CommandError> errors,
+        out int value,
+        int minValue = int.MinValue,
+        int maxValue = int.MaxValue)
+    {
+        value = 0;
+        if (!input.TryGetProperty(propertyName, out JsonElement property) || property.ValueKind != JsonValueKind.Number)
+        {
+            errors.Add(new CommandError(
+                "invalid_input",
+                $"Property '{propertyName}' is required and must be a number."));
+            return false;
+        }
+
+        if (!property.TryGetInt32(out int parsed))
+        {
+            errors.Add(new CommandError(
+                "invalid_input",
+                $"Property '{propertyName}' must be a valid 32-bit integer."));
+            return false;
+        }
+
+        if (parsed < minValue || parsed > maxValue)
+        {
+            errors.Add(new CommandError(
+                "invalid_input",
+                $"Property '{propertyName}' must be between {minValue} and {maxValue}."));
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    public static bool GetOptionalBool(JsonElement input, string propertyName, bool defaultValue)
+    {
+        if (!input.TryGetProperty(propertyName, out JsonElement property) ||
+            (property.ValueKind != JsonValueKind.True && property.ValueKind != JsonValueKind.False))
+        {
+            return defaultValue;
+        }
+
+        return property.GetBoolean();
+    }
 }
