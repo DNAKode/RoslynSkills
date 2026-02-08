@@ -111,6 +111,8 @@ public sealed class CommandTests
             string json = JsonSerializer.Serialize(result.Data);
             Assert.Contains("\"replacement_count\":2", json);
             Assert.Contains("\"wrote_file\":true", json);
+            Assert.Contains("\"diagnostics_after_edit\":", json);
+            Assert.Contains("\"errors\":0", json);
 
             string updated = File.ReadAllText(filePath);
             Assert.Contains("public void Execute()", updated);

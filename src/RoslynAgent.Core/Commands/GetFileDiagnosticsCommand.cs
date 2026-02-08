@@ -1,7 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using RoslynAgent.Contracts;
-using System.Collections.Immutable;
 using System.Text.Json;
 
 namespace RoslynAgent.Core.Commands;
@@ -54,20 +53,8 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
 
-        IEnumerable<MetadataReference> references = CompilationReferenceBuilder.BuildMetadataReferences();
-        CSharpCompilation compilation = CSharpCompilation.Create(
-            assemblyName: "RoslynAgent.InMemory",
-            syntaxTrees: new[] { tree },
-            references: references,
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        ImmutableArray<Diagnostic> diagnostics = compilation.GetDiagnostics(cancellationToken);
-        DiagnosticPayload[] payload = diagnostics
-            .Select(ToPayload)
-            .OrderBy(d => d.line)
-            .ThenBy(d => d.column)
-            .ThenBy(d => d.id, StringComparer.Ordinal)
-            .ToArray();
+        IReadOnlyList<Diagnostic> diagnostics = CompilationDiagnostics.GetDiagnostics(new[] { tree }, cancellationToken);
+        NormalizedDiagnostic[] payload = CompilationDiagnostics.Normalize(diagnostics);
 
         object data = new
         {
@@ -80,27 +67,4 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
-
-    private static DiagnosticPayload ToPayload(Diagnostic diagnostic)
-    {
-        FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
-        int line = span.StartLinePosition.Line >= 0 ? span.StartLinePosition.Line + 1 : 0;
-        int column = span.StartLinePosition.Character >= 0 ? span.StartLinePosition.Character + 1 : 0;
-
-        return new DiagnosticPayload(
-            id: diagnostic.Id,
-            severity: diagnostic.Severity.ToString(),
-            message: diagnostic.GetMessage(),
-            file_path: string.IsNullOrWhiteSpace(span.Path) ? diagnostic.Location.SourceTree?.FilePath ?? string.Empty : span.Path,
-            line: line,
-            column: column);
-    }
-
-    private sealed record DiagnosticPayload(
-        string id,
-        string severity,
-        string message,
-        string file_path,
-        int line,
-        int column);
 }

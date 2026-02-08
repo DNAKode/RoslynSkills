@@ -80,6 +80,7 @@ public sealed class RenameSymbolCommand : IAgentCommand
         }
 
         bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
+        int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 500);
 
         string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
@@ -151,10 +152,23 @@ public sealed class RenameSymbolCommand : IAgentCommand
                 rewritten.TrailingTrivia));
 
         bool changed = !string.Equals(root.ToFullString(), newRoot.ToFullString(), StringComparison.Ordinal);
+        string updatedSource = newRoot.ToFullString();
+
+        SyntaxTree updatedTree = CSharpSyntaxTree.ParseText(updatedSource, path: filePath, cancellationToken: cancellationToken);
+        IReadOnlyList<Diagnostic> updatedDiagnostics = CompilationDiagnostics.GetDiagnostics(new[] { updatedTree }, cancellationToken);
+        NormalizedDiagnostic[] normalizedDiagnostics = CompilationDiagnostics.Normalize(updatedDiagnostics)
+            .Take(maxDiagnostics)
+            .ToArray();
+
+        int diagnosticsErrors = normalizedDiagnostics.Count(d =>
+            string.Equals(d.severity, "Error", StringComparison.OrdinalIgnoreCase));
+        int diagnosticsWarnings = normalizedDiagnostics.Count(d =>
+            string.Equals(d.severity, "Warning", StringComparison.OrdinalIgnoreCase));
+
         bool wroteFile = false;
         if (apply && changed)
         {
-            await File.WriteAllTextAsync(filePath, newRoot.ToFullString(), cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(filePath, updatedSource, cancellationToken).ConfigureAwait(false);
             wroteFile = true;
         }
 
@@ -177,6 +191,14 @@ public sealed class RenameSymbolCommand : IAgentCommand
             changed_lines = changedLines,
             apply_changes = apply,
             wrote_file = wroteFile,
+            diagnostics_after_edit = new
+            {
+                total = updatedDiagnostics.Count,
+                returned = normalizedDiagnostics.Length,
+                errors = diagnosticsErrors,
+                warnings = diagnosticsWarnings,
+                diagnostics = normalizedDiagnostics,
+            },
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
