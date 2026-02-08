@@ -7,6 +7,7 @@ This file (`AGENTS.md`) defines how agents should execute the project at maximum
 
 Current mode: planning and design, rapidly transitioning to implementation once dependency prerequisites are satisfied.  
 Primary objective: prove or disprove that Roslyn-native agent tooling materially outperforms text-first editing workflows for C#/.NET.
+Priority order: tooling quality -> benchmark rigor -> meta-learning quality -> industrial research report.
 
 ## Distilled External Lessons (Meta-Study Inputs)
 
@@ -181,3 +182,7 @@ Initial seed entries:
 
 - `2026-02-08`: Project started with research-first scope -> Use proposal as single source of truth -> Keep AGENTS as execution doctrine, not narrative notes.
 - `2026-02-08`: User requested speed-maximized, dependency-driven execution -> Drop calendar theater and version churn -> Plan and execute by DAG with strict acceptance gates.
+- `2026-02-08`: Scope decision set by user -> Focus only on C#/.NET and public OSS for this phase -> Defer cross-language generalization claims.
+- `2026-02-08`: Interface strategy clarified -> Prioritize plain CLI, then skill wrappers, then MCP adapters -> Stabilize CLI contracts before interoperability layers.
+- `2026-02-08`: Evaluation philosophy clarified -> No fixed improvement threshold upfront; pursue best-effort gains and context-aware de-scoping -> Let empirical evidence drive inclusion/exclusion.
+- `2026-02-08`: Historical caution recognized -> Syntax-aware systems can increase interaction friction for humans -> Preserve text fallback and evaluate mixed-mode workflows.
