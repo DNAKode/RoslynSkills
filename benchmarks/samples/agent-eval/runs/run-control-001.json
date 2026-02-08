@@ -1,0 +1,35 @@
+{
+  "run_id": "run-control-001",
+  "task_id": "task-001",
+  "condition_id": "control-text-only",
+  "agent": "codex-cli",
+  "model": "gpt-5-codex-fast",
+  "succeeded": false,
+  "compile_passed": false,
+  "tests_passed": false,
+  "duration_seconds": 221.7,
+  "tools_offered": [
+    "read_file",
+    "run_shell",
+    "search"
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "search",
+      "ok": true
+    },
+    {
+      "tool_name": "run_shell",
+      "ok": true
+    }
+  ],
+  "post_run_reflection": {
+    "summary": "Ambiguous symbol targets required extra manual checking and led to a wrong edit.",
+    "helpful_tools": [
+      "search",
+      "run_shell"
+    ],
+    "unhelpful_tools": [],
+    "roslyn_helpfulness_score": null
+  }
+}

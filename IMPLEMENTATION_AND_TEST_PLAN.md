@@ -66,6 +66,10 @@ Exit criteria:
 
 - first full experiment slice for RQ1 and RQ3 is runnable.
 
+Interpretation rule:
+
+- Wave B micro-benchmark results are diagnostic only; they do not by themselves validate overall agentic utility.
+
 ## Wave C: Structured Editing and Transactions
 
 Projects:
@@ -108,6 +112,10 @@ Tasks:
 Exit criteria:
 
 - trace-equivalent behavior verified for shared operations across interfaces.
+
+Additional required output:
+
+- agent-in-loop A/B trial harness where Roslyn tools are optional in treatment condition and absent in control.
 
 ## Wave E: Production Hardening and Reporting
 
@@ -182,6 +190,13 @@ Implement machine-readable scenario files with:
 3. Claude Code runner
 4. Optional additional runners
 
+Runner logging requirements:
+
+- log tools offered per run,
+- log tools called per run,
+- classify Roslyn tool usage events,
+- capture short structured post-run self-report block.
+
 ## 4.3 Metrics pipeline
 
 Implement metrics in this order:
@@ -191,6 +206,8 @@ Implement metrics in this order:
 3. regression count
 4. time-to-green
 5. reviewer cleanup proxy metrics
+6. Roslyn tool adoption and usage share metrics
+7. A/B uplift metrics conditioned on tool usage
 
 ## 5. Environment and Tooling Requirements
 
@@ -229,6 +246,11 @@ Risk: interface divergence
 Test response:
 
 - CLI vs skill vs MCP conformance test matrix.
+
+Risk: synthetic benchmark overclaims  
+Test response:
+
+- enforce agent-in-loop A/B trial requirement before claiming end-to-end value.
 
 ## 7. Traceability Matrix (Projects -> Tasks -> Tests)
 

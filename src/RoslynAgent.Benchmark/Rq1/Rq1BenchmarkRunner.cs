@@ -58,6 +58,7 @@ public sealed class Rq1BenchmarkRunner
 
         Rq1Summary summary = BuildSummary(caseResults);
         Rq1BenchmarkReport report = new(
+            BenchmarkType: "component-diagnostic",
             GeneratedUtc: DateTimeOffset.UtcNow,
             ScenarioSource: fullScenarioPath,
             Summary: summary,
@@ -377,6 +378,7 @@ public sealed record Rq1ScenarioResult(
     string? notes);
 
 public sealed record Rq1BenchmarkReport(
+    string BenchmarkType,
     DateTimeOffset GeneratedUtc,
     string ScenarioSource,
     Rq1Summary Summary,

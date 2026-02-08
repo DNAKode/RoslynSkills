@@ -174,6 +174,8 @@ Detailed requirements:
 - run orchestration with seeded reproducibility,
 - baseline support (B0-B3),
 - telemetry collection (tool calls, timings, token usage, diagnostics),
+- explicit tool availability and tool usage logging per run,
+- structured post-run agent self-report capture,
 - metric computation and report generation,
 - replay capability for failed runs,
 - environment capability detection and setup checks.
@@ -216,6 +218,7 @@ Objective:
 Outputs:
 
 - experiment matrix,
+- randomized A/B trial matrix (Roslyn unavailable vs available),
 - ablation reports (context shape, feedback timing, interface channel),
 - failure taxonomy report,
 - recommendation package for production path.
@@ -298,6 +301,10 @@ Parallelization notes:
 `R-012` Draft skill wrapper and MCP adapter thin layers (P4)  
 `R-013` Add packaging pipeline for `dotnet tool` preview release (P9)  
 `R-014` Create technical report template with evidence links (P10)
+`R-015` Define agent-in-loop run manifest schema with control/treatment conditions (P6/P8)  
+`R-016` Add Codex CLI and Claude Code runner logging for tool offered/used events (P6)  
+`R-017` Implement scorer for adoption metrics and post-run agent self-report fields (P6/P8)  
+`R-018` Build first realistic A/B trial pack on public OSS tasks (P8)
 
 ## 6. Command Language Design Work (Deep Focus)
 

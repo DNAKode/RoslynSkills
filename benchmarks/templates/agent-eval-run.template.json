@@ -1,0 +1,34 @@
+{
+  "run_id": "run-001",
+  "task_id": "task-001",
+  "condition_id": "treatment-roslyn-optional",
+  "agent": "codex-cli",
+  "model": "gpt-5-codex",
+  "succeeded": true,
+  "compile_passed": true,
+  "tests_passed": true,
+  "duration_seconds": 186.4,
+  "tools_offered": [
+    "read_file",
+    "run_shell",
+    "roslyn-agent.run"
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "read_file",
+      "ok": true
+    },
+    {
+      "tool_name": "roslyn-agent.run",
+      "ok": true
+    }
+  ],
+  "post_run_reflection": {
+    "summary": "Roslyn symbol context reduced ambiguity on target selection.",
+    "helpful_tools": [
+      "roslyn-agent.run"
+    ],
+    "unhelpful_tools": [],
+    "roslyn_helpfulness_score": 4
+  }
+}

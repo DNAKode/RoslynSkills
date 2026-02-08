@@ -190,3 +190,5 @@ Initial seed entries:
 - `2026-02-08`: Cross-referenced design and implementation plans created -> Link projects, command theories, interfaces, and test layers explicitly -> Use traceability matrix to keep build and benchmark work aligned.
 - `2026-02-08`: Initial implementation slice completed -> Ship CLI contract + Roslyn-backed retrieval/diagnostics commands + test scaffolding early -> Validate architecture with passing build/tests before expanding operation breadth.
 - `2026-02-08`: First RQ1 benchmark slice implemented -> Compare structured symbol envelopes against grep-like baseline on ambiguity fixtures with reproducible JSON artifacts -> Use targeted scenario design to expose disambiguation value early.
+- `2026-02-08`: Methodology correction after user challenge -> Treat RQ1 component benchmark as diagnostic only and make agent-in-loop A/B trials primary evidence -> Add run schemas and scoring for tool adoption and agent self-report.
+- `2026-02-08`: Agent-eval scoring scaffold implemented -> Ingest control/treatment run logs and quantify Roslyn adoption plus self-reported usefulness -> Require this layer before claiming end-to-end utility.

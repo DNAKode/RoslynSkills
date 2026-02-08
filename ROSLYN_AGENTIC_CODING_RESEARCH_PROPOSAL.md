@@ -89,6 +89,11 @@ Evaluation focus:
 - downstream edit correctness,
 - token efficiency and prompt reliability.
 
+Important methodological note:
+
+- RQ1 micro-benchmarks (symbol targeting tests) are **diagnostic**, not decisive proof of agentic value.
+- Decisive evidence must come from full agent trajectories on realistic tasks where the agent can choose tools.
+
 ### RQ2: Syntax-anchored edits vs text edits
 
 Question: does anchoring edits to syntax/semantic structures outperform regex/patch workflows on correctness and change safety?
@@ -240,6 +245,23 @@ Deliverable:
 
 ## 9. Evaluation Design
 
+### 9.0 Evaluation hierarchy (realism-first)
+
+Use a layered evaluation model:
+
+- **Layer A: Component diagnostics**  
+  Fast micro-benchmarks for retrieval/edit/diagnostic packet behavior (including current RQ1 slice).
+- **Layer B: Agent-in-the-loop A/B trials (primary evidence)**  
+  Same tasks, same prompts, same model policy; compare conditions where Roslyn tools are unavailable vs available.
+- **Layer C: Robustness and scale checks**  
+  Multi-run variance, holdout tasks, and broader corpus sweeps.
+
+Decision-making should prioritize Layer B/C evidence over Layer A.
+
+Benchmark design inspiration:
+
+- Use end-to-end, issue-oriented methodology patterns similar to SWE-bench style evaluation, adapted for C# and Roslyn-specific tool-choice questions.
+
 ### 9.1 Baseline families
 
 - **B0**: text-first (grep/patch style flow).
@@ -269,10 +291,40 @@ Secondary:
 - failure-mode distribution,
 - retrieval-to-success efficiency.
 
+Behavioral/adoption:
+
+- Roslyn tools offered vs Roslyn tools used rate.
+- Roslyn call share among all tool calls.
+- Time-to-first Roslyn call.
+- Success conditional on Roslyn usage vs non-usage (within Roslyn-enabled condition).
+- Explicit post-task agent self-report on tool helpfulness (structured, short-form, not hidden reasoning).
+
 ### 9.4 Human involvement
 
 - Human support expected for environment setup and repository preparation.
 - Human review introduced once automated runs are stable enough to avoid noisy scoring.
+
+### 9.5 Agent-in-the-loop trial protocol
+
+For each task and model configuration, run at least:
+
+- **Condition A (control)**: no Roslyn tools exposed.
+- **Condition B (treatment)**: Roslyn tools exposed, optional usage.
+
+Both conditions must keep:
+
+- same task statement style,
+- same acceptance checks,
+- same resource limits,
+- same base prompt policy.
+
+At run end, require a short structured self-report field such as:
+
+- which tools were most useful,
+- whether Roslyn tools helped or were ignored,
+- what was missing in tool capability.
+
+This captures practical utility and adoption, not only raw correctness.
 
 ## 10. Program Structure (Dependency-Graph, Not Calendar)
 
@@ -331,7 +383,8 @@ Secondary:
 2. Define operation-surface taxonomy and command-language candidates.
 3. Design benchmark scaffolding requirements and artifact schema.
 4. Draft cross-referenced detailed design and implementation/test plans.
-5. Begin implementation on unblocked highest-value nodes.
+5. Implement agent-in-the-loop A/B evaluation protocol with tool-choice and self-report logging.
+6. Begin implementation on unblocked highest-value nodes.
 
 ---
 
@@ -375,3 +428,6 @@ Meta-study inputs on agentic coding practice:
 22. Peter Steinberger, "How I ship side projects at lightning speed with AI coding agents": https://steipete.me/posts/2025/how-i-ship-side-projects-at-lightning-speed-with-ai-coding-agents
 23. Peter Steinberger, "MCP at Scale": https://steipete.me/posts/2025/mcp-at-scale
 24. Paul Gauthier, Aider repository: https://github.com/Aider-AI/aider
+25. SWE-bench repository: https://github.com/princeton-nlp/SWE-bench
+26. Agentless repository: https://github.com/OpenAutoCoder/Agentless
+27. OpenHands R2E2 benchmark write-up: https://www.all-hands.dev/blog/r2e2-realistic-repo-level-benchmark-for-ai-coding-agents

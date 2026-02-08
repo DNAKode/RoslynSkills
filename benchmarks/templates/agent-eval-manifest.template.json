@@ -1,0 +1,37 @@
+{
+  "experiment_id": "agent-rq1-ab-v1",
+  "description": "Control vs treatment agent trial. Control has no Roslyn tools. Treatment exposes Roslyn CLI tools as optional.",
+  "roslyn_tool_prefixes": [
+    "roslyn-agent.",
+    "nav.",
+    "diag.",
+    "edit.",
+    "ctx."
+  ],
+  "conditions": [
+    {
+      "id": "control-text-only",
+      "name": "Control (No Roslyn Tools)",
+      "roslyn_tools_enabled": false,
+      "notes": "Agent uses default text-first tools only."
+    },
+    {
+      "id": "treatment-roslyn-optional",
+      "name": "Treatment (Roslyn Optional)",
+      "roslyn_tools_enabled": true,
+      "notes": "Agent may use Roslyn tools but is not forced."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Fix ambiguous symbol target bug",
+      "repo": "owner/repo",
+      "commit": "abc123",
+      "acceptance_checks": [
+        "dotnet build",
+        "dotnet test"
+      ]
+    }
+  ]
+}

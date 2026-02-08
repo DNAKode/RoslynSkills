@@ -1,0 +1,40 @@
+{
+  "run_id": "run-treatment-001",
+  "task_id": "task-001",
+  "condition_id": "treatment-roslyn-optional",
+  "agent": "codex-cli",
+  "model": "gpt-5-codex-fast",
+  "succeeded": true,
+  "compile_passed": true,
+  "tests_passed": true,
+  "duration_seconds": 188.4,
+  "tools_offered": [
+    "read_file",
+    "run_shell",
+    "search",
+    "roslyn-agent.run"
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "search",
+      "ok": true
+    },
+    {
+      "tool_name": "roslyn-agent.run",
+      "ok": true
+    },
+    {
+      "tool_name": "run_shell",
+      "ok": true
+    }
+  ],
+  "post_run_reflection": {
+    "summary": "Structured symbol context made it easier to pick the correct declaration and avoid false matches.",
+    "helpful_tools": [
+      "roslyn-agent.run",
+      "run_shell"
+    ],
+    "unhelpful_tools": [],
+    "roslyn_helpfulness_score": 4
+  }
+}

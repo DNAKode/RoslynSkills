@@ -1,0 +1,35 @@
+{
+  "experiment_id": "sample-rq1-ab",
+  "description": "Sample control/treatment run set used for scorer validation and demos.",
+  "roslyn_tool_prefixes": [
+    "roslyn-agent.",
+    "nav.",
+    "diag."
+  ],
+  "conditions": [
+    {
+      "id": "control-text-only",
+      "name": "Control",
+      "roslyn_tools_enabled": false,
+      "notes": "No Roslyn tools."
+    },
+    {
+      "id": "treatment-roslyn-optional",
+      "name": "Treatment",
+      "roslyn_tools_enabled": true,
+      "notes": "Roslyn tools available and optional."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Fix ambiguous symbol target bug",
+      "repo": "sample/repo",
+      "commit": "abc123",
+      "acceptance_checks": [
+        "dotnet build",
+        "dotnet test"
+      ]
+    }
+  ]
+}

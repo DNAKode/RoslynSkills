@@ -62,7 +62,8 @@ Related projects:
 
 8. `Benchmark.Harness`
 - Scenario runner, baseline adapters, telemetry and metrics.
-- [Ref: P6, P8, R-007..R-011]
+- Includes agent-in-loop trial scorer for control/treatment comparisons and tool adoption analysis.
+- [Ref: P6, P8, R-007..R-011, R-015..R-018]
 
 ## 2.2 Canonical Data Flow
 
@@ -298,12 +299,20 @@ Output contract:
 
 ## 10. Benchmark Harness Design
 
+Methodology note:
+
+- Component benchmarks (for example structured-vs-grep targeting) are diagnostic.
+- End-to-end decisions require agent-in-loop control/treatment trials.
+
 ## 10.1 Core entities
 
 - `Scenario`: task definition, constraints, expected checks.
 - `RunConfig`: model, interface channel, policy toggles.
 - `RunRecord`: timeline of tool calls and outputs.
 - `MetricRecord`: computed metrics and tags.
+- `AgentEvalManifest`: experiment definition with conditions/tasks and Roslyn tool prefixes.
+- `AgentEvalRun`: per-run log containing tools offered/called and structured post-run reflection.
+- `AgentEvalReport`: aggregated condition metrics and control-vs-treatment deltas.
 
 ## 10.2 Runner abstraction
 
@@ -317,6 +326,8 @@ Output contract:
 - Same scenario and acceptance checks across variants.
 - Same command contract semantics across interfaces.
 - Captured provenance for every run.
+- Same prompt policy and resource limits across control/treatment unless explicitly tested as a variable.
+- Roslyn tools optional in treatment condition to measure actual adoption, not forced usage.
 
 [Ref: P6, P8]
 
