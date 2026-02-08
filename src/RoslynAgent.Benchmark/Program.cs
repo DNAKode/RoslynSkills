@@ -111,6 +111,55 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
         return 0;
     }
 
+    if (string.Equals(verb, "agent-eval-gate", StringComparison.OrdinalIgnoreCase))
+    {
+        string? manifestPath = TryGetOption(args, "--manifest");
+        string? runsPath = TryGetOption(args, "--runs");
+        string? outputDir = TryGetOption(args, "--output");
+
+        if (string.IsNullOrWhiteSpace(manifestPath) || string.IsNullOrWhiteSpace(runsPath))
+        {
+            Console.Error.WriteLine("Usage: agent-eval-gate --manifest <path> --runs <dir> [--output <dir>]");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDir))
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            outputDir = Path.Combine("artifacts", "agent-eval", stamp);
+        }
+
+        AgentEvalGateRunner gateRunner = new();
+        AgentEvalGateReport gateReport;
+        try
+        {
+            gateReport = await gateRunner.RunAsync(manifestPath, runsPath, outputDir, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Agent eval gate failed: {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine("Agent eval gate completed.");
+        Console.WriteLine($"Experiment: {gateReport.experiment_id}");
+        Console.WriteLine($"Manifest valid: {gateReport.manifest_valid}");
+        Console.WriteLine($"Runs valid: {gateReport.runs_valid}");
+        Console.WriteLine($"Sufficient data: {gateReport.sufficient_data}");
+        Console.WriteLine($"Gate passed: {gateReport.gate_passed}");
+        Console.WriteLine($"Manifest validation path: {gateReport.manifest_validation_path}");
+        Console.WriteLine($"Run validation path: {gateReport.run_validation_path}");
+        Console.WriteLine($"Score report path: {gateReport.score_report_path}");
+        Console.WriteLine($"Summary path: {gateReport.summary_path}");
+        Console.WriteLine($"Gate report path: {gateReport.output_path}");
+        foreach (string note in gateReport.notes)
+        {
+            Console.WriteLine($"- Note: {note}");
+        }
+
+        return gateReport.gate_passed ? 0 : 2;
+    }
+
     if (string.Equals(verb, "agent-eval-worklist", StringComparison.OrdinalIgnoreCase))
     {
         string? manifestPath = TryGetOption(args, "--manifest");
@@ -497,6 +546,7 @@ static void PrintHelp()
           rq2-edit [--scenario <path>] [--output <dir>]
           agent-eval-score --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-export-summary --report <path> [--run-validation <path>] [--output <dir>]
+          agent-eval-gate --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-worklist --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-init-runs --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-preflight [--output <dir>]

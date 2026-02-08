@@ -103,6 +103,12 @@ Optional report export:
 dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-export-summary --report <agent-eval-report.json> --run-validation <agent-eval-run-validation.json> --output <artifact-dir>
 ```
 
+Optional single-command gate run (runs validation + scoring + summary export):
+
+```powershell
+dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir>
+```
+
 ## 6. Interpretation rule
 
 - Component diagnostics (for example `rq1`) are supporting evidence only.

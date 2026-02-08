@@ -202,3 +202,4 @@ Initial seed entries:
 - `2026-02-08`: Retrieval fidelity improved -> `nav.find_symbol` now includes semantic symbol metadata (kind/display/stable id) per match -> Use semantic enrichment to reduce ambiguity in agent tool decisions.
 - `2026-02-08`: Structured edit breadth expanded -> Added `edit.replace_member_body` with line/column anchoring and immediate diagnostics -> Build comparative experiments across multiple edit primitives, not rename-only.
 - `2026-02-08`: Edit benchmark coverage expanded -> Added RQ2 component diagnostic (structured rename vs naive text replacement) with collision-heavy fixtures -> Use this as a targeted signal for edit precision failure modes.
+- `2026-02-08`: Evaluation orchestration simplified -> Added `agent-eval-gate` to run validation, scoring, and summary export with a single pass/fail outcome -> Reduce operator error and make promotion decisions faster.

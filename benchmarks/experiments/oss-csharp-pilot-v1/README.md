@@ -20,3 +20,5 @@ This is the first realistic public-OSS trial pack for control/treatment A/B runs
    - `dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-score --manifest benchmarks/experiments/oss-csharp-pilot-v1/manifest.json --runs <runs-dir>`
 6. Export markdown summary:
    - `dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-export-summary --report <agent-eval-report.json> --run-validation <agent-eval-run-validation.json>`
+7. Or run gate end-to-end in one command:
+   - `dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest benchmarks/experiments/oss-csharp-pilot-v1/manifest.json --runs <runs-dir>`

@@ -165,3 +165,19 @@ public sealed record AgentEvalRunValidationReport(
     int treatment_runs_without_roslyn_usage,
     IReadOnlyList<AgentEvalRunValidationIssue> issues,
     string output_path);
+
+public sealed record AgentEvalGateReport(
+    string experiment_id,
+    DateTimeOffset generated_utc,
+    bool manifest_valid,
+    bool runs_valid,
+    bool sufficient_data,
+    bool gate_passed,
+    int run_validation_error_count,
+    int run_validation_warning_count,
+    string manifest_validation_path,
+    string run_validation_path,
+    string score_report_path,
+    string summary_path,
+    IReadOnlyList<string> notes,
+    string output_path);
