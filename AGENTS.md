@@ -187,3 +187,4 @@ Initial seed entries:
 - `2026-02-08`: Evaluation philosophy clarified -> No fixed improvement threshold upfront; pursue best-effort gains and context-aware de-scoping -> Let empirical evidence drive inclusion/exclusion.
 - `2026-02-08`: Historical caution recognized -> Syntax-aware systems can increase interaction friction for humans -> Preserve text fallback and evaluate mixed-mode workflows.
 - `2026-02-08`: Detailed project decomposition created -> Convert proposal into dependency-linked projects (P0-P10) with acceptance gates -> Use project-level graph for execution and parallelization decisions.
+- `2026-02-08`: Cross-referenced design and implementation plans created -> Link projects, command theories, interfaces, and test layers explicitly -> Use traceability matrix to keep build and benchmark work aligned.
