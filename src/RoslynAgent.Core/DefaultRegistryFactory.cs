@@ -13,6 +13,7 @@ public static class DefaultRegistryFactory
             new FindSymbolCommand(),
             new GetFileDiagnosticsCommand(),
             new RenameSymbolCommand(),
+            new ReplaceMemberBodyCommand(),
         };
 
         return new CommandRegistry(commands);

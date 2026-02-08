@@ -200,3 +200,4 @@ Initial seed entries:
 - `2026-02-08`: Structured edit path initiated -> Added semantic `edit.rename_symbol` command with line/column anchoring and dry-run mode -> Use this as baseline for broader Roslyn edit-transaction experiments.
 - `2026-02-08`: Edit-feedback loop tightened -> `edit.rename_symbol` now returns immediate post-edit compiler diagnostics in the same response -> Prefer operation-level feedback over delayed compile-only discovery.
 - `2026-02-08`: Retrieval fidelity improved -> `nav.find_symbol` now includes semantic symbol metadata (kind/display/stable id) per match -> Use semantic enrichment to reduce ambiguity in agent tool decisions.
+- `2026-02-08`: Structured edit breadth expanded -> Added `edit.replace_member_body` with line/column anchoring and immediate diagnostics -> Build comparative experiments across multiple edit primitives, not rename-only.

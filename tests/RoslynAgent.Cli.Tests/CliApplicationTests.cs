@@ -23,6 +23,7 @@ public sealed class CliApplicationTests
         Assert.Contains("nav.find_symbol", output);
         Assert.Contains("diag.get_file_diagnostics", output);
         Assert.Contains("edit.rename_symbol", output);
+        Assert.Contains("edit.replace_member_body", output);
     }
 
     [Fact]

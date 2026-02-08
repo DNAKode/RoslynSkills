@@ -170,6 +170,87 @@ public sealed class CommandTests
         }
     }
 
+    [Fact]
+    public async Task ReplaceMemberBodyCommand_UpdatesMethodBodyAndReturnsDiagnostics()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Calculator
+            {
+                public int Add(int a, int b)
+                {
+                    return a + b;
+                }
+            }
+            """);
+
+        try
+        {
+            ReplaceMemberBodyCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 4,
+                column = 20,
+                new_body = "return a - b;",
+                apply = true,
+            });
+
+            var result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"member_name\":\"Add\"", json);
+            Assert.Contains("\"wrote_file\":true", json);
+            Assert.Contains("\"diagnostics_after_edit\":", json);
+
+            string updated = File.ReadAllText(filePath);
+            Assert.Contains("return a - b;", updated);
+            Assert.DoesNotContain("return a + b;", updated);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task ReplaceMemberBodyCommand_ReturnsErrorForNonMethodAnchor()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Calculator
+            {
+                public int Add(int a, int b)
+                {
+                    return a + b;
+                }
+            }
+            """);
+
+        try
+        {
+            ReplaceMemberBodyCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 1,
+                column = 1,
+                new_body = "return 0;",
+                apply = false,
+            });
+
+            var result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.False(result.Ok);
+            Assert.Contains(result.Errors, e => e.Code == "invalid_target");
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
     private static string WriteTempFile(string contents)
     {
         string path = Path.Combine(Path.GetTempPath(), $"roslyn-agent-{Guid.NewGuid():N}.cs");
