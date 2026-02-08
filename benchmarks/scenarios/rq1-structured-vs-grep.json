@@ -1,0 +1,35 @@
+[
+  {
+    "id": "rq1-usage-before-type-declaration",
+    "description": "Type declaration appears after usage in the file.",
+    "fixture_path": "../fixtures/rq1/UsageBeforeTypeDeclaration.cs",
+    "symbol_name": "Cache",
+    "expect_declaration": true,
+    "expected_kind": "type",
+    "target_containing_type": null,
+    "expected_line": 11,
+    "notes": "Measures declaration targeting when usage appears earlier than declaration."
+  },
+  {
+    "id": "rq1-ambiguous-method-declarations",
+    "description": "Two classes contain the same method name; target is Beta.Process declaration.",
+    "fixture_path": "../fixtures/rq1/AmbiguousMethods.cs",
+    "symbol_name": "Process",
+    "expect_declaration": true,
+    "expected_kind": "method",
+    "target_containing_type": "Beta",
+    "expected_line": 12,
+    "notes": "Structured hierarchy should disambiguate by containing type."
+  },
+  {
+    "id": "rq1-property-name-collision",
+    "description": "Two classes contain property with identical name; target is Product.Name declaration.",
+    "fixture_path": "../fixtures/rq1/PropertyCollisions.cs",
+    "symbol_name": "Name",
+    "expect_declaration": true,
+    "expected_kind": "property",
+    "target_containing_type": "Product",
+    "expected_line": 10,
+    "notes": "Grep-like line results lack containing type structure."
+  }
+]

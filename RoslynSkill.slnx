@@ -6,6 +6,7 @@
     <Project Path="src/RoslynAgent.Core/RoslynAgent.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/RoslynAgent.Benchmark.Tests/RoslynAgent.Benchmark.Tests.csproj" />
     <Project Path="tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj" />
     <Project Path="tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj" />
   </Folder>
