@@ -28,7 +28,13 @@
       "id": "task-001",
       "title": "Fix ambiguous symbol target bug",
       "repo": "owner/repo",
+      "repo_url": "https://github.com/owner/repo.git",
       "commit": "abc123",
+      "issue_url": "https://github.com/owner/repo/issues/1234",
+      "task_prompt_file": "prompts/task-001.md",
+      "setup_commands": [
+        "dotnet restore"
+      ],
       "acceptance_checks": [
         "dotnet build",
         "dotnet test"

@@ -28,6 +28,24 @@ internal static class AgentEvalValidation
             throw new InvalidOperationException(
                 "Manifest should include at least one control condition and one Roslyn-enabled treatment condition.");
         }
+
+        foreach (AgentEvalTask task in manifest.Tasks)
+        {
+            if (string.IsNullOrWhiteSpace(task.Repo))
+            {
+                throw new InvalidOperationException($"Task '{task.Id}' has an empty repo value.");
+            }
+
+            if (string.IsNullOrWhiteSpace(task.Commit))
+            {
+                throw new InvalidOperationException($"Task '{task.Id}' has an empty commit value.");
+            }
+
+            if (task.AcceptanceChecks.Count == 0)
+            {
+                throw new InvalidOperationException($"Task '{task.Id}' must define at least one acceptance check.");
+            }
+        }
     }
 
     public static void ValidateRuns(AgentEvalManifest manifest, IReadOnlyList<AgentEvalRun> runs)

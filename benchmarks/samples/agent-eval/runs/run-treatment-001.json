@@ -29,6 +29,17 @@
       "ok": true
     }
   ],
+  "context": {
+    "task_title": "Fix ambiguous symbol target bug",
+    "repo": "sample/repo",
+    "repo_url": "https://github.com/sample/repo.git",
+    "commit": "abc123",
+    "acceptance_checks": [
+      "dotnet build",
+      "dotnet test"
+    ],
+    "task_prompt_file": "../../prompts/agent-eval-reflection-protocol.md"
+  },
   "post_run_reflection": {
     "summary": "Structured symbol context made it easier to pick the correct declaration and avoid false matches.",
     "helpful_tools": [

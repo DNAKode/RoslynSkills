@@ -127,12 +127,32 @@ public sealed class AgentEvalScorer
             return null;
         }
 
+        bool sufficientData = controlSummary.run_count > 0 && treatmentSummary.run_count > 0;
+        if (!sufficientData)
+        {
+            return new AgentEvalComparison(
+                sufficient_data: false,
+                control_condition_id: control.Id,
+                treatment_condition_id: treatment.Id,
+                control_run_count: controlSummary.run_count,
+                treatment_run_count: treatmentSummary.run_count,
+                success_rate_delta: null,
+                compile_rate_delta: null,
+                tests_rate_delta: null,
+                roslyn_used_rate_in_treatment: treatmentSummary.run_count > 0 ? treatmentSummary.roslyn_used_rate : null,
+                note: "Insufficient runs in one or both conditions. Collect additional runs before interpreting deltas.");
+        }
+
         return new AgentEvalComparison(
+            sufficient_data: true,
             control_condition_id: control.Id,
             treatment_condition_id: treatment.Id,
+            control_run_count: controlSummary.run_count,
+            treatment_run_count: treatmentSummary.run_count,
             success_rate_delta: treatmentSummary.success_rate - controlSummary.success_rate,
             compile_rate_delta: treatmentSummary.compile_rate - controlSummary.compile_rate,
             tests_rate_delta: treatmentSummary.tests_rate - controlSummary.tests_rate,
-            roslyn_used_rate_in_treatment: treatmentSummary.roslyn_used_rate);
+            roslyn_used_rate_in_treatment: treatmentSummary.roslyn_used_rate,
+            note: null);
     }
 }

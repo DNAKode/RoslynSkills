@@ -24,6 +24,17 @@
       "ok": true
     }
   ],
+  "context": {
+    "task_title": "Fix ambiguous symbol target bug",
+    "repo": "owner/repo",
+    "repo_url": "https://github.com/owner/repo.git",
+    "commit": "abc123",
+    "acceptance_checks": [
+      "dotnet build",
+      "dotnet test"
+    ],
+    "task_prompt_file": "prompts/task-001.md"
+  },
   "post_run_reflection": {
     "summary": "Roslyn symbol context reduced ambiguity on target selection.",
     "helpful_tools": [

@@ -21,7 +21,11 @@ public sealed record AgentEvalTask(
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("repo")] string Repo,
     [property: JsonPropertyName("commit")] string Commit,
-    [property: JsonPropertyName("acceptance_checks")] IReadOnlyList<string> AcceptanceChecks);
+    [property: JsonPropertyName("acceptance_checks")] IReadOnlyList<string> AcceptanceChecks,
+    [property: JsonPropertyName("repo_url")] string? RepoUrl = null,
+    [property: JsonPropertyName("issue_url")] string? IssueUrl = null,
+    [property: JsonPropertyName("task_prompt_file")] string? TaskPromptFile = null,
+    [property: JsonPropertyName("setup_commands")] IReadOnlyList<string>? SetupCommands = null);
 
 public sealed record AgentEvalRun(
     [property: JsonPropertyName("run_id")] string RunId,
@@ -36,7 +40,16 @@ public sealed record AgentEvalRun(
     [property: JsonPropertyName("duration_seconds")] double DurationSeconds,
     [property: JsonPropertyName("tools_offered")] IReadOnlyList<string> ToolsOffered,
     [property: JsonPropertyName("tool_calls")] IReadOnlyList<AgentToolCall> ToolCalls,
+    [property: JsonPropertyName("context")] AgentEvalRunContext? Context,
     [property: JsonPropertyName("post_run_reflection")] AgentPostRunReflection? PostRunReflection);
+
+public sealed record AgentEvalRunContext(
+    [property: JsonPropertyName("task_title")] string TaskTitle,
+    [property: JsonPropertyName("repo")] string Repo,
+    [property: JsonPropertyName("repo_url")] string? RepoUrl,
+    [property: JsonPropertyName("commit")] string Commit,
+    [property: JsonPropertyName("acceptance_checks")] IReadOnlyList<string> AcceptanceChecks,
+    [property: JsonPropertyName("task_prompt_file")] string? TaskPromptFile);
 
 public sealed record AgentToolCall(
     [property: JsonPropertyName("tool_name")] string ToolName,
@@ -62,12 +75,16 @@ public sealed record AgentEvalConditionSummary(
     double? average_roslyn_helpfulness_score);
 
 public sealed record AgentEvalComparison(
+    bool sufficient_data,
     string control_condition_id,
     string treatment_condition_id,
-    double success_rate_delta,
-    double compile_rate_delta,
-    double tests_rate_delta,
-    double roslyn_used_rate_in_treatment);
+    int control_run_count,
+    int treatment_run_count,
+    double? success_rate_delta,
+    double? compile_rate_delta,
+    double? tests_rate_delta,
+    double? roslyn_used_rate_in_treatment,
+    string? note);
 
 public sealed record AgentEvalReport(
     string experiment_id,
@@ -99,4 +116,39 @@ public sealed record AgentEvalWorklistReport(
     double completion_rate,
     IReadOnlyList<AgentEvalCellSummary> cells,
     IReadOnlyList<AgentEvalPendingRun> pending_runs,
+    string output_path);
+
+public sealed record AgentEvalManifestValidationIssue(
+    string severity,
+    string task_id,
+    string message);
+
+public sealed record AgentEvalManifestValidationReport(
+    string experiment_id,
+    DateTimeOffset generated_utc,
+    bool valid,
+    int issue_count,
+    IReadOnlyList<AgentEvalManifestValidationIssue> issues,
+    string output_path);
+
+public sealed record AgentEvalRunValidationIssue(
+    string severity,
+    string run_id,
+    string task_id,
+    string condition_id,
+    string message);
+
+public sealed record AgentEvalRunValidationReport(
+    string experiment_id,
+    DateTimeOffset generated_utc,
+    bool valid,
+    int total_runs,
+    int expected_runs,
+    int issue_count,
+    int error_count,
+    int warning_count,
+    int contaminated_control_runs,
+    int treatment_runs_without_roslyn_offered,
+    int treatment_runs_without_roslyn_usage,
+    IReadOnlyList<AgentEvalRunValidationIssue> issues,
     string output_path);

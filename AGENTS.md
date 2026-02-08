@@ -193,3 +193,5 @@ Initial seed entries:
 - `2026-02-08`: Methodology correction after user challenge -> Treat RQ1 component benchmark as diagnostic only and make agent-in-loop A/B trials primary evidence -> Add run schemas and scoring for tool adoption and agent self-report.
 - `2026-02-08`: Agent-eval scoring scaffold implemented -> Ingest control/treatment run logs and quantify Roslyn adoption plus self-reported usefulness -> Require this layer before claiming end-to-end utility.
 - `2026-02-08`: Agent-eval execution tooling expanded -> Added preflight, run coverage worklists, and pending-run template generation -> Make real A/B trial execution tractable and auditable.
+- `2026-02-08`: Data quality gate added for A/B trials -> Validate run logs for contamination, schema quality, and scoring integrity before computing deltas -> Treat run validation as mandatory pre-score step.
+- `2026-02-08`: Parallel build caveat observed -> Concurrent `dotnet` commands on the same project can lock build artifacts and create false failures -> Sequence .NET build/run/test commands per project in automation.

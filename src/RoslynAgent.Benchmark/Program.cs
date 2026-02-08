@@ -48,10 +48,23 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine($"Control: {evalReport.primary_comparison.control_condition_id}");
             Console.WriteLine($"Treatment: {evalReport.primary_comparison.treatment_condition_id}");
-            Console.WriteLine($"Success delta: {evalReport.primary_comparison.success_rate_delta:P2}");
-            Console.WriteLine($"Compile delta: {evalReport.primary_comparison.compile_rate_delta:P2}");
-            Console.WriteLine($"Tests delta: {evalReport.primary_comparison.tests_rate_delta:P2}");
-            Console.WriteLine($"Roslyn use rate in treatment: {evalReport.primary_comparison.roslyn_used_rate_in_treatment:P2}");
+            Console.WriteLine($"Control runs: {evalReport.primary_comparison.control_run_count}");
+            Console.WriteLine($"Treatment runs: {evalReport.primary_comparison.treatment_run_count}");
+            if (evalReport.primary_comparison.sufficient_data)
+            {
+                Console.WriteLine($"Success delta: {evalReport.primary_comparison.success_rate_delta:P2}");
+                Console.WriteLine($"Compile delta: {evalReport.primary_comparison.compile_rate_delta:P2}");
+                Console.WriteLine($"Tests delta: {evalReport.primary_comparison.tests_rate_delta:P2}");
+                Console.WriteLine($"Roslyn use rate in treatment: {evalReport.primary_comparison.roslyn_used_rate_in_treatment:P2}");
+            }
+            else
+            {
+                Console.WriteLine("Deltas unavailable: insufficient data.");
+                if (!string.IsNullOrWhiteSpace(evalReport.primary_comparison.note))
+                {
+                    Console.WriteLine($"Note: {evalReport.primary_comparison.note}");
+                }
+            }
         }
 
         return 0;
@@ -167,6 +180,173 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase))
         return preflightReport.all_required_available ? 0 : 2;
     }
 
+    if (string.Equals(verb, "agent-eval-validate-manifest", StringComparison.OrdinalIgnoreCase))
+    {
+        string? manifestPath = TryGetOption(args, "--manifest");
+        string? outputDir = TryGetOption(args, "--output");
+
+        if (string.IsNullOrWhiteSpace(manifestPath))
+        {
+            Console.Error.WriteLine("Usage: agent-eval-validate-manifest --manifest <path> [--output <dir>]");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDir))
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            outputDir = Path.Combine("artifacts", "agent-eval", stamp);
+        }
+
+        AgentEvalManifestValidator validator = new();
+        AgentEvalManifestValidationReport report;
+        try
+        {
+            report = await validator.ValidateAsync(manifestPath, outputDir, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Manifest validation failed: {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine("Agent eval manifest validation completed.");
+        Console.WriteLine($"Valid: {report.valid}");
+        Console.WriteLine($"Issue count: {report.issue_count}");
+        foreach (var issue in report.issues.Take(10))
+        {
+            Console.WriteLine($"- [{issue.severity}] {issue.task_id}: {issue.message}");
+        }
+        Console.WriteLine($"Validation path: {report.output_path}");
+        return report.valid ? 0 : 2;
+    }
+
+    if (string.Equals(verb, "agent-eval-validate-runs", StringComparison.OrdinalIgnoreCase))
+    {
+        string? manifestPath = TryGetOption(args, "--manifest");
+        string? runsPath = TryGetOption(args, "--runs");
+        string? outputDir = TryGetOption(args, "--output");
+
+        if (string.IsNullOrWhiteSpace(manifestPath) || string.IsNullOrWhiteSpace(runsPath))
+        {
+            Console.Error.WriteLine("Usage: agent-eval-validate-runs --manifest <path> --runs <dir> [--output <dir>]");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDir))
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            outputDir = Path.Combine("artifacts", "agent-eval", stamp);
+        }
+
+        AgentEvalRunValidator validator = new();
+        AgentEvalRunValidationReport report;
+        try
+        {
+            report = await validator.ValidateAsync(manifestPath, runsPath, outputDir, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Run validation failed: {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine("Agent eval run validation completed.");
+        Console.WriteLine($"Valid: {report.valid}");
+        Console.WriteLine($"Total runs: {report.total_runs}");
+        Console.WriteLine($"Expected runs: {report.expected_runs}");
+        Console.WriteLine($"Issue count: {report.issue_count} (errors={report.error_count}, warnings={report.warning_count})");
+        Console.WriteLine($"Contaminated control runs: {report.contaminated_control_runs}");
+        Console.WriteLine($"Treatment runs missing Roslyn offered: {report.treatment_runs_without_roslyn_offered}");
+        Console.WriteLine($"Treatment runs missing Roslyn usage: {report.treatment_runs_without_roslyn_usage}");
+        foreach (var issue in report.issues.Take(10))
+        {
+            Console.WriteLine($"- [{issue.severity}] run={issue.run_id} task={issue.task_id} cond={issue.condition_id} {issue.message}");
+        }
+        Console.WriteLine($"Validation path: {report.output_path}");
+        return report.valid ? 0 : 2;
+    }
+
+    if (string.Equals(verb, "agent-eval-register-run", StringComparison.OrdinalIgnoreCase))
+    {
+        string? manifestPath = TryGetOption(args, "--manifest");
+        string? runsPath = TryGetOption(args, "--runs");
+        string? taskId = TryGetOption(args, "--task");
+        string? conditionId = TryGetOption(args, "--condition");
+        string? runId = TryGetOption(args, "--run-id") ?? string.Empty;
+        string agent = TryGetOption(args, "--agent") ?? "unknown-agent";
+        string model = TryGetOption(args, "--model") ?? "unknown-model";
+        int replicate = ParseIntOption(args, "--replicate", 1, min: 1);
+        bool succeeded = ParseBoolOption(args, "--succeeded", false);
+        bool compilePassed = ParseBoolOption(args, "--compile-passed", false);
+        bool testsPassed = ParseBoolOption(args, "--tests-passed", false);
+        double durationSeconds = ParseDoubleOption(args, "--duration-seconds", 0);
+        bool overwrite = ParseBoolOption(args, "--overwrite", false);
+        int? roslynHelpfulness = ParseNullableIntOption(args, "--roslyn-helpfulness");
+        string? summary = TryGetOption(args, "--summary");
+
+        if (string.IsNullOrWhiteSpace(manifestPath) || string.IsNullOrWhiteSpace(runsPath) ||
+            string.IsNullOrWhiteSpace(taskId) || string.IsNullOrWhiteSpace(conditionId))
+        {
+            Console.Error.WriteLine(
+                "Usage: agent-eval-register-run --manifest <path> --runs <dir> --task <id> --condition <id> " +
+                "[--run-id <id>] [--replicate <n>] [--agent <id>] [--model <id>] " +
+                "--succeeded <true|false> --compile-passed <true|false> --tests-passed <true|false> " +
+                "[--duration-seconds <n>] [--tools-offered <a,b,c>] [--tool-calls <tool:true,tool2:false>] " +
+                "[--summary <text>] [--helpful-tools <a,b>] [--unhelpful-tools <a,b>] " +
+                "[--roslyn-helpfulness <1-5>] [--overwrite <true|false>]");
+            return 1;
+        }
+
+        IReadOnlyList<string> toolsOffered = ParseCsvOption(args, "--tools-offered");
+        IReadOnlyList<AgentToolCall> toolCalls = ParseToolCallsOption(args, "--tool-calls");
+        IReadOnlyList<string> helpfulTools = ParseCsvOption(args, "--helpful-tools");
+        IReadOnlyList<string> unhelpfulTools = ParseCsvOption(args, "--unhelpful-tools");
+
+        AgentEvalRunRegistration registration = new(
+            RunId: runId,
+            TaskId: taskId,
+            ConditionId: conditionId,
+            Replicate: replicate,
+            Agent: agent,
+            Model: model,
+            Succeeded: succeeded,
+            CompilePassed: compilePassed,
+            TestsPassed: testsPassed,
+            DurationSeconds: durationSeconds,
+            ToolsOffered: toolsOffered,
+            ToolCalls: toolCalls,
+            ReflectionSummary: summary,
+            ReflectionHelpfulTools: helpfulTools,
+            ReflectionUnhelpfulTools: unhelpfulTools,
+            RoslynHelpfulnessScore: roslynHelpfulness);
+
+        AgentEvalRunRegistrar registrar = new();
+        string outputPath;
+        try
+        {
+            outputPath = await registrar.RegisterAsync(
+                manifestPath,
+                runsPath,
+                registration,
+                overwrite,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Run registration failed: {ex.Message}");
+            return 1;
+        }
+
+        string displayRunId = string.IsNullOrWhiteSpace(runId)
+            ? $"{taskId}__{conditionId}__r{replicate:00}"
+            : runId;
+
+        Console.WriteLine("Agent eval run registration completed.");
+        Console.WriteLine($"Run id: {displayRunId}");
+        Console.WriteLine($"Output: {outputPath}");
+        return 0;
+    }
+
     Console.Error.WriteLine($"Unknown command '{verb}'.");
     PrintHelp();
     return 1;
@@ -241,9 +421,117 @@ static void PrintHelp()
           agent-eval-worklist --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-init-runs --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-preflight [--output <dir>]
+          agent-eval-validate-manifest --manifest <path> [--output <dir>]
+          agent-eval-validate-runs --manifest <path> --runs <dir> [--output <dir>]
+          agent-eval-register-run --manifest <path> --runs <dir> --task <id> --condition <id> ...
 
         Notes:
           - Default scenario file: benchmarks/scenarios/rq1-structured-vs-grep.json
           - Both commands write JSON reports under the output directory.
         """);
+}
+
+static int ParseIntOption(IReadOnlyList<string> args, string optionName, int defaultValue, int min)
+{
+    string? value = TryGetOption(args, optionName);
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    if (!int.TryParse(value, out int parsed))
+    {
+        return defaultValue;
+    }
+
+    return parsed < min ? min : parsed;
+}
+
+static double ParseDoubleOption(IReadOnlyList<string> args, string optionName, double defaultValue)
+{
+    string? value = TryGetOption(args, optionName);
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    if (!double.TryParse(value, out double parsed))
+    {
+        return defaultValue;
+    }
+
+    return parsed;
+}
+
+static bool ParseBoolOption(IReadOnlyList<string> args, string optionName, bool defaultValue)
+{
+    string? value = TryGetOption(args, optionName);
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    if (!bool.TryParse(value, out bool parsed))
+    {
+        return defaultValue;
+    }
+
+    return parsed;
+}
+
+static int? ParseNullableIntOption(IReadOnlyList<string> args, string optionName)
+{
+    string? value = TryGetOption(args, optionName);
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return null;
+    }
+
+    if (!int.TryParse(value, out int parsed))
+    {
+        return null;
+    }
+
+    return parsed;
+}
+
+static IReadOnlyList<string> ParseCsvOption(IReadOnlyList<string> args, string optionName)
+{
+    string? raw = TryGetOption(args, optionName);
+    if (string.IsNullOrWhiteSpace(raw))
+    {
+        return Array.Empty<string>();
+    }
+
+    return raw
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(s => !string.IsNullOrWhiteSpace(s))
+        .ToArray();
+}
+
+static IReadOnlyList<AgentToolCall> ParseToolCallsOption(IReadOnlyList<string> args, string optionName)
+{
+    string? raw = TryGetOption(args, optionName);
+    if (string.IsNullOrWhiteSpace(raw))
+    {
+        return Array.Empty<AgentToolCall>();
+    }
+
+    List<AgentToolCall> calls = new();
+    string[] entries = raw.Split(
+        [';', ','],
+        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    foreach (string entry in entries)
+    {
+        string[] parts = entry.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2)
+        {
+            continue;
+        }
+
+        bool ok = bool.TryParse(parts[1], out bool parsed) && parsed;
+        calls.Add(new AgentToolCall(parts[0], ok));
+    }
+
+    return calls;
 }

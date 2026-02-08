@@ -26,7 +26,9 @@
       "id": "task-001",
       "title": "Fix ambiguous symbol target bug",
       "repo": "sample/repo",
+      "repo_url": "https://github.com/sample/repo.git",
       "commit": "abc123",
+      "task_prompt_file": "../../prompts/agent-eval-reflection-protocol.md",
       "acceptance_checks": [
         "dotnet build",
         "dotnet test"

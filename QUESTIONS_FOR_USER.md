@@ -13,6 +13,8 @@ Do not interrupt workflow for these unless they become blockers or we have major
    - Preferred default model variants for first full A/B trial pack (for example `fast` + `frontier` per provider).
 4. Environment readiness for direct provider runs:
    - Current preflight on `2026-02-08` shows `codex` and `claude` binaries are missing in this environment (optional checks). Should we provision these CLIs here, or continue with offline run-log ingestion only?
+5. Run-quality gate strictness:
+   - Should `agent-eval-validate-runs` warnings (for example control contamination or missing Roslyn usage in treatment) fail the experiment gate, or should only validation errors block scoring?
 
 ## Resolved
 

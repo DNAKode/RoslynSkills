@@ -40,9 +40,49 @@ public sealed class AgentEvalScorerTests
 
             Assert.Equal(2, report.total_runs);
             Assert.NotNull(report.primary_comparison);
-            Assert.True(report.primary_comparison!.success_rate_delta > 0);
+            Assert.True(report.primary_comparison!.sufficient_data);
+            Assert.True(report.primary_comparison.success_rate_delta > 0);
             Assert.True(report.primary_comparison.roslyn_used_rate_in_treatment > 0);
             Assert.True(File.Exists(report.output_path));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ScoreAsync_MarksInsufficientData_WhenOneConditionMissingRuns()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"agent-eval-test-{Guid.NewGuid():N}");
+        string runsDir = Path.Combine(root, "runs");
+        string outputDir = Path.Combine(root, "output");
+        Directory.CreateDirectory(runsDir);
+
+        try
+        {
+            string manifestPath = Path.Combine(root, "manifest.json");
+            await File.WriteAllTextAsync(manifestPath, BuildManifestJson());
+
+            await File.WriteAllTextAsync(Path.Combine(runsDir, "run1.json"), BuildRunJson(
+                runId: "run1",
+                conditionId: "treatment-roslyn-optional",
+                succeeded: true,
+                compilePassed: true,
+                testsPassed: true,
+                toolCalls: new[] { "roslyn-agent.run" },
+                roslynScore: 4));
+
+            AgentEvalScorer scorer = new();
+            AgentEvalReport report = await scorer.ScoreAsync(manifestPath, runsDir, outputDir, CancellationToken.None);
+
+            Assert.NotNull(report.primary_comparison);
+            Assert.False(report.primary_comparison!.sufficient_data);
+            Assert.Null(report.primary_comparison.success_rate_delta);
+            Assert.NotNull(report.primary_comparison.note);
         }
         finally
         {

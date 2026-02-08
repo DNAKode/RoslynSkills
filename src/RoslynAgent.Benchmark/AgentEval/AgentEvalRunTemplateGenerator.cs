@@ -28,6 +28,8 @@ public sealed class AgentEvalRunTemplateGenerator
 
             AgentEvalCondition condition = manifest.Conditions.First(c =>
                 string.Equals(c.Id, pending.condition_id, StringComparison.OrdinalIgnoreCase));
+            AgentEvalTask task = manifest.Tasks.First(t =>
+                string.Equals(t.Id, pending.task_id, StringComparison.OrdinalIgnoreCase));
 
             AgentEvalRun template = new(
                 RunId: pending.suggested_run_id,
@@ -42,6 +44,13 @@ public sealed class AgentEvalRunTemplateGenerator
                 DurationSeconds: 0,
                 ToolsOffered: BuildSuggestedTools(condition),
                 ToolCalls: Array.Empty<AgentToolCall>(),
+                Context: new AgentEvalRunContext(
+                    TaskTitle: task.Title,
+                    Repo: task.Repo,
+                    RepoUrl: task.RepoUrl,
+                    Commit: task.Commit,
+                    AcceptanceChecks: task.AcceptanceChecks,
+                    TaskPromptFile: task.TaskPromptFile),
                 PostRunReflection: new AgentPostRunReflection(
                     Summary: "TODO concise run summary.",
                     HelpfulTools: Array.Empty<string>(),
