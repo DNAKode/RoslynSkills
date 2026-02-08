@@ -57,6 +57,12 @@ Interpretation: non-agent tooling already proves Roslyn at scale for IDE semanti
 3. Build a comprehensive benchmark and test harness to compare against text-first baselines.
 4. Produce decision-grade evidence on quality, speed, failure modes, and developer review burden.
 
+### 3.1 Document boundaries (to avoid duplication)
+
+- `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md` defines problem framing, hypotheses, architecture options, and evaluation design.
+- `AGENTS.md` defines execution behavior and meta-guidance (including external inspiration from Karpathy, Meijer, Emanuel, Steinberger, and Gauthier).
+- Changes to process doctrine should go to `AGENTS.md`; changes to research scope and evidence design should go to this proposal.
+
 ## 4. Hypotheses (Divergent Theories of Operation)
 
 ### H1. Roslyn-as-Intelligence, Text-as-Edit (Navigation-first hybrid)
@@ -146,32 +152,49 @@ Target a reusable skill package with:
 - `references/` for operation schemas and known edge cases.
 - Optional `assets/` for benchmark fixtures and trace templates.
 
-## 6. Research Plan and Phases
+## 6. Program Execution Model (Dependency-Graph, Not Calendar)
 
-### Phase 0: Benchmark & Instrumentation Foundation (Weeks 1-4)
+Operational doctrine is defined in `AGENTS.md` (speed, planning intensity, guardrails, and collaboration norms).  
+This section defines only the research-program structure and dependencies.
 
-- Build reproducible harness for running agent variants on fixed tasks.
-- Implement baseline runner (text-first tools only).
-- Define metrics, schemas, and artifact capture.
+### 6.1 Work packages (nodes)
 
-### Phase 1: H1 Prototype (Weeks 5-8)
+- **N0: Reproducible harness + telemetry substrate**
+  - Task runner, artifact schema, run manifest format, trace capture.
+- **N1: Baseline system (B0)**
+  - Text-first agent workflow runner and baseline metrics pipeline.
+- **N2: H1 prototype**
+  - Roslyn navigation/analysis tools with text-persisted edits.
+- **N3: H2 prototype**
+  - Structured Roslyn edit operations with solution transactions.
+- **N4: H3/H4 prototype track**
+  - Intent-to-code-action planner and constraint-driven transactional gate.
+- **N5: Comparative evaluation and recommendation**
+  - Full benchmark study, ablations, and architecture decision package.
 
-- Roslyn navigation/analysis tools + text edit persistence.
-- Compare to baseline on navigation-heavy and bug-fix tasks.
+### 6.2 Dependency graph
 
-### Phase 2: H2 Prototype (Weeks 9-14)
+- `N0 -> N1`
+- `N0 -> N2`
+- `N2 -> N3`
+- `N3 -> N4`
+- `N1 + N2 + N3 + N4 -> N5`
 
-- Structured edit operation set with solution transactions.
-- Add recovery path when operation synthesis fails (fallback to H1 text edit).
+### 6.3 Fastest-safe sequencing policy
 
-### Phase 3: H3/H4 Prototypes (Weeks 15-20)
+- Start all unblocked nodes immediately.
+- Prefer parallel execution where dependencies allow.
+- Recompute critical path after every major empirical finding.
+- Advance only when each node's acceptance gates are satisfied.
 
-- Intent-to-code-action planner.
-- Constraint-driven transactional gate.
+### 6.4 Node acceptance gates (research-level)
 
-### Phase 4: Comparative Study + Recommendation (Weeks 21-24)
-
-- Full benchmark runs, ablations, human review study, final decision report.
+- **N0 gate**: deterministic reruns produce equivalent artifacts on the same commit/task set.
+- **N1 gate**: stable baseline metrics for all core task families.
+- **N2 gate**: measurable uplift over B0 on at least one navigation/target-selection metric.
+- **N3 gate**: measurable uplift over N2 on at least one multi-file semantic change metric.
+- **N4 gate**: constraint gate catches and prevents regressions that passed in earlier variants.
+- **N5 gate**: decision report contains statistically and operationally credible recommendation.
 
 ## 7. Comprehensive Evaluation Suite
 
