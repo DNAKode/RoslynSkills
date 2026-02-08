@@ -196,3 +196,4 @@ Initial seed entries:
 - `2026-02-08`: Data quality gate added for A/B trials -> Validate run logs for contamination, schema quality, and scoring integrity before computing deltas -> Treat run validation as mandatory pre-score step.
 - `2026-02-08`: Parallel build caveat observed -> Concurrent `dotnet` commands on the same project can lock build artifacts and create false failures -> Sequence .NET build/run/test commands per project in automation.
 - `2026-02-08`: Scoring granularity expanded -> Added per-task control/treatment comparisons alongside aggregate deltas -> Use task-level slices to avoid hiding regressions behind overall averages.
+- `2026-02-08`: Reporting pipeline tightened -> Added markdown summary export from scored/validated artifacts -> Keep experiment interpretation auditable and ready for technical-report ingestion.

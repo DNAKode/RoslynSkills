@@ -97,6 +97,12 @@ Outputs:
   - Roslyn tool adoption metrics,
   - reflection aggregates.
 
+Optional report export:
+
+```powershell
+dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-export-summary --report <agent-eval-report.json> --run-validation <agent-eval-run-validation.json> --output <artifact-dir>
+```
+
 ## 6. Interpretation rule
 
 - Component diagnostics (for example `rq1`) are supporting evidence only.

@@ -74,6 +74,41 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase))
         return 0;
     }
 
+    if (string.Equals(verb, "agent-eval-export-summary", StringComparison.OrdinalIgnoreCase))
+    {
+        string? reportPath = TryGetOption(args, "--report");
+        string? runValidationPath = TryGetOption(args, "--run-validation");
+        string? outputDir = TryGetOption(args, "--output");
+
+        if (string.IsNullOrWhiteSpace(reportPath))
+        {
+            Console.Error.WriteLine("Usage: agent-eval-export-summary --report <path> [--run-validation <path>] [--output <dir>]");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDir))
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            outputDir = Path.Combine("artifacts", "agent-eval", stamp);
+        }
+
+        AgentEvalReportExporter exporter = new();
+        string summaryPath;
+        try
+        {
+            summaryPath = await exporter.ExportMarkdownAsync(reportPath, runValidationPath, outputDir, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Summary export failed: {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine("Agent eval summary export completed.");
+        Console.WriteLine($"Summary path: {summaryPath}");
+        return 0;
+    }
+
     if (string.Equals(verb, "agent-eval-worklist", StringComparison.OrdinalIgnoreCase))
     {
         string? manifestPath = TryGetOption(args, "--manifest");
@@ -422,6 +457,7 @@ static void PrintHelp()
         Commands:
           rq1 [--scenario <path>] [--output <dir>]
           agent-eval-score --manifest <path> --runs <dir> [--output <dir>]
+          agent-eval-export-summary --report <path> [--run-validation <path>] [--output <dir>]
           agent-eval-worklist --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-init-runs --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-preflight [--output <dir>]
