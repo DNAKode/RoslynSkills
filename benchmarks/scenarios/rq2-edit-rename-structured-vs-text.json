@@ -1,0 +1,41 @@
+[
+  {
+    "id": "rq2-string-literal-collision",
+    "description": "Rename should update method declaration and invocation but preserve string literal content.",
+    "fixture_path": "../fixtures/rq2/RenameStringLiteralCollision.cs",
+    "anchor_line": 5,
+    "anchor_column": 17,
+    "new_name": "Start",
+    "required_substrings": [
+      "public void Start()",
+      "        Start();",
+      "Console.WriteLine(\"Run\");"
+    ],
+    "forbidden_substrings": [
+      "public void Run()",
+      "        Run();",
+      "Console.WriteLine(\"Start\");"
+    ],
+    "notes": "Naive text replacement often mutates string literals."
+  },
+  {
+    "id": "rq2-overload-targeting-collision",
+    "description": "Rename should target only selected overload and matching invocation.",
+    "fixture_path": "../fixtures/rq2/RenameOverloadCollision.cs",
+    "anchor_line": 3,
+    "anchor_column": 17,
+    "new_name": "Handle",
+    "required_substrings": [
+      "public void Handle(int value)",
+      "public void Process(string value)",
+      "        Handle(1);",
+      "        Process(\"x\");"
+    ],
+    "forbidden_substrings": [
+      "public void Process(int value)",
+      "public void Handle(string value)",
+      "        Handle(\"x\");"
+    ],
+    "notes": "Naive text replacement renames all overloads, not just the anchored symbol."
+  }
+]

@@ -1,4 +1,5 @@
 using RoslynAgent.Benchmark.Rq1;
+using RoslynAgent.Benchmark.Rq2;
 using RoslynAgent.Benchmark.AgentEval;
 
 if (args.Length == 0 || IsHelp(args[0]))
@@ -8,7 +9,8 @@ if (args.Length == 0 || IsHelp(args[0]))
 }
 
 string verb = args[0];
-if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase))
+if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(verb, "rq2-edit", StringComparison.OrdinalIgnoreCase))
 {
     if (string.Equals(verb, "agent-eval-score", StringComparison.OrdinalIgnoreCase))
     {
@@ -392,6 +394,42 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase))
 }
 
 string? scenarioPath = TryGetOption(args, "--scenario");
+if (string.Equals(verb, "rq2-edit", StringComparison.OrdinalIgnoreCase))
+{
+    if (string.IsNullOrWhiteSpace(scenarioPath))
+    {
+        scenarioPath = Path.Combine("benchmarks", "scenarios", "rq2-edit-rename-structured-vs-text.json");
+    }
+
+    string? rq2OutputDir = TryGetOption(args, "--output");
+    if (string.IsNullOrWhiteSpace(rq2OutputDir))
+    {
+        string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        rq2OutputDir = Path.Combine("artifacts", "rq2-edit", stamp);
+    }
+
+    Rq2EditBenchmarkRunner rq2Runner = new();
+    Rq2EditBenchmarkReport rq2Report;
+    try
+    {
+        rq2Report = await rq2Runner.RunAsync(scenarioPath, rq2OutputDir, CancellationToken.None).ConfigureAwait(false);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"RQ2 edit benchmark failed: {ex.Message}");
+        return 1;
+    }
+
+    Console.WriteLine($"RQ2 edit component benchmark completed.");
+    Console.WriteLine($"Scenario count: {rq2Report.Summary.scenario_count}");
+    Console.WriteLine($"Structured pass rate: {rq2Report.Summary.structured_accuracy:P2}");
+    Console.WriteLine($"Text baseline pass rate: {rq2Report.Summary.text_accuracy:P2}");
+    Console.WriteLine($"Pass-rate delta: {rq2Report.Summary.accuracy_delta:P2}");
+    Console.WriteLine($"Benchmark type: {rq2Report.BenchmarkType}");
+    Console.WriteLine($"Artifact path: {rq2Report.ArtifactPath}");
+    return 0;
+}
+
 if (string.IsNullOrWhiteSpace(scenarioPath))
 {
     scenarioPath = Path.Combine("benchmarks", "scenarios", "rq1-structured-vs-grep.json");
@@ -456,6 +494,7 @@ static void PrintHelp()
 
         Commands:
           rq1 [--scenario <path>] [--output <dir>]
+          rq2-edit [--scenario <path>] [--output <dir>]
           agent-eval-score --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-export-summary --report <path> [--run-validation <path>] [--output <dir>]
           agent-eval-worklist --manifest <path> --runs <dir> [--output <dir>]
@@ -466,7 +505,8 @@ static void PrintHelp()
           agent-eval-register-run --manifest <path> --runs <dir> --task <id> --condition <id> ...
 
         Notes:
-          - Default scenario file: benchmarks/scenarios/rq1-structured-vs-grep.json
+          - Default rq1 scenario file: benchmarks/scenarios/rq1-structured-vs-grep.json
+          - Default rq2-edit scenario file: benchmarks/scenarios/rq2-edit-rename-structured-vs-text.json
           - Both commands write JSON reports under the output directory.
         """);
 }
