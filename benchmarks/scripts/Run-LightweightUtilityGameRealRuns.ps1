@@ -7,7 +7,9 @@ param(
     [switch]$SkipClaude,
     [switch]$SkipControl,
     [switch]$SkipTreatment,
+    [string[]]$ConditionIds = @(),
     [string[]]$TaskIds = @(),
+    [ValidateSet("standard", "brief-first", "verbose-first")][string]$RoslynGuidanceProfile = "standard",
     [switch]$NoAcceptanceChecks,
     [switch]$UseWorkingTreeOverlay
 )
@@ -29,10 +31,69 @@ function Convert-ToText {
     return [string]$Value
 }
 
+function Get-ObjectPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)][object]$Object,
+        [Parameter(Mandatory = $true)][string]$PropertyName
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($PropertyName)) {
+        return $null
+    }
+
+    if ($Object.PSObject.Properties.Name -contains $PropertyName) {
+        return $Object.$PropertyName
+    }
+
+    return $null
+}
+
+function Convert-ToSlug {
+    param([object]$Value)
+
+    $text = Convert-ToText $Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return "unknown"
+    }
+
+    $slug = $text.ToLowerInvariant()
+    $slug = [regex]::Replace($slug, "[^a-z0-9]+", "-").Trim("-")
+    if ([string]::IsNullOrWhiteSpace($slug)) {
+        return "unknown"
+    }
+
+    return $slug
+}
+
+function Get-ConditionMode {
+    param([Parameter(Mandatory = $true)][object]$Condition)
+
+    $rawMode = Convert-ToText (Get-ObjectPropertyValue -Object $Condition -PropertyName "mode")
+    $roslynEnabled = [bool](Get-ObjectPropertyValue -Object $Condition -PropertyName "roslyn_tools_enabled")
+    if ([string]::IsNullOrWhiteSpace($rawMode)) {
+        if ($roslynEnabled) {
+            return "treatment"
+        }
+
+        return "control"
+    }
+
+    $normalized = $rawMode.Trim().ToLowerInvariant()
+    if ($normalized -in @("control", "treatment")) {
+        return $normalized
+    }
+
+    if ($roslynEnabled) {
+        return "treatment"
+    }
+
+    return "control"
+}
+
 function Resolve-OutputDirectory {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
-        [Parameter(Mandatory = $true)][string]$OutputRoot
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$OutputRoot
     )
 
     if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
@@ -52,6 +113,37 @@ function Ensure-Command {
 
     if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
         throw "Required command '$CommandName' was not found in PATH."
+    }
+}
+
+function Get-NormalizedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return ([System.IO.Path]::GetFullPath((Resolve-Path $Path).Path)).TrimEnd('\')
+}
+
+function Assert-HostSessionAnchor {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExpectedCwd,
+        [Parameter(Mandatory = $true)][string]$ExpectedGitRoot,
+        [Parameter(Mandatory = $true)][string]$Phase
+    )
+
+    $currentCwd = Get-NormalizedPath -Path (Get-Location).Path
+    $expectedCwd = Get-NormalizedPath -Path $ExpectedCwd
+    if (-not [string]::Equals($currentCwd, $expectedCwd, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Host cwd drift detected at '$Phase'. expected='$expectedCwd' current='$currentCwd'."
+    }
+
+    $currentGitRootRaw = Convert-ToText (& git -C $currentCwd rev-parse --show-toplevel 2>$null)
+    if ([string]::IsNullOrWhiteSpace($currentGitRootRaw)) {
+        throw "Host git root missing at '$Phase' for cwd '$currentCwd'."
+    }
+
+    $currentGitRoot = Get-NormalizedPath -Path $currentGitRootRaw
+    $expectedGitRoot = Get-NormalizedPath -Path $ExpectedGitRoot
+    if (-not [string]::Equals($currentGitRoot, $expectedGitRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Host git root drift detected at '$Phase'. expected='$expectedGitRoot' current='$currentGitRoot'."
     }
 }
 
@@ -125,6 +217,123 @@ dotnet run --project src/RoslynAgent.Cli -- "$@"
     Set-Content -Path $shPath -Value $shBody -NoNewline
 }
 
+function Write-RoscliDisabledShim {
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkspacePath
+    )
+
+    $scriptsDir = Join-Path $WorkspacePath "scripts"
+    New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
+
+    $cmdPath = Join-Path $scriptsDir "roscli.cmd"
+    $cmdBody = @"
+@echo off
+echo Roslyn CLI is disabled for control-condition workspaces.
+exit /b 88
+"@
+    Set-Content -Path $cmdPath -Value $cmdBody -NoNewline
+
+    $shPath = Join-Path $scriptsDir "roscli"
+    $shBody = @"
+#!/usr/bin/env bash
+set -euo pipefail
+echo "Roslyn CLI is disabled for control-condition workspaces." >&2
+exit 88
+"@
+    Set-Content -Path $shPath -Value $shBody -NoNewline
+}
+
+function New-AgentEnvironmentOverrides {
+    param(
+        [Parameter(Mandatory = $true)][string]$Agent,
+        [Parameter(Mandatory = $true)][string]$RunDirectory
+    )
+
+    $agentHomeRoot = Join-Path $RunDirectory ".agent-home"
+    $profileRoot = Join-Path $agentHomeRoot "profile"
+    $appDataRoot = Join-Path $agentHomeRoot "appdata"
+    $localAppDataRoot = Join-Path $agentHomeRoot "localappdata"
+    $xdgConfigRoot = Join-Path $agentHomeRoot "xdg-config"
+    $xdgCacheRoot = Join-Path $agentHomeRoot "xdg-cache"
+    $codexHomeRoot = Join-Path $agentHomeRoot "codex-home"
+    $claudeConfigRoot = Join-Path $agentHomeRoot "claude-config"
+
+    foreach ($path in @(
+            $agentHomeRoot,
+            $profileRoot,
+            $appDataRoot,
+            $localAppDataRoot,
+            $xdgConfigRoot,
+            $xdgCacheRoot,
+            $codexHomeRoot,
+            $claudeConfigRoot
+        )) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+    }
+
+    function Copy-FileIfExists {
+        param(
+            [Parameter(Mandatory = $true)][string]$SourcePath,
+            [Parameter(Mandatory = $true)][string]$DestinationPath
+        )
+
+        if (Test-Path $SourcePath -PathType Leaf) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $DestinationPath) | Out-Null
+            Copy-Item -Path $SourcePath -Destination $DestinationPath -Force
+        }
+    }
+
+    $overrides = @{
+        HOME = $profileRoot
+        USERPROFILE = $profileRoot
+        APPDATA = $appDataRoot
+        LOCALAPPDATA = $localAppDataRoot
+        XDG_CONFIG_HOME = $xdgConfigRoot
+        XDG_CACHE_HOME = $xdgCacheRoot
+    }
+
+    if ($Agent -eq "codex") {
+        $existingCodexHome = Convert-ToText $env:CODEX_HOME
+        if ([string]::IsNullOrWhiteSpace($existingCodexHome)) {
+            $existingCodexHome = Join-Path $env:USERPROFILE ".codex"
+        }
+
+        if (Test-Path $existingCodexHome -PathType Container) {
+            foreach ($fileName in @("auth.json", "config.toml", "cap_sid", "internal_storage.json", "version.json", "models_cache.json")) {
+                Copy-FileIfExists `
+                    -SourcePath (Join-Path $existingCodexHome $fileName) `
+                    -DestinationPath (Join-Path $codexHomeRoot $fileName)
+            }
+
+            $sourceRules = Join-Path $existingCodexHome "rules"
+            $targetRules = Join-Path $codexHomeRoot "rules"
+            if (Test-Path $sourceRules -PathType Container) {
+                Copy-Item -Path $sourceRules -Destination $targetRules -Recurse -Force
+            }
+        }
+
+        $overrides["CODEX_HOME"] = $codexHomeRoot
+    } elseif ($Agent -eq "claude") {
+        $existingClaudeConfig = Convert-ToText $env:CLAUDE_CONFIG_DIR
+        if ([string]::IsNullOrWhiteSpace($existingClaudeConfig)) {
+            $existingClaudeConfig = Join-Path $env:USERPROFILE ".claude"
+        }
+
+        if (Test-Path $existingClaudeConfig -PathType Container) {
+            foreach ($fileName in @(".credentials.json", "settings.json", "CLAUDE.md")) {
+                Copy-FileIfExists `
+                    -SourcePath (Join-Path $existingClaudeConfig $fileName) `
+                    -DestinationPath (Join-Path $claudeConfigRoot $fileName)
+            }
+        }
+
+        $overrides["CLAUDE_CONFIG_DIR"] = $claudeConfigRoot
+        $overrides["ANTHROPIC_CONFIG_DIR"] = $claudeConfigRoot
+    }
+
+    return $overrides
+}
+
 function New-TrajectoryWorkspace {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
@@ -171,6 +380,8 @@ function New-TrajectoryWorkspace {
 
     if ($EnableRoslynShim) {
         Write-RoscliShim -WorkspacePath $WorkspacePath
+    } else {
+        Write-RoscliDisabledShim -WorkspacePath $WorkspacePath
     }
 }
 
@@ -180,7 +391,8 @@ function Invoke-AgentProcess {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$PromptText,
         [Parameter(Mandatory = $true)][string]$TranscriptPath,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $false)][hashtable]$EnvironmentOverrides = @{}
     )
 
     $previousErrorActionPreference = $ErrorActionPreference
@@ -192,8 +404,17 @@ function Invoke-AgentProcess {
 
     $ErrorActionPreference = "Continue"
     $exitCode = 1
+    $appliedEnvironmentKeys = New-Object System.Collections.Generic.List[string]
+    $previousEnvironmentValues = @{}
     Push-Location $WorkingDirectory
     try {
+        foreach ($key in $EnvironmentOverrides.Keys) {
+            $keyName = [string]$key
+            $previousEnvironmentValues[$keyName] = [System.Environment]::GetEnvironmentVariable($keyName, "Process")
+            [System.Environment]::SetEnvironmentVariable($keyName, [string]$EnvironmentOverrides[$keyName], "Process")
+            $appliedEnvironmentKeys.Add($keyName)
+        }
+
         $PromptText | & $Executable @Arguments 2>&1 | Tee-Object -FilePath $TranscriptPath | Out-Host
         if ($null -ne $LASTEXITCODE) {
             $exitCode = [int]$LASTEXITCODE
@@ -208,6 +429,10 @@ function Invoke-AgentProcess {
         $ErrorActionPreference = $previousErrorActionPreference
         if ($hasNativeErrorPreference) {
             $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+        }
+
+        foreach ($keyName in $appliedEnvironmentKeys) {
+            [System.Environment]::SetEnvironmentVariable($keyName, $previousEnvironmentValues[$keyName], "Process")
         }
     }
 
@@ -606,6 +831,18 @@ function Get-RoslynCommandIds {
         [void]$ids.Add($Matches[2])
     }
 
+    if ($CommandText -match "roscli(\.cmd)?\s+([a-z]+\.[a-zA-Z_][\w\.]*)") {
+        [void]$ids.Add($Matches[2])
+    }
+
+    if ($CommandText -match "roscli(\.cmd)?\s+list-commands") {
+        [void]$ids.Add("cli.list_commands")
+    }
+
+    if ($CommandText -match "roscli(\.cmd)?\s+describe-command") {
+        [void]$ids.Add("cli.describe_command")
+    }
+
     if ($CommandText -match "RoslynAgent\.Cli") {
         [void]$ids.Add("roslyn-agent.run")
     }
@@ -618,6 +855,47 @@ function Get-RoslynCommandIds {
     }
 
     return $results.ToArray()
+}
+
+function Get-RoslynToolsOffered {
+    $tools = @(
+        "roslyn-agent.run",
+        "cli.list_commands",
+        "cli.describe_command",
+        "nav.find_symbol",
+        "nav.find_references",
+        "nav.find_implementations",
+        "nav.find_overrides",
+        "ctx.file_outline",
+        "ctx.member_source",
+        "ctx.symbol_envelope",
+        "ctx.dependency_slice",
+        "ctx.call_chain_slice",
+        "diag.get_solution_snapshot",
+        "diag.get_file_diagnostics",
+        "diag.get_after_edit",
+        "diag.diff",
+        "edit.add_member",
+        "edit.rename_symbol",
+        "edit.replace_member_body",
+        "edit.change_signature",
+        "edit.update_usings",
+        "edit.apply_code_fix",
+        "edit.transaction",
+        "repair.propose_from_diagnostics",
+        "repair.apply_plan",
+        "session.open",
+        "session.status",
+        "session.set_content",
+        "session.apply_text_edits",
+        "session.apply_and_commit",
+        "session.get_diagnostics",
+        "session.diff",
+        "session.commit",
+        "session.close"
+    )
+
+    return @($tools | Sort-Object -Unique)
 }
 
 function Test-IsSearchCommand {
@@ -698,26 +976,9 @@ function Get-ToolTelemetry {
 
     $toolsOffered = @("run_shell", "search", "text_editing")
     if ($RoslynCondition) {
-        $toolsOffered += @(
-            "roslyn-agent.run",
-            "nav.find_symbol",
-            "ctx.file_outline",
-            "ctx.member_source",
-            "ctx.symbol_envelope",
-            "diag.get_solution_snapshot",
-            "diag.get_file_diagnostics",
-            "edit.rename_symbol",
-            "edit.replace_member_body",
-            "edit.transaction",
-            "repair.apply_plan",
-            "session.open",
-            "session.set_content",
-            "session.get_diagnostics",
-            "session.diff",
-            "session.commit",
-            "session.close"
-        )
+        $toolsOffered += @(Get-RoslynToolsOffered)
     }
+    $toolsOffered = @($toolsOffered | Sort-Object -Unique)
 
     $toolCalls = New-Object System.Collections.Generic.List[object]
     foreach ($name in ($toolMap.Keys | Sort-Object)) {
@@ -877,16 +1138,57 @@ function Commit-WorkspaceState {
     return $LASTEXITCODE -eq 0
 }
 
+function Get-RoslynProfileInstructionBlock {
+    param([Parameter(Mandatory = $true)][string]$RoslynGuidanceProfile)
+
+    switch ($RoslynGuidanceProfile) {
+        "brief-first" {
+            return @"
+- Default to compact calls first: use `--brief true` for `nav.find_symbol`, `ctx.member_source`, and `diag.get_solution_snapshot`.
+- Escalate to richer payloads (`--brief false` or explicit include flags) only when compact data is insufficient.
+"@
+        }
+        "verbose-first" {
+            return @"
+- Default to rich payloads first: use full detail mode (omit `--brief` or use `--brief false`) for key Roslyn calls.
+- Drop to compact payloads only when token/latency pressure becomes significant.
+"@
+        }
+        default {
+            return @"
+- Keep Roslyn payloads scoped to the smallest output needed; avoid unnecessary large context dumps.
+"@
+        }
+    }
+}
+
 function Build-ConditionPrompt {
     param(
-        [Parameter(Mandatory = $true)][string]$ConditionId,
+        [Parameter(Mandatory = $true)][object]$Condition,
         [Parameter(Mandatory = $true)][string]$TaskPrompt,
-        [Parameter(Mandatory = $true)][string]$WorkspacePath
+        [Parameter(Mandatory = $true)][string]$WorkspacePath,
+        [Parameter(Mandatory = $true)][string]$RoslynGuidanceProfile
     )
 
-    if ($ConditionId -eq "control-text-only") {
+    $conditionId = Convert-ToText (Get-ObjectPropertyValue -Object $Condition -PropertyName "id")
+    $conditionName = Convert-ToText (Get-ObjectPropertyValue -Object $Condition -PropertyName "name")
+    $conditionNotes = Convert-ToText (Get-ObjectPropertyValue -Object $Condition -PropertyName "notes")
+    $conditionInstructionPreamble = Convert-ToText (Get-ObjectPropertyValue -Object $Condition -PropertyName "instruction_preamble")
+    $conditionMode = Get-ConditionMode -Condition $Condition
+
+    if ($conditionMode -eq "control") {
+        $extraControlGuidance = ""
+        if (-not [string]::IsNullOrWhiteSpace($conditionInstructionPreamble)) {
+            $extraControlGuidance = @"
+$conditionInstructionPreamble
+
+"@
+        }
+
         return @"
 Benchmark condition: CONTROL (text-first)
+Condition id: $conditionId
+Condition name: $conditionName
 Working directory: $WorkspacePath
 
 Rules:
@@ -897,6 +1199,9 @@ Rules:
   - nav.*, ctx.*, diag.*, edit.*, repair.*, session.* command invocations
 - Use regular text navigation/editing and shell tools only.
 - Tasks are sequential in one workspace; keep previous task outputs intact.
+$extraControlGuidance
+Condition notes:
+$conditionNotes
 
 Task:
 $TaskPrompt
@@ -908,8 +1213,18 @@ At the end, provide:
 "@
     }
 
+    $profileGuidance = Get-RoslynProfileInstructionBlock -RoslynGuidanceProfile $RoslynGuidanceProfile
+    $extraTreatmentGuidance = ""
+    if (-not [string]::IsNullOrWhiteSpace($conditionInstructionPreamble)) {
+        $extraTreatmentGuidance = @"
+$conditionInstructionPreamble
+"@
+    }
+
     return @"
 Benchmark condition: TREATMENT (Roslyn-enabled)
+Condition id: $conditionId
+Condition name: $conditionName
 Working directory: $WorkspacePath
 
 Rules:
@@ -924,7 +1239,14 @@ Rules:
 - Prefer nav.*, ctx.*, diag.*, edit.*, repair.*, session.* where useful before text-only fallbacks.
 - Keep stateful `session.*` operations strictly sequential. Do not run `session.commit` and `session.close` in parallel.
 - Prefer `session.commit` as the terminal step (it can close the session unless explicitly kept open).
+- Guidance profile: $RoslynGuidanceProfile
+$profileGuidance
+- Condition-specific guidance:
+$extraTreatmentGuidance
 - Tasks are sequential in one workspace; keep previous task outputs intact.
+
+Condition notes:
+$conditionNotes
 
 Task:
 $TaskPrompt
@@ -938,6 +1260,18 @@ At the end, provide:
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$hostStartCwd = (Resolve-Path ".").Path
+$hostStartGitRootRaw = Convert-ToText (& git -C $hostStartCwd rev-parse --show-toplevel 2>$null)
+if ([string]::IsNullOrWhiteSpace($hostStartGitRootRaw)) {
+    throw "Benchmark harness must be launched from within a git working tree."
+}
+
+$hostStartGitRoot = (Resolve-Path $hostStartGitRootRaw).Path
+Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase "script.start"
+if (-not [string]::Equals((Get-NormalizedPath -Path $hostStartGitRoot), (Get-NormalizedPath -Path $repoRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Host git root '$hostStartGitRoot' does not match harness repo root '$repoRoot'."
+}
+
 $manifestFullPath = (Resolve-Path $ManifestPath).Path
 $manifestDirectory = Split-Path -Parent $manifestFullPath
 $manifest = Get-Content -Path $manifestFullPath -Raw | ConvertFrom-Json
@@ -952,16 +1286,44 @@ if ($TaskIds.Count -gt 0) {
 }
 
 $selectedConditions = New-Object System.Collections.Generic.List[object]
-if (-not $SkipControl) {
-    $control = @($manifest.conditions | Where-Object { $_.id -eq "control-text-only" } | Select-Object -First 1)
-    if ($control.Count -eq 1) {
-        $selectedConditions.Add($control[0])
+if ($ConditionIds.Count -gt 0) {
+    $requestedConditionIds = @(
+        $ConditionIds |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    foreach ($requestedId in $requestedConditionIds) {
+        $matches = @($manifest.conditions | Where-Object { (Convert-ToText $_.id) -eq $requestedId })
+        if ($matches.Count -eq 0) {
+            throw "Requested condition id '$requestedId' was not found in manifest."
+        }
+
+        $selectedConditions.Add($matches[0])
     }
-}
-if (-not $SkipTreatment) {
-    $treatment = @($manifest.conditions | Where-Object { $_.id -eq "treatment-roslyn-optional" } | Select-Object -First 1)
-    if ($treatment.Count -eq 1) {
-        $selectedConditions.Add($treatment[0])
+} else {
+    if (-not $SkipControl) {
+        $control = @($manifest.conditions | Where-Object { (Convert-ToText $_.id) -eq "control-text-only" } | Select-Object -First 1)
+        if ($control.Count -eq 0) {
+            $control = @($manifest.conditions | Where-Object { -not [bool]$_.roslyn_tools_enabled } | Select-Object -First 1)
+        }
+        if ($control.Count -eq 1) {
+            $selectedConditions.Add($control[0])
+        }
+    }
+    if (-not $SkipTreatment) {
+        $treatment = @($manifest.conditions | Where-Object { (Convert-ToText $_.id) -eq "treatment-roslyn-optional" } | Select-Object -First 1)
+        if ($treatment.Count -eq 0) {
+            $alreadySelectedIds = @($selectedConditions | ForEach-Object { Convert-ToText $_.id })
+            $treatment = @(
+                $manifest.conditions |
+                Where-Object { [bool]$_.roslyn_tools_enabled -and ($alreadySelectedIds -notcontains (Convert-ToText $_.id)) } |
+                Select-Object -First 1
+            )
+        }
+        if ($treatment.Count -eq 1) {
+            $selectedConditions.Add($treatment[0])
+        }
     }
 }
 
@@ -1014,8 +1376,10 @@ $runSummaryRows = New-Object System.Collections.Generic.List[object]
 
 foreach ($agent in $agents) {
     foreach ($condition in $selectedConditions) {
-        $mode = if ([bool]$condition.roslyn_tools_enabled) { "treatment" } else { "control" }
-        $trajectoryName = "$agent-$mode"
+        $conditionId = Convert-ToText $condition.id
+        $conditionSlug = Convert-ToSlug $conditionId
+        $mode = Get-ConditionMode -Condition $condition
+        $trajectoryName = "{0}-{1}-{2}" -f $agent, $mode, $conditionSlug
         $trajectoryDirectory = Join-Path $trajectoriesDirectory $trajectoryName
         $workspacePath = Join-Path $trajectoryDirectory "workspace"
         New-Item -ItemType Directory -Force -Path $trajectoryDirectory | Out-Null
@@ -1034,10 +1398,16 @@ foreach ($agent in $agents) {
             $taskPromptRelative = Convert-ToText $task.task_prompt_file
             $taskPromptPath = Join-Path $manifestDirectory $taskPromptRelative
             $taskPromptText = Get-Content -Path $taskPromptPath -Raw
-            $fullPrompt = Build-ConditionPrompt -ConditionId (Convert-ToText $condition.id) -TaskPrompt $taskPromptText -WorkspacePath $workspacePath
+            $fullPrompt = Build-ConditionPrompt `
+                -Condition $condition `
+                -TaskPrompt $taskPromptText `
+                -WorkspacePath $workspacePath `
+                -RoslynGuidanceProfile $RoslynGuidanceProfile
 
             $taskDirectory = Join-Path $trajectoryDirectory ("{0:D2}-{1}" -f ($taskIndex + 1), $taskId)
             New-Item -ItemType Directory -Force -Path $taskDirectory | Out-Null
+
+            Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase ("pre-task/{0}/{1}/{2}" -f $agent, $conditionId, $taskId)
 
             $promptPath = Join-Path $taskDirectory "prompt.txt"
             $transcriptPath = Join-Path $taskDirectory "transcript.jsonl"
@@ -1045,6 +1415,7 @@ foreach ($agent in $agents) {
             $taskMetadataPath = Join-Path $taskDirectory "run-metadata.json"
             Set-Content -Path $promptPath -Value $fullPrompt -NoNewline
             Set-Content -Path $transcriptPath -Value "" -NoNewline
+            $agentEnvironmentOverrides = New-AgentEnvironmentOverrides -Agent $agent -RunDirectory $taskDirectory
 
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -1087,7 +1458,8 @@ foreach ($agent in $agents) {
                     -Arguments $agentArgs `
                     -PromptText $fullPrompt `
                     -TranscriptPath $transcriptPath `
-                    -WorkingDirectory $workspacePath
+                    -WorkingDirectory $workspacePath `
+                    -EnvironmentOverrides $agentEnvironmentOverrides
             } else {
                 $claudeExecutable = "claude.cmd"
                 if (-not (Get-Command $claudeExecutable -ErrorAction SilentlyContinue)) {
@@ -1114,8 +1486,10 @@ foreach ($agent in $agents) {
                     -Arguments $agentArgs `
                     -PromptText $fullPrompt `
                     -TranscriptPath $transcriptPath `
-                    -WorkingDirectory $workspacePath
+                    -WorkingDirectory $workspacePath `
+                    -EnvironmentOverrides $agentEnvironmentOverrides
             }
+            Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase ("post-agent/{0}/{1}/{2}" -f $agent, $conditionId, $taskId)
 
             $acceptanceChecks = @($task.acceptance_checks)
             $acceptanceResult = Invoke-AcceptanceChecks `
@@ -1123,6 +1497,7 @@ foreach ($agent in $agents) {
                 -WorkspacePath $workspacePath `
                 -TaskDirectory $taskDirectory `
                 -SkipChecks ([bool]$NoAcceptanceChecks)
+            Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase ("post-acceptance/{0}/{1}/{2}" -f $agent, $conditionId, $taskId)
 
             $stopwatch.Stop()
             $durationSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
@@ -1175,7 +1550,7 @@ foreach ($agent in $agents) {
                 $helpfulTools = @("text_editing")
             }
 
-            $runId = "run-{0}-{1}-{2}-r01" -f $agent, $mode, $taskId
+            $runId = "run-{0}-{1}-{2}-{3}-r01" -f $agent, $mode, $conditionSlug, $taskId
             $agentLabel = if ($agent -eq "codex") { "codex-cli" } else { "claude-code" }
             $modelLabel = if ($agent -eq "codex") {
                 if (-not [string]::IsNullOrWhiteSpace($CodexModel)) { $CodexModel } else { "codex-default" }
@@ -1186,7 +1561,7 @@ foreach ($agent in $agents) {
             $runRecord = [ordered]@{
                 run_id = $runId
                 task_id = $taskId
-                condition_id = (Convert-ToText $condition.id)
+                condition_id = $conditionId
                 replicate = 1
                 agent = $agentLabel
                 model = $modelLabel
@@ -1231,7 +1606,7 @@ foreach ($agent in $agents) {
                 mode = $mode
                 task_id = $taskId
                 task_title = $taskTitle
-                condition_id = (Convert-ToText $condition.id)
+                condition_id = $conditionId
                 condition_name = (Convert-ToText $condition.name)
                 prompt_path = (Resolve-Path $promptPath).Path
                 transcript_path = (Resolve-Path $transcriptPath).Path
@@ -1255,14 +1630,16 @@ foreach ($agent in $agents) {
             }
             $taskMetadata | ConvertTo-Json -Depth 80 | Set-Content -Path $taskMetadataPath
 
-            $committed = Commit-WorkspaceState -WorkspacePath $workspacePath -Message ("benchmark/{0}/{1}/{2}" -f $agent, $mode, $taskId)
+            $committed = Commit-WorkspaceState -WorkspacePath $workspacePath -Message ("benchmark/{0}/{1}/{2}/{3}" -f $agent, $mode, $conditionSlug, $taskId)
             $taskMetadata.committed_for_next_task = $committed
             $taskMetadata | ConvertTo-Json -Depth 80 | Set-Content -Path $taskMetadataPath
+            Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase ("post-commit/{0}/{1}/{2}" -f $agent, $conditionId, $taskId)
 
             $runSummaryRows.Add([ordered]@{
                     run_id = $runId
                     agent = $agent
                     mode = $mode
+                    condition_id = $conditionId
                     task_id = $taskId
                     succeeded = $succeeded
                     setup_passed = $setupPassed
@@ -1318,8 +1695,9 @@ $summaryPayload | ConvertTo-Json -Depth 100 | Set-Content -Path $summaryPath
 $gateLogPath = Join-Path $gateDirectory "agent-eval-gate.log"
 $gateCommand = "dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest `"$realManifestPath`" --runs `"$runsDirectory`" --output `"$gateDirectory`""
 $gateExitCode = Invoke-LoggedCommand -CommandText $gateCommand -WorkingDirectory $repoRoot -LogPath $gateLogPath
+Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase "post-gate"
 
-$aggregateByAgentMode = $runSummaryRows | Group-Object agent, mode | ForEach-Object {
+$aggregateByAgentMode = $runSummaryRows | Group-Object agent, mode, condition_id | ForEach-Object {
     $rows = $_.Group
     $tokenValues = @($rows | Where-Object { $null -ne $_.total_tokens } | ForEach-Object { [double]$_.total_tokens })
     [ordered]@{
@@ -1347,3 +1725,4 @@ Write-Host ("MANIFEST={0}" -f ([System.IO.Path]::GetFullPath($realManifestPath))
 Write-Host ("SUMMARY={0}" -f ([System.IO.Path]::GetFullPath($summaryPath)))
 Write-Host ("AGGREGATE={0}" -f ([System.IO.Path]::GetFullPath($aggregatePath)))
 Write-Host ("GATE_EXIT={0}" -f $gateExitCode)
+Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase "script.end"

@@ -13,7 +13,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>roslyn-agent</ToolCommandName>
     <PackageId>RoslynAgent.Cli</PackageId>
-    <Authors>DNAKode</Authors>
+    <Authors>DNA Kode</Authors>
     <Description>Roslyn-native agentic coding CLI primitives for C# workflows.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/DNAKode/RoslynSkill</RepositoryUrl>

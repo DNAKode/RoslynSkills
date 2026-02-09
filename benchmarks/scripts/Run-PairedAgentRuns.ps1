@@ -4,6 +4,7 @@ param(
     [string]$CodexModel = "",
     [string]$ClaudeModel = "",
     [string]$CliPublishConfiguration = "Release",
+    [switch]$IncludeMcpTreatment,
     [bool]$FailOnControlContamination = $true,
     [switch]$KeepIsolatedWorkspaces,
     [switch]$SkipCodex,
@@ -61,7 +62,7 @@ function Test-PathIsUnderRoot {
 function Resolve-IsolationRootDirectory {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
-        [Parameter(Mandatory = $true)][string]$IsolationRoot
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$IsolationRoot
     )
 
     if ([string]::IsNullOrWhiteSpace($IsolationRoot)) {
@@ -110,7 +111,7 @@ function Assert-IsolatedRunWorkspace {
         throw "Run workspace '$WorkspaceDirectory' is inside repo root '$RepoRoot'. Isolation requires a workspace outside the repository tree."
     }
 
-    $workspaceRepoTop = & git -C $WorkspaceDirectory rev-parse --show-toplevel 2>$null
+    $workspaceRepoTop = & cmd /d /c "git -C `"$WorkspaceDirectory`" rev-parse --show-toplevel 2>nul"
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($workspaceRepoTop)) {
         throw "Run workspace '$WorkspaceDirectory' is inside git repo '$($workspaceRepoTop.Trim())'."
     }
@@ -217,6 +218,94 @@ function Publish-RoslynCli {
     return [string](Resolve-Path $cliDllPath).Path
 }
 
+function Publish-RoslynMcpServer {
+    param(
+        [Parameter(Mandatory = $true)][string]$McpProjectPath,
+        [Parameter(Mandatory = $true)][string]$BundleDirectory,
+        [Parameter(Mandatory = $true)][string]$Configuration
+    )
+
+    $publishDirectory = Join-Path $BundleDirectory "tools/roslyn-mcp"
+    New-Item -ItemType Directory -Force -Path $publishDirectory | Out-Null
+
+    Write-Host ("Publishing Roslyn MCP server once for run bundle: {0}" -f $publishDirectory)
+    & dotnet publish $McpProjectPath -c $Configuration -o $publishDirectory --nologo | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish failed for RoslynAgent.McpServer."
+    }
+
+    $mcpDllPath = Join-Path $publishDirectory "RoslynAgent.McpServer.dll"
+    if (-not (Test-Path $mcpDllPath)) {
+        throw "Published RoslynAgent.McpServer.dll not found at '$mcpDllPath'."
+    }
+
+    return [string](Resolve-Path $mcpDllPath).Path
+}
+
+function Set-CodexMcpServerConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$CodexHomeDirectory,
+        [Parameter(Mandatory = $true)][string]$McpDllPath
+    )
+
+    New-Item -ItemType Directory -Force -Path $CodexHomeDirectory | Out-Null
+    $configPath = Join-Path $CodexHomeDirectory "config.toml"
+    $existing = if (Test-Path $configPath -PathType Leaf) { (Get-Content -Path $configPath -Raw) } else { "" }
+
+    $sectionPattern = "(?ms)^\[mcp_servers\.(roslyn|roslyn_mcp)\]\r?\n.*?(?=^\[|\z)"
+    $cleaned = [System.Text.RegularExpressions.Regex]::Replace($existing, $sectionPattern, "")
+    $cleaned = $cleaned.TrimEnd()
+
+    $dllForwardPath = $McpDllPath -replace "\\", "/"
+    $section = @"
+[mcp_servers.roslyn]
+command = "dotnet"
+args = ["$dllForwardPath"]
+
+[mcp_servers.roslyn_mcp]
+command = "dotnet"
+args = ["$dllForwardPath"]
+"@
+
+    $newContent = if ([string]::IsNullOrWhiteSpace($cleaned)) {
+        $section
+    } else {
+        $cleaned + [Environment]::NewLine + [Environment]::NewLine + $section
+    }
+
+    Set-Content -Path $configPath -Value $newContent -NoNewline
+    return [string](Resolve-Path $configPath).Path
+}
+
+function Write-ClaudeMcpConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [Parameter(Mandatory = $true)][string]$McpDllPath
+    )
+
+    $configPath = Join-Path $RunDirectory "claude-mcp.json"
+    $dllForwardPath = $McpDllPath -replace "\\", "/"
+    $config = [ordered]@{
+        mcpServers = [ordered]@{
+            roslyn = [ordered]@{
+                type = "stdio"
+                command = "dotnet"
+                args = @($dllForwardPath)
+                env = @{}
+            }
+            roslyn_mcp = [ordered]@{
+                type = "stdio"
+                command = "dotnet"
+                args = @($dllForwardPath)
+                env = @{}
+            }
+        }
+    }
+
+    $config | ConvertTo-Json -Depth 10 | Set-Content -Path $configPath
+    return [string](Resolve-Path $configPath).Path
+}
+
 function Write-RoslynHelperScripts {
     param(
         [Parameter(Mandatory = $true)][string]$RunDirectory,
@@ -280,15 +369,28 @@ param(
 )
 
 function Invoke-RoscliJson {
-  param([string[]]`$Args)
-  `$raw = & ".\scripts\roscli.cmd" @Args
+  param([string[]]`$CommandArgs)
+  `$raw = & ".\scripts\roscli.cmd" @CommandArgs 2>&1
+  `$rawText = if (`$raw -is [System.Array]) { [string]::Join([Environment]::NewLine, `$raw) } else { [string]`$raw }
   if (`$LASTEXITCODE -ne 0) {
-    throw "Roslyn helper command failed: $($Args -join ' ')"
+    throw "Roslyn helper command failed: $($CommandArgs -join ' ')`n$rawText"
   }
-  return `$raw | ConvertFrom-Json
+
+  try {
+    return `$rawText | ConvertFrom-Json
+  } catch {
+    `$jsonStart = `$rawText.IndexOf("{")
+    `$jsonEnd = `$rawText.LastIndexOf("}")
+    if (`$jsonStart -ge 0 -and `$jsonEnd -gt `$jsonStart) {
+      `$jsonCandidate = `$rawText.Substring(`$jsonStart, (`$jsonEnd - `$jsonStart + 1))
+      return `$jsonCandidate | ConvertFrom-Json
+    }
+
+    throw "Roslyn helper JSON parse failed: $($CommandArgs -join ' ')`n$rawText"
+  }
 }
 
-`$rename = Invoke-RoscliJson -Args @(
+`$rename = Invoke-RoscliJson -CommandArgs @(
   "edit.rename_symbol",
   `$FilePath,
   `$Line.ToString(),
@@ -304,13 +406,13 @@ if (-not `$rename.Ok) {
 }
 
 `$verification = [ordered]@{
-  new_symbol_matches = $null
-  old_symbol_matches = $null
-  diagnostics_errors = $null
+  new_symbol_matches = `$null
+  old_symbol_matches = `$null
+  diagnostics_errors = `$null
   checks = @()
 }
 
-`$newMatches = Invoke-RoscliJson -Args @(
+`$newMatches = Invoke-RoscliJson -CommandArgs @(
   "nav.find_symbol",
   `$FilePath,
   `$NewName,
@@ -328,7 +430,7 @@ if (`$ExpectedNewExact -ge 0) {
 }
 
 if (-not [string]::IsNullOrWhiteSpace(`$OldName)) {
-  `$oldMatches = Invoke-RoscliJson -Args @(
+  `$oldMatches = Invoke-RoscliJson -CommandArgs @(
     "nav.find_symbol",
     `$FilePath,
     `$OldName,
@@ -347,7 +449,7 @@ if (-not [string]::IsNullOrWhiteSpace(`$OldName)) {
 }
 
 if (`$RequireNoDiagnostics) {
-  `$diag = Invoke-RoscliJson -Args @(
+  `$diag = Invoke-RoscliJson -CommandArgs @(
     "diag.get_file_diagnostics",
     `$FilePath
   )
@@ -387,6 +489,7 @@ function Test-IsRoslynCommandText {
     }
 
     $patterns = @(
+        "roslyn_mcp",
         "roslyn-list-commands.ps1",
         "roslyn-find-symbol.ps1",
         "roslyn-rename-symbol.ps1",
@@ -408,6 +511,86 @@ function Test-IsRoslynCommandText {
     }
 
     return $false
+}
+
+function Test-IsRoslynToolName {
+    param([string]$ToolName)
+
+    if ([string]::IsNullOrWhiteSpace($ToolName)) {
+        return $false
+    }
+
+    if ($ToolName.IndexOf("roslyn", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return $true
+    }
+
+    return $false
+}
+
+function Get-CodexRoslynInvocationText {
+    param([object]$Item)
+
+    if ($null -eq $Item) {
+        return $null
+    }
+
+    $commandText = $null
+    $commandProperty = $Item.PSObject.Properties["command"]
+    if ($null -ne $commandProperty -and $null -ne $commandProperty.Value) {
+        $candidateCommand = [string]$commandProperty.Value
+        if ((-not [string]::IsNullOrWhiteSpace($candidateCommand)) -and (Test-IsRoslynCommandText -Text $candidateCommand)) {
+            return $candidateCommand
+        }
+        $commandText = $candidateCommand
+    }
+
+    $toolNameCandidates = New-Object System.Collections.Generic.List[string]
+    foreach ($propertyName in @("tool_name", "toolName", "name", "server_name", "mcp_tool_name")) {
+        $property = $Item.PSObject.Properties[$propertyName]
+        if ($null -ne $property -and $null -ne $property.Value) {
+            $text = [string]$property.Value
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                $toolNameCandidates.Add($text)
+            }
+        }
+    }
+
+    foreach ($toolName in $toolNameCandidates) {
+        if (Test-IsRoslynToolName -ToolName $toolName) {
+            return ("mcp:{0}" -f $toolName)
+        }
+    }
+
+    foreach ($propertyName in @("input", "arguments")) {
+        $property = $Item.PSObject.Properties[$propertyName]
+        if ($null -ne $property -and $null -ne $property.Value) {
+            try {
+                $serialized = ($property.Value | ConvertTo-Json -Depth 8 -Compress)
+                if ((-not [string]::IsNullOrWhiteSpace($serialized)) -and (Test-IsRoslynCommandText -Text $serialized)) {
+                    return $serialized
+                }
+            } catch {
+                # Ignore non-serializable payload hints.
+            }
+        }
+    }
+
+    $itemType = [string]$Item.type
+    if ($itemType.IndexOf("mcp", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        if ($toolNameCandidates.Count -gt 0) {
+            foreach ($toolName in $toolNameCandidates) {
+                if (Test-IsRoslynToolName -ToolName $toolName) {
+                    return ("mcp:{0}" -f $toolName)
+                }
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($commandText) -and (Test-IsRoslynCommandText -Text $commandText)) {
+            return $commandText
+        }
+    }
+
+    return $null
 }
 
 function Get-CodexRoslynUsage {
@@ -433,12 +616,12 @@ function Get-CodexRoslynUsage {
             continue
         }
 
-        if ($null -eq $event.item -or $event.item.type -ne "command_execution") {
+        if ($null -eq $event.item) {
             continue
         }
 
-        $commandText = [string]$event.item.command
-        if (-not (Test-IsRoslynCommandText -Text $commandText)) {
+        $invocationText = Get-CodexRoslynInvocationText -Item $event.item
+        if ([string]::IsNullOrWhiteSpace($invocationText)) {
             continue
         }
 
@@ -448,11 +631,29 @@ function Get-CodexRoslynUsage {
         }
 
         if ($seenInvocationIds.Add($itemId)) {
-            $invocations.Add($commandText)
+            $invocations.Add($invocationText)
         }
 
-        if ($event.type -eq "item.completed" -and $event.item.exit_code -eq 0 -and $successfulInvocationIds.Add($itemId)) {
-            $successful++
+        if ($event.type -eq "item.completed") {
+            $wasSuccessful = $false
+            $statusValue = [string]$event.item.status
+            if (-not [string]::IsNullOrWhiteSpace($statusValue) -and $statusValue.Equals("failed", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $wasSuccessful = $false
+            } elseif ($null -ne $event.item.error) {
+                $wasSuccessful = $false
+            } elseif ($null -ne $event.item.exit_code) {
+                $wasSuccessful = ([int]$event.item.exit_code -eq 0)
+            } elseif ($null -ne $event.item.success) {
+                $wasSuccessful = [bool]$event.item.success
+            } elseif ($null -ne $event.item.is_error) {
+                $wasSuccessful = (-not [bool]$event.item.is_error)
+            } else {
+                $wasSuccessful = $true
+            }
+
+            if ($wasSuccessful -and $successfulInvocationIds.Add($itemId)) {
+                $successful++
+            }
         }
     }
 
@@ -465,7 +666,7 @@ function Get-CodexRoslynUsage {
 function Get-ClaudeRoslynUsage {
     param([Parameter(Mandatory = $true)][string]$TranscriptPath)
 
-    $roslynToolUseCommandsById = @{}
+    $roslynToolUsesById = @{}
     $invocations = New-Object System.Collections.Generic.List[string]
     $successful = 0
 
@@ -482,14 +683,34 @@ function Get-ClaudeRoslynUsage {
 
         if ($event.type -eq "assistant" -and $null -ne $event.message -and $null -ne $event.message.content) {
             foreach ($content in $event.message.content) {
-                if ($content.type -eq "tool_use" -and $content.name -eq "Bash") {
+                if ($content.type -ne "tool_use") {
+                    continue
+                }
+
+                $toolUseId = [string]$content.id
+                if ([string]::IsNullOrWhiteSpace($toolUseId)) {
+                    continue
+                }
+
+                $toolName = [string]$content.name
+                $invocationText = $null
+                if ($toolName -eq "Bash") {
                     $commandText = [string]$content.input.command
                     if (Test-IsRoslynCommandText -Text $commandText) {
-                        $toolUseId = [string]$content.id
-                        if (-not [string]::IsNullOrWhiteSpace($toolUseId)) {
-                            $roslynToolUseCommandsById[$toolUseId] = $commandText
-                        }
+                        $invocationText = $commandText
                     }
+                } elseif ($toolName -eq "ReadMcpResourceTool") {
+                    $resourceUri = [string]$content.input.uri
+                    if (-not [string]::IsNullOrWhiteSpace($resourceUri) -and
+                        $resourceUri.IndexOf("roslyn://command/", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                        $invocationText = ("mcp:{0}" -f $resourceUri)
+                    }
+                } elseif (Test-IsRoslynToolName -ToolName $toolName) {
+                    $invocationText = ("mcp:{0}" -f $toolName)
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($invocationText)) {
+                    $roslynToolUsesById[$toolUseId] = $invocationText
                 }
             }
             continue
@@ -505,14 +726,23 @@ function Get-ClaudeRoslynUsage {
             }
 
             $toolUseId = [string]$content.tool_use_id
-            if ([string]::IsNullOrWhiteSpace($toolUseId) -or -not $roslynToolUseCommandsById.ContainsKey($toolUseId)) {
+            if ([string]::IsNullOrWhiteSpace($toolUseId) -or -not $roslynToolUsesById.ContainsKey($toolUseId)) {
                 continue
             }
 
-            $commandText = [string]$roslynToolUseCommandsById[$toolUseId]
-            $invocations.Add($commandText)
+            $invocationText = [string]$roslynToolUsesById[$toolUseId]
+            $invocations.Add($invocationText)
 
-            $resultText = [string]$content.content
+            $resultText = ""
+            if ($content.content -is [System.Array]) {
+                try {
+                    $resultText = ($content.content | ConvertTo-Json -Depth 8 -Compress)
+                } catch {
+                    $resultText = [string]$content.content
+                }
+            } else {
+                $resultText = [string]$content.content
+            }
             $exitCode = $null
             if ($resultText -match "Exit code\s+(-?\d+)") {
                 $exitCode = [int]$Matches[1]
@@ -676,10 +906,12 @@ function Get-TokenAttribution {
             }
 
             if ($event.type -eq "item.completed" -and $null -ne $event.item) {
-                if ($event.item.type -eq "command_execution") {
+                $itemType = [string]$event.item.type
+                $isCommandRoundTrip = ($itemType -eq "command_execution" -or $itemType.IndexOf("mcp", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+                if ($isCommandRoundTrip) {
                     $commandRoundTrips++
-                    $commandText = [string]$event.item.command
-                    if (Test-IsRoslynCommandText -Text $commandText) {
+                    $roslynInvocationText = Get-CodexRoslynInvocationText -Item $event.item
+                    if (-not [string]::IsNullOrWhiteSpace($roslynInvocationText)) {
                         $roslynCommandRoundTrips++
                     }
 
@@ -721,20 +953,19 @@ function Get-TokenAttribution {
     $completionTokensClaude = $null
     $cacheReadClaude = $null
     $cacheCreationClaude = $null
-    $roslynToolUseIds = New-Object System.Collections.Generic.HashSet[string]
-
     foreach ($event in $events) {
         if ($event.type -eq "assistant" -and $null -ne $event.message -and $null -ne $event.message.content) {
             foreach ($content in $event.message.content) {
-                if ($content.type -eq "tool_use" -and $content.name -eq "Bash") {
+                if ($content.type -eq "tool_use") {
                     $commandRoundTripsClaude++
-                    $commandText = [string]$content.input.command
-                    if (Test-IsRoslynCommandText -Text $commandText) {
-                        $roslynCommandRoundTripsClaude++
-                        $toolUseId = [string]$content.id
-                        if (-not [string]::IsNullOrWhiteSpace($toolUseId)) {
-                            [void]$roslynToolUseIds.Add($toolUseId)
+                    $toolName = [string]$content.name
+                    if ($toolName -eq "Bash") {
+                        $commandText = [string]$content.input.command
+                        if (Test-IsRoslynCommandText -Text $commandText) {
+                            $roslynCommandRoundTripsClaude++
                         }
+                    } elseif (Test-IsRoslynToolName -ToolName $toolName) {
+                        $roslynCommandRoundTripsClaude++
                     }
                 } elseif ($content.type -eq "text") {
                     $text = [string]$content.text
@@ -865,6 +1096,7 @@ function New-AgentEnvironmentOverrides {
     $localAppDataRoot = Join-Path $agentHomeRoot "localappdata"
     $xdgConfigRoot = Join-Path $agentHomeRoot "xdg-config"
     $xdgCacheRoot = Join-Path $agentHomeRoot "xdg-cache"
+    $dotnetCliHomeRoot = Join-Path $agentHomeRoot "dotnet-cli-home"
     $codexHomeRoot = Join-Path $agentHomeRoot "codex-home"
     $claudeConfigRoot = Join-Path $agentHomeRoot "claude-config"
 
@@ -875,10 +1107,23 @@ function New-AgentEnvironmentOverrides {
         $localAppDataRoot,
         $xdgConfigRoot,
         $xdgCacheRoot,
+        $dotnetCliHomeRoot,
         $codexHomeRoot,
         $claudeConfigRoot
     )) {
         New-Item -ItemType Directory -Force -Path $path | Out-Null
+    }
+
+    function Copy-FileIfExists {
+        param(
+            [Parameter(Mandatory = $true)][string]$SourcePath,
+            [Parameter(Mandatory = $true)][string]$DestinationPath
+        )
+
+        if (Test-Path $SourcePath -PathType Leaf) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $DestinationPath) | Out-Null
+            Copy-Item -Path $SourcePath -Destination $DestinationPath -Force
+        }
     }
 
     $overrides = @{
@@ -888,11 +1133,43 @@ function New-AgentEnvironmentOverrides {
         LOCALAPPDATA = $localAppDataRoot
         XDG_CONFIG_HOME = $xdgConfigRoot
         XDG_CACHE_HOME = $xdgCacheRoot
+        DOTNET_CLI_HOME = $dotnetCliHomeRoot
+        DOTNET_SKIP_FIRST_TIME_EXPERIENCE = "1"
+        DOTNET_CLI_TELEMETRY_OPTOUT = "1"
+        DOTNET_NOLOGO = "1"
     }
 
     if ($Agent -eq "codex") {
+        $existingCodexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+            Join-Path $env:USERPROFILE ".codex"
+        } else {
+            [string]$env:CODEX_HOME
+        }
+
+        if (Test-Path $existingCodexHome -PathType Container) {
+            foreach ($fileName in @("auth.json", "cap_sid", "version.json", "models_cache.json", "internal_storage.json")) {
+                Copy-FileIfExists `
+                    -SourcePath (Join-Path $existingCodexHome $fileName) `
+                    -DestinationPath (Join-Path $codexHomeRoot $fileName)
+            }
+        }
+
         $overrides["CODEX_HOME"] = $codexHomeRoot
     } elseif ($Agent -eq "claude") {
+        $existingClaudeConfig = if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) {
+            Join-Path $env:USERPROFILE ".claude"
+        } else {
+            [string]$env:CLAUDE_CONFIG_DIR
+        }
+
+        if (Test-Path $existingClaudeConfig -PathType Container) {
+            foreach ($fileName in @(".credentials.json", "settings.json")) {
+                Copy-FileIfExists `
+                    -SourcePath (Join-Path $existingClaudeConfig $fileName) `
+                    -DestinationPath (Join-Path $claudeConfigRoot $fileName)
+            }
+        }
+
         $overrides["CLAUDE_CONFIG_DIR"] = $claudeConfigRoot
         $overrides["ANTHROPIC_CONFIG_DIR"] = $claudeConfigRoot
     }
@@ -980,8 +1257,15 @@ function Invoke-RenameConstraintChecks {
         command_output = $null
     }
 
-    $rawDiagnosticsOutput = & dotnet $CliDllPath diag.get_file_diagnostics Target.cs
-    $diagExitCode = $LASTEXITCODE
+    $rawDiagnosticsOutput = $null
+    $diagExitCode = 1
+    Push-Location $RunDirectory
+    try {
+        $rawDiagnosticsOutput = & dotnet $CliDllPath diag.get_file_diagnostics Target.cs
+        $diagExitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
     $diagOutputText = if ($rawDiagnosticsOutput -is [System.Array]) {
         [string]::Join([Environment]::NewLine, $rawDiagnosticsOutput)
     } else {
@@ -1041,14 +1325,18 @@ function Write-PairedRunSummaryMarkdown {
     if ($Runs.Count -eq 0) {
         $lines.Add("No runs executed.")
     } else {
-        $lines.Add("| Agent | Mode | Exit | Run Passed | Constraints Passed | Control Contamination | Roslyn Used | Roslyn Calls (ok/attempted) | Model Total Tokens | Cache-inclusive Tokens | Round Trips | Roslyn Round Trips | Command Output Chars | Agent Message Chars |")
-        $lines.Add("| --- | --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
-
-        foreach ($run in ($Runs | Sort-Object @{ Expression = "agent"; Ascending = $true }, @{ Expression = {
+        $sortedRuns = @(
+            $Runs | Sort-Object @{ Expression = "agent"; Ascending = $true }, @{ Expression = {
                     if ($_.mode -eq "control") { 0 } elseif ($_.mode -eq "treatment") { 1 } else { 2 }
-                }; Ascending = $true })) {
+                }; Ascending = $true }
+        )
+
+        $lines.Add("| Agent | Mode | Exit | Run Passed | Constraints Passed | Control Contamination | Roslyn Used | Roslyn Calls (ok/attempted) | Duration (s) | Model Total Tokens | Cache-inclusive Tokens | Round Trips | Roslyn Round Trips | Command Output Chars | Agent Message Chars |")
+        $lines.Add("| --- | --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+
+        foreach ($run in $sortedRuns) {
             $roslynCalls = ("{0}/{1}" -f (Convert-ToSummaryValue $run.roslyn_successful_calls), (Convert-ToSummaryValue $run.roslyn_attempted_calls))
-            $line = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} |" -f `
+            $line = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} |" -f `
                 (Convert-ToSummaryValue $run.agent), `
                 (Convert-ToSummaryValue $run.mode), `
                 (Convert-ToSummaryValue $run.exit_code), `
@@ -1057,12 +1345,103 @@ function Write-PairedRunSummaryMarkdown {
                 (Convert-ToSummaryValue $run.control_contamination_detected), `
                 (Convert-ToSummaryValue $run.roslyn_used), `
                 $roslynCalls, `
+                (Convert-ToSummaryValue $run.duration_seconds), `
                 (Convert-ToSummaryValue $run.total_tokens), `
                 (Convert-ToSummaryValue $run.cache_inclusive_total_tokens), `
                 (Convert-ToSummaryValue $run.command_round_trips), `
                 (Convert-ToSummaryValue $run.roslyn_command_round_trips), `
                 (Convert-ToSummaryValue $run.token_attribution.command_output_chars), `
                 (Convert-ToSummaryValue $run.token_attribution.agent_message_chars)
+            $lines.Add($line)
+        }
+
+        $lines.Add("")
+        $lines.Add("## Agent Breakout (Control vs Treatment)")
+        $lines.Add("")
+        $lines.Add("| Agent | Control Duration (s) | Treatment Duration (s) | Delta (s) | Ratio | Control Tokens | Treatment Tokens | Token Delta | Token Ratio | Treatment Roslyn Calls (ok/attempted) |")
+        $lines.Add("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
+
+        foreach ($agentGroup in ($sortedRuns | Group-Object -Property agent | Sort-Object Name)) {
+            $control = @($agentGroup.Group | Where-Object { $_.mode -eq "control" } | Select-Object -First 1)
+            $treatment = @($agentGroup.Group | Where-Object { $_.mode -eq "treatment" } | Select-Object -First 1)
+            if ($control.Count -eq 0 -or $treatment.Count -eq 0) {
+                continue
+            }
+            $agentName = Convert-ToSummaryValue $control[0].agent
+
+            $controlDuration = [double]$control[0].duration_seconds
+            $treatmentDuration = [double]$treatment[0].duration_seconds
+            $durationDelta = [Math]::Round(($treatmentDuration - $controlDuration), 3)
+            $durationRatio = $null
+            if ($controlDuration -ne 0.0) {
+                $durationRatio = [Math]::Round(($treatmentDuration / $controlDuration), 3)
+            }
+
+            $controlTokens = [double]$control[0].total_tokens
+            $treatmentTokens = [double]$treatment[0].total_tokens
+            $tokenDelta = [Math]::Round(($treatmentTokens - $controlTokens), 0)
+            $tokenRatio = $null
+            if ($controlTokens -ne 0.0) {
+                $tokenRatio = [Math]::Round(($treatmentTokens / $controlTokens), 3)
+            }
+
+            $treatmentRoslynCalls = ("{0}/{1}" -f (Convert-ToSummaryValue $treatment[0].roslyn_successful_calls), (Convert-ToSummaryValue $treatment[0].roslyn_attempted_calls))
+            $line = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} |" -f `
+                $agentName, `
+                (Convert-ToSummaryValue $controlDuration), `
+                (Convert-ToSummaryValue $treatmentDuration), `
+                (Convert-ToSummaryValue $durationDelta), `
+                (Convert-ToSummaryValue $durationRatio), `
+                (Convert-ToSummaryValue ([Math]::Round($controlTokens, 0))), `
+                (Convert-ToSummaryValue ([Math]::Round($treatmentTokens, 0))), `
+                (Convert-ToSummaryValue $tokenDelta), `
+                (Convert-ToSummaryValue $tokenRatio), `
+                $treatmentRoslynCalls
+            $lines.Add($line)
+        }
+
+        $lines.Add("")
+        $lines.Add("## Agent Breakout (Control vs Treatment-MCP)")
+        $lines.Add("")
+        $lines.Add("| Agent | Control Duration (s) | Treatment-MCP Duration (s) | Delta (s) | Ratio | Control Tokens | Treatment-MCP Tokens | Token Delta | Token Ratio | Treatment-MCP Roslyn Calls (ok/attempted) |")
+        $lines.Add("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
+
+        foreach ($agentGroup in ($sortedRuns | Group-Object -Property agent | Sort-Object Name)) {
+            $control = @($agentGroup.Group | Where-Object { $_.mode -eq "control" } | Select-Object -First 1)
+            $treatmentMcp = @($agentGroup.Group | Where-Object { $_.mode -eq "treatment-mcp" } | Select-Object -First 1)
+            if ($control.Count -eq 0 -or $treatmentMcp.Count -eq 0) {
+                continue
+            }
+            $agentName = Convert-ToSummaryValue $control[0].agent
+
+            $controlDuration = [double]$control[0].duration_seconds
+            $mcpDuration = [double]$treatmentMcp[0].duration_seconds
+            $durationDelta = [Math]::Round(($mcpDuration - $controlDuration), 3)
+            $durationRatio = $null
+            if ($controlDuration -ne 0.0) {
+                $durationRatio = [Math]::Round(($mcpDuration / $controlDuration), 3)
+            }
+
+            $controlTokens = [double]$control[0].total_tokens
+            $mcpTokens = [double]$treatmentMcp[0].total_tokens
+            $tokenDelta = [Math]::Round(($mcpTokens - $controlTokens), 0)
+            $tokenRatio = $null
+            if ($controlTokens -ne 0.0) {
+                $tokenRatio = [Math]::Round(($mcpTokens / $controlTokens), 3)
+            }
+
+            $mcpRoslynCalls = ("{0}/{1}" -f (Convert-ToSummaryValue $treatmentMcp[0].roslyn_successful_calls), (Convert-ToSummaryValue $treatmentMcp[0].roslyn_attempted_calls))
+            $line = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} |" -f `
+                $agentName, `
+                (Convert-ToSummaryValue $controlDuration), `
+                (Convert-ToSummaryValue $mcpDuration), `
+                (Convert-ToSummaryValue $durationDelta), `
+                (Convert-ToSummaryValue $durationRatio), `
+                (Convert-ToSummaryValue ([Math]::Round($controlTokens, 0))), `
+                (Convert-ToSummaryValue ([Math]::Round($mcpTokens, 0))), `
+                (Convert-ToSummaryValue $tokenDelta), `
+                (Convert-ToSummaryValue $tokenRatio), `
+                $mcpRoslynCalls
             $lines.Add($line)
         }
     }
@@ -1105,6 +1484,8 @@ function Invoke-AgentRun {
         [Parameter(Mandatory = $true)][string]$PromptText,
         [Parameter(Mandatory = $true)][string]$TargetContent,
         [Parameter(Mandatory = $true)][string]$CliDllPath,
+        [Parameter(Mandatory = $false)][string]$McpDllPath = "",
+        [Parameter(Mandatory = $false)][bool]$EnableMcp = $false,
         [Parameter(Mandatory = $false)][bool]$FailOnControlContamination = $true,
         [Parameter(Mandatory = $false)][bool]$KeepIsolatedWorkspace = $false,
         [Parameter(Mandatory = $false)][string]$Model = ""
@@ -1133,8 +1514,28 @@ function Invoke-AgentRun {
         }
 
         $environmentOverrides = New-AgentEnvironmentOverrides -Agent $Agent -RunDirectory $workspaceDirectory
+        $codexMcpConfigPath = $null
+        $claudeMcpConfigPath = $null
+        if ($EnableMcp) {
+            if ([string]::IsNullOrWhiteSpace($McpDllPath)) {
+                throw "EnableMcp was set but no MCP server DLL path was provided."
+            }
+
+            if ($Agent -eq "codex") {
+                $codexHome = [string]$environmentOverrides["CODEX_HOME"]
+                if ([string]::IsNullOrWhiteSpace($codexHome)) {
+                    throw "CODEX_HOME override was not available for MCP setup."
+                }
+
+                $codexMcpConfigPath = Set-CodexMcpServerConfig -CodexHomeDirectory $codexHome -McpDllPath $McpDllPath
+            } elseif ($Agent -eq "claude") {
+                $claudeMcpConfigPath = Write-ClaudeMcpConfig -RunDirectory $workspaceDirectory -McpDllPath $McpDllPath
+            }
+        }
 
         $exitCode = 1
+        $agentDurationSeconds = $null
+        $agentStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         Push-Location $workspaceDirectory
         try {
             if ($Agent -eq "codex") {
@@ -1175,6 +1576,9 @@ function Invoke-AgentRun {
                 if (-not [string]::IsNullOrWhiteSpace($Model)) {
                     $args += @("--model", $Model)
                 }
+                if ($EnableMcp -and -not [string]::IsNullOrWhiteSpace($claudeMcpConfigPath)) {
+                    $args += @("--mcp-config", $claudeMcpConfigPath, "--strict-mcp-config")
+                }
 
                 $exitCode = Invoke-AgentProcess -Executable $claudeExecutable -Arguments $args -PromptText $PromptText -TranscriptPath $transcriptPath -EnvironmentOverrides $environmentOverrides
             } else {
@@ -1182,6 +1586,8 @@ function Invoke-AgentRun {
             }
         } finally {
             Pop-Location
+            $agentStopwatch.Stop()
+            $agentDurationSeconds = [Math]::Round($agentStopwatch.Elapsed.TotalSeconds, 3)
         }
 
         $diffHasChanges = Get-Diff -RunDirectory $workspaceDirectory
@@ -1249,8 +1655,12 @@ function Invoke-AgentRun {
             non_roslyn_command_round_trips = $tokenAttribution.non_roslyn_command_round_trips
             control_contamination_detected = $controlContaminationDetected
             fail_on_control_contamination = $FailOnControlContamination
+            mcp_enabled = $EnableMcp
+            codex_mcp_config_path = $codexMcpConfigPath
+            claude_mcp_config_path = $claudeMcpConfigPath
             run_passed = $runPassed
             failure_reasons = $failureReasons.ToArray()
+            duration_seconds = $agentDurationSeconds
             constraint_checks_passed = [bool]$constraintChecks.ok
             constraint_checks_path = (Resolve-Path $artifactConstraintChecksPath).Path
             agent_environment = $environmentOverrides
@@ -1296,6 +1706,11 @@ New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
 
 $cliProjectPath = (Resolve-Path (Join-Path $repoRoot "src\RoslynAgent.Cli\RoslynAgent.Cli.csproj")).Path
 $cliDllPath = Publish-RoslynCli -CliProjectPath $cliProjectPath -BundleDirectory $bundleDirectory -Configuration $CliPublishConfiguration
+$mcpDllPath = $null
+if ($IncludeMcpTreatment) {
+    $mcpProjectPath = (Resolve-Path (Join-Path $repoRoot "src\RoslynAgent.McpServer\RoslynAgent.McpServer.csproj")).Path
+    $mcpDllPath = Publish-RoslynMcpServer -McpProjectPath $mcpProjectPath -BundleDirectory $bundleDirectory -Configuration $CliPublishConfiguration
+}
 
 $targetContent = @"
 public class Overloads
@@ -1383,20 +1798,68 @@ Prefer using Roslyn helpers before editing. If they fail, continue with best eff
 After editing, say explicitly whether Roslyn helpers were invoked successfully.
 "@
 
+$treatmentPromptCodexMcp = @"
+Edit Target.cs in this directory.
+Task:
+1) Rename method Process(int value) to Handle(int value).
+2) Update only the matching invocation Process(1) to Handle(1).
+Constraints:
+- Do NOT change Process(string value).
+- Do NOT change Process("x").
+- Do NOT change string literal "Process".
+Roslyn MCP resources are available for this run and should be used before manual edits.
+Use MCP in this sequence:
+1) list_mcp_resource_templates server=roslyn
+2) read_mcp_resource server=roslyn uri=roslyn://commands
+3) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=200
+4) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=100
+5) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+Use MCP calls sequentially and keep responses compact.
+After editing, say explicitly whether Roslyn MCP tools were invoked successfully.
+"@
+
+$treatmentPromptClaudeMcp = @"
+Edit Target.cs in this directory.
+Task:
+1) Rename method Process(int value) to Handle(int value).
+2) Update only the matching invocation Process(1) to Handle(1).
+Constraints:
+- Do NOT change Process(string value).
+- Do NOT change Process("x").
+- Do NOT change string literal "Process".
+Roslyn MCP resources are available for this run and should be used before manual edits.
+Use MCP in this sequence:
+1) list_mcp_resource_templates server=roslyn
+2) read_mcp_resource server=roslyn uri=roslyn://commands
+3) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=200
+4) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=100
+5) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+Use MCP calls sequentially and keep responses compact.
+After editing, say explicitly whether Roslyn MCP tools were invoked successfully.
+"@
+
 $runs = New-Object System.Collections.Generic.List[object]
 
 if (-not $SkipCodex) {
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
+    if ($IncludeMcpTreatment) {
+        $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodexMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+        Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
+    }
 }
 
 if (-not $SkipClaude) {
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
+    if ($IncludeMcpTreatment) {
+        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+        Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
+    }
 }
 
 Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead

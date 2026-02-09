@@ -336,6 +336,20 @@ Functional:
 - discoverable command inventory (`help`, `list-commands`, `describe-command`),
 - context-size aware output modes (`brief`, `standard`, `verbose`).
 
+Context policy experiment (new high-priority branch):
+
+- Compare treatment conditions with:
+  - `brief-first` Roslyn guidance (compact by default, escalate on demand),
+  - `verbose-first` Roslyn guidance (rich by default, compress when needed),
+  - baseline `standard` guidance.
+- Required metrics per condition:
+  - task success/acceptance rate,
+  - elapsed duration,
+  - token totals and command round-trips,
+  - `brief` adoption and payload proxies (`output_chars`, `source_chars`) from trajectory analysis.
+- Decision rule:
+  - keep any default/guidance change only if correctness is non-inferior and latency/token burden improves on paired tasks.
+
 Operational:
 
 - cross-platform support (Windows/Linux/macOS),

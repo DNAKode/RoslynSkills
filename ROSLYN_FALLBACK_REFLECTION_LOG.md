@@ -21,3 +21,75 @@ Purpose: record every fallback to non-Roslyn `.cs` reading/editing so fallback p
 ## Entries
 
 - `2026-02-09`: Bootstrap policy entry -> Added mandatory fallback reflection rule to `AGENTS.md` and skill workflow -> Use this log as source for exploratory command backlog.
+- `2026-02-09`: Added new transport server source (`src/RoslynAgent.TransportServer/Program.cs`) via text patch before Roslyn session edits
+  - Task/Context: implement persistent stdio transport server to benchmark MCP-style warm transport vs process-per-call CLI.
+  - Fallback action:
+    - `edit`
+  - Why Roslyn path was not used:
+    - Creating a brand-new `.cs` file with large initial content is still materially easier through text patch than current Roslyn command surface.
+  - Roslyn command attempted (if any):
+    - None for initial create; subsequent corrections used `session.open` + `session.apply_text_edits` + `session.commit`.
+  - Missing command/option hypothesis:
+    - Missing `edit.create_file`/`session.create` primitive that can atomically create a new C# file with diagnostics in one call.
+  - Proposed improvement:
+    - Add `edit.create_file` with `file_path`, `content`, optional `apply`, and immediate `diag.get_file_diagnostics` result.
+  - Expected impact:
+    - correctness: higher (single validated create path, fewer shell quoting issues).
+    - latency: lower (remove patch+re-validate loop).
+    - token_count: lower (avoid repeated full-file retries and transcript churn).
+  - Follow-up issue/test link:
+    - TODO: add command contract + integration tests for Roslyn-native file creation workflow.
+- `2026-02-09`: Context-compaction recovery read of `src/RoslynAgent.TransportServer/Program.cs` used plain file read before resuming Roslyn-first loop
+  - Task/Context: continue MCP-style benchmark implementation after a compacted handover, quickly confirming pending transport server code state.
+  - Fallback action:
+    - `read`
+  - Why Roslyn path was not used:
+    - Fast state rehydration step was done with `Get-Content` before re-entering Roslyn CLI command loop.
+  - Roslyn command attempted (if any):
+    - None before fallback; Roslyn path resumed immediately after with `diag.get_file_diagnostics` validation.
+  - Missing command/option hypothesis:
+    - Need a lower-friction Roslyn shorthand for "show full file source" that is as fast to invoke as shell file reads.
+  - Proposed improvement:
+    - Add `ctx.file_source <file_path> [--max-chars ...]` with optional `--region`/`--around-line` filters and compact preview metadata.
+  - Expected impact:
+    - correctness: higher (keeps reads in semantic-aware path and consistent envelopes).
+    - latency: lower (reduces command-selection hesitation between shell and Roslyn).
+    - token_count: lower (supports bounded source retrieval and avoids accidental full-file dumps).
+  - Follow-up issue/test link:
+    - TODO: define command contract and tests for a Roslyn-native full-file/region source retrieval command.
+- `2026-02-09`: Added `src/RoslynAgent.McpServer/Program.cs` via text patch for full MCP protocol bootstrap
+  - Task/Context: implement real MCP stdio server (framed JSON-RPC with `initialize`, `tools/list`, `tools/call`) and wire harness MCP treatment lane.
+  - Fallback action:
+    - `edit`
+  - Why Roslyn path was not used:
+    - Large greenfield file creation and multi-hundred-line protocol scaffold was faster via deterministic patch than incremental session edits.
+  - Roslyn command attempted (if any):
+    - Roslyn was used for contracts/context lookup and post-edit diagnostics/build validation; creation itself did not use Roslyn edit primitives.
+  - Missing command/option hypothesis:
+    - Missing high-throughput Roslyn file-bootstrap flow for creating a new C# file from a full payload with immediate diagnostics and auto-usings assistance.
+  - Proposed improvement:
+    - Add `edit.create_file` + optional `edit.seed_from_template`/`session.seed_content` pathway with one-shot diagnostics and import suggestions.
+  - Expected impact:
+    - correctness: higher (creation path remains inside compiler-backed loop).
+    - latency: lower (single-step create+validate for large scaffolds).
+    - token_count: lower (fewer iterative shell/patch reconciliation steps).
+  - Follow-up issue/test link:
+    - TODO: add Roslyn-native create/seed command contract and integration tests for large-file bootstrap workflows.
+- `2026-02-09`: MCP protocol compatibility hardening in `src/RoslynAgent.McpServer/Program.cs` used text patch for multi-method transport updates
+  - Task/Context: adapt MCP server transport and resource handling for real codex compatibility (newline-delimited responses, dual-format read path, URI normalization).
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The change spanned several non-adjacent methods/constants with protocol-level edits; applying this efficiently required a coordinated text patch across the full file.
+  - Roslyn command attempted (if any):
+    - `ctx.file_outline`, `ctx.member_source`, and `nav.find_symbol` were used for semantic navigation before fallback edits.
+  - Missing command/option hypothesis:
+    - Missing Roslyn-native multi-region "edit transaction with semantic anchors across arbitrary methods/constants in one file" optimized for protocol refactors.
+  - Proposed improvement:
+    - Extend `edit.transaction` with symbol-anchor operations (for example `replace_member_by_symbol_id`) and constant/block patch ops to reduce full-file text patch dependence.
+  - Expected impact:
+    - correctness: higher (member-targeted edits reduce accidental protocol regressions).
+    - latency: lower (fewer manual context/patch reconciliation steps).
+    - token_count: lower (less repeated source extraction for scattered edits).
+  - Follow-up issue/test link:
+    - TODO: design symbol-anchored single-file multi-region edit transaction contract + regression tests.
