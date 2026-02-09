@@ -9,8 +9,8 @@ public sealed class AgentEvalPreflightChecker
         new("dotnet", "--version", Required: true),
         new("git", "--version", Required: true),
         new("rg", "--version", Required: true),
-        new("codex", "--version", Required: false),
-        new("claude", "--version", Required: false),
+        new("codex", "--version", Required: false, WindowsFallbackCommands: ["codex.cmd", "codex.exe"]),
+        new("claude", "--version", Required: false, WindowsFallbackCommands: ["claude.cmd", "claude.exe"]),
     };
 
     private readonly ICommandProbe _probe;
@@ -31,7 +31,7 @@ public sealed class AgentEvalPreflightChecker
         foreach (ProbeSpec spec in ProbeSpecs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ProbeResult result = await _probe.ProbeAsync(spec.Command, spec.Arguments, cancellationToken).ConfigureAwait(false);
+            ProbeResult result = await ProbeWithFallbackAsync(spec, cancellationToken).ConfigureAwait(false);
             items.Add(new AgentEvalPreflightItem(
                 command: spec.Command,
                 required: spec.Required,
@@ -54,6 +54,51 @@ public sealed class AgentEvalPreflightChecker
 
         AgentEvalStorage.WriteJson(outputPath, report);
         return report;
+    }
+
+    private async Task<ProbeResult> ProbeWithFallbackAsync(ProbeSpec spec, CancellationToken cancellationToken)
+    {
+        ProbeResult? lastResult = null;
+        foreach (string command in EnumerateProbeCommands(spec))
+        {
+            ProbeResult result = await _probe.ProbeAsync(command, spec.Arguments, cancellationToken).ConfigureAwait(false);
+            if (result.Available)
+            {
+                return result;
+            }
+
+            lastResult = result;
+        }
+
+        return lastResult ?? new ProbeResult(
+            Available: false,
+            ExitCode: null,
+            Stdout: string.Empty,
+            Stderr: $"No probe commands configured for '{spec.Command}'.");
+    }
+
+    private static IEnumerable<string> EnumerateProbeCommands(ProbeSpec spec)
+    {
+        yield return spec.Command;
+
+        if (!OperatingSystem.IsWindows())
+        {
+            yield break;
+        }
+
+        if (spec.WindowsFallbackCommands is null)
+        {
+            yield break;
+        }
+
+        foreach (string fallback in spec.WindowsFallbackCommands)
+        {
+            if (!string.IsNullOrWhiteSpace(fallback) &&
+                !string.Equals(fallback, spec.Command, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return fallback;
+            }
+        }
     }
 }
 
@@ -105,7 +150,11 @@ internal sealed class ProcessCommandProbe : ICommandProbe
     }
 }
 
-internal sealed record ProbeSpec(string Command, string Arguments, bool Required);
+internal sealed record ProbeSpec(
+    string Command,
+    string Arguments,
+    bool Required,
+    IReadOnlyList<string>? WindowsFallbackCommands = null);
 
 internal sealed record ProbeResult(
     bool Available,

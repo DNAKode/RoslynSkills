@@ -1,0 +1,64 @@
+{
+  "run_id": "run-control-task-003-r1",
+  "task_id": "task-003-direction-change",
+  "condition_id": "control-text-only",
+  "replicate": 1,
+  "agent": "codex-cli",
+  "model": "gpt-5-codex",
+  "succeeded": false,
+  "compile_passed": true,
+  "tests_passed": false,
+  "duration_seconds": 741.3,
+  "prompt_tokens": 5920,
+  "completion_tokens": 2870,
+  "total_tokens": 8790,
+  "tools_offered": [
+    "read_file",
+    "run_shell",
+    "search",
+    "apply_patch"
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "search",
+      "ok": true
+    },
+    {
+      "tool_name": "read_file",
+      "ok": true
+    },
+    {
+      "tool_name": "apply_patch",
+      "ok": true
+    },
+    {
+      "tool_name": "run_shell",
+      "ok": true
+    }
+  ],
+  "context": {
+    "task_title": "Pivot design to a dungeon-run mechanic with rollback support",
+    "repo": "DNAKode/RoslynSkill",
+    "repo_url": "https://github.com/DNAKode/RoslynSkill",
+    "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
+    "acceptance_checks": [
+      "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+      "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+    ],
+    "task_prompt_file": "prompts/task-003-direction-pivot.md"
+  },
+  "post_run_reflection": {
+    "summary": "The direction pivot touched multiple files and one rollback path regressed; text-first tracing made impact analysis slow.",
+    "helpful_tools": [
+      "apply_patch",
+      "run_shell"
+    ],
+    "unhelpful_tools": [],
+    "roslyn_helpfulness_score": null
+  },
+  "transcript_fragments": [
+    "Ran rg -n \"SprintQuest|FocusDungeon|undo\" src",
+    "Regression discovered late in final test pass."
+  ]
+}
+

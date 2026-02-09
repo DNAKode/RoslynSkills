@@ -55,8 +55,10 @@ Outputs:
 For each pending template:
 
 - run the task in the target agent environment (Codex CLI, Claude Code, etc.),
-- fill in outcome, tool calls, and post-run reflection JSON,
+- fill in outcome, tool calls, token counts (`prompt_tokens`, `completion_tokens`, `total_tokens`), and post-run reflection JSON,
 - place completed run JSON in `<runs-dir>`.
+
+When available, capture short transcript fragments (command snippets and failure/recovery highlights) in run notes so qualitative impact can be quoted in reports.
 
 Optional shortcut for quick logging:
 
@@ -73,7 +75,7 @@ for reflection capture format.
 ## 4. Validate run quality before scoring
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-validate-runs --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir>
+dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-validate-runs --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> [--fail-on-warnings true]
 ```
 
 This check catches:
@@ -82,6 +84,8 @@ This check catches:
 - malformed run fields,
 - invalid Roslyn helpfulness scoring,
 - missing or inconsistent run context.
+
+`--fail-on-warnings true` makes warning-level findings fail the command (exit code 2) for stricter gating.
 
 ## 5. Score results
 
@@ -106,8 +110,29 @@ dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-export-summary --re
 Optional single-command gate run (runs validation + scoring + summary export):
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir>
+dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> [--fail-on-warnings true]
 ```
+
+With `--fail-on-warnings true`, the gate treats run-validation warnings as hard failures.
+
+## 5.5 Optional paired real-agent harness
+
+For fast paired control/treatment smoke runs with transcript + token attribution artifacts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 -OutputRoot <artifact-dir>
+```
+
+Current harness outputs include:
+
+- `paired-run-summary.json`
+- `paired-run-summary.md`
+- per-run metadata with:
+  - control contamination detection,
+  - deterministic rename constraint checks,
+  - Roslyn attempted/successful call counts,
+  - model token totals and cache-inclusive token totals,
+  - command round-trip and transcript character attribution.
 
 ## 6. Interpretation rule
 

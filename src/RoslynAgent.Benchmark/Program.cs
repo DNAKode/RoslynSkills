@@ -58,6 +58,10 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
                 Console.WriteLine($"Compile delta: {evalReport.primary_comparison.compile_rate_delta:P2}");
                 Console.WriteLine($"Tests delta: {evalReport.primary_comparison.tests_rate_delta:P2}");
                 Console.WriteLine($"Roslyn use rate in treatment: {evalReport.primary_comparison.roslyn_used_rate_in_treatment:P2}");
+                Console.WriteLine($"Avg tokens control: {FormatNullableDouble(evalReport.primary_comparison.average_total_tokens_control)}");
+                Console.WriteLine($"Avg tokens treatment: {FormatNullableDouble(evalReport.primary_comparison.average_total_tokens_treatment)}");
+                Console.WriteLine($"Avg token delta (treatment-control): {FormatNullableDouble(evalReport.primary_comparison.average_total_tokens_delta)}");
+                Console.WriteLine($"Token reduction ratio: {FormatNullablePercent(evalReport.primary_comparison.token_reduction_ratio)}");
             }
             else
             {
@@ -116,10 +120,11 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
         string? manifestPath = TryGetOption(args, "--manifest");
         string? runsPath = TryGetOption(args, "--runs");
         string? outputDir = TryGetOption(args, "--output");
+        bool failOnWarnings = ParseBoolOption(args, "--fail-on-warnings", false);
 
         if (string.IsNullOrWhiteSpace(manifestPath) || string.IsNullOrWhiteSpace(runsPath))
         {
-            Console.Error.WriteLine("Usage: agent-eval-gate --manifest <path> --runs <dir> [--output <dir>]");
+            Console.Error.WriteLine("Usage: agent-eval-gate --manifest <path> --runs <dir> [--output <dir>] [--fail-on-warnings <true|false>]");
             return 1;
         }
 
@@ -133,7 +138,12 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
         AgentEvalGateReport gateReport;
         try
         {
-            gateReport = await gateRunner.RunAsync(manifestPath, runsPath, outputDir, CancellationToken.None).ConfigureAwait(false);
+            gateReport = await gateRunner.RunAsync(
+                manifestPath,
+                runsPath,
+                outputDir,
+                CancellationToken.None,
+                failOnWarnings: failOnWarnings).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -146,6 +156,7 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
         Console.WriteLine($"Manifest valid: {gateReport.manifest_valid}");
         Console.WriteLine($"Runs valid: {gateReport.runs_valid}");
         Console.WriteLine($"Sufficient data: {gateReport.sufficient_data}");
+        Console.WriteLine($"Fail on warnings: {gateReport.fail_on_run_warnings}");
         Console.WriteLine($"Gate passed: {gateReport.gate_passed}");
         Console.WriteLine($"Manifest validation path: {gateReport.manifest_validation_path}");
         Console.WriteLine($"Run validation path: {gateReport.run_validation_path}");
@@ -315,10 +326,11 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
         string? manifestPath = TryGetOption(args, "--manifest");
         string? runsPath = TryGetOption(args, "--runs");
         string? outputDir = TryGetOption(args, "--output");
+        bool failOnWarnings = ParseBoolOption(args, "--fail-on-warnings", false);
 
         if (string.IsNullOrWhiteSpace(manifestPath) || string.IsNullOrWhiteSpace(runsPath))
         {
-            Console.Error.WriteLine("Usage: agent-eval-validate-runs --manifest <path> --runs <dir> [--output <dir>]");
+            Console.Error.WriteLine("Usage: agent-eval-validate-runs --manifest <path> --runs <dir> [--output <dir>] [--fail-on-warnings <true|false>]");
             return 1;
         }
 
@@ -345,6 +357,7 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
         Console.WriteLine($"Total runs: {report.total_runs}");
         Console.WriteLine($"Expected runs: {report.expected_runs}");
         Console.WriteLine($"Issue count: {report.issue_count} (errors={report.error_count}, warnings={report.warning_count})");
+        Console.WriteLine($"Fail on warnings: {failOnWarnings}");
         Console.WriteLine($"Contaminated control runs: {report.contaminated_control_runs}");
         Console.WriteLine($"Treatment runs missing Roslyn offered: {report.treatment_runs_without_roslyn_offered}");
         Console.WriteLine($"Treatment runs missing Roslyn usage: {report.treatment_runs_without_roslyn_usage}");
@@ -353,7 +366,14 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
             Console.WriteLine($"- [{issue.severity}] run={issue.run_id} task={issue.task_id} cond={issue.condition_id} {issue.message}");
         }
         Console.WriteLine($"Validation path: {report.output_path}");
-        return report.valid ? 0 : 2;
+
+        bool validWithPolicy = report.valid && (!failOnWarnings || report.warning_count == 0);
+        if (report.valid && !validWithPolicy)
+        {
+            Console.WriteLine("Validation failed due to warning policy.");
+        }
+
+        return validWithPolicy ? 0 : 2;
     }
 
     if (string.Equals(verb, "agent-eval-register-run", StringComparison.OrdinalIgnoreCase))
@@ -370,6 +390,9 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
         bool compilePassed = ParseBoolOption(args, "--compile-passed", false);
         bool testsPassed = ParseBoolOption(args, "--tests-passed", false);
         double durationSeconds = ParseDoubleOption(args, "--duration-seconds", 0);
+        int? promptTokens = ParseNullableIntOption(args, "--prompt-tokens");
+        int? completionTokens = ParseNullableIntOption(args, "--completion-tokens");
+        int? totalTokens = ParseNullableIntOption(args, "--total-tokens");
         bool overwrite = ParseBoolOption(args, "--overwrite", false);
         int? roslynHelpfulness = ParseNullableIntOption(args, "--roslyn-helpfulness");
         string? summary = TryGetOption(args, "--summary");
@@ -381,7 +404,8 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
                 "Usage: agent-eval-register-run --manifest <path> --runs <dir> --task <id> --condition <id> " +
                 "[--run-id <id>] [--replicate <n>] [--agent <id>] [--model <id>] " +
                 "--succeeded <true|false> --compile-passed <true|false> --tests-passed <true|false> " +
-                "[--duration-seconds <n>] [--tools-offered <a,b,c>] [--tool-calls <tool:true,tool2:false>] " +
+                "[--duration-seconds <n>] [--prompt-tokens <n>] [--completion-tokens <n>] [--total-tokens <n>] " +
+                "[--tools-offered <a,b,c>] [--tool-calls <tool:true,tool2:false>] " +
                 "[--summary <text>] [--helpful-tools <a,b>] [--unhelpful-tools <a,b>] " +
                 "[--roslyn-helpfulness <1-5>] [--overwrite <true|false>]");
             return 1;
@@ -403,6 +427,9 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
             CompilePassed: compilePassed,
             TestsPassed: testsPassed,
             DurationSeconds: durationSeconds,
+            PromptTokens: promptTokens,
+            CompletionTokens: completionTokens,
+            TotalTokens: totalTokens,
             ToolsOffered: toolsOffered,
             ToolCalls: toolCalls,
             ReflectionSummary: summary,
@@ -433,6 +460,9 @@ if (!string.Equals(verb, "rq1", StringComparison.OrdinalIgnoreCase) &&
 
         Console.WriteLine("Agent eval run registration completed.");
         Console.WriteLine($"Run id: {displayRunId}");
+        Console.WriteLine($"Prompt tokens: {promptTokens?.ToString() ?? "n/a"}");
+        Console.WriteLine($"Completion tokens: {completionTokens?.ToString() ?? "n/a"}");
+        Console.WriteLine($"Total tokens: {totalTokens?.ToString() ?? "n/a"}");
         Console.WriteLine($"Output: {outputPath}");
         return 0;
     }
@@ -546,13 +576,13 @@ static void PrintHelp()
           rq2-edit [--scenario <path>] [--output <dir>]
           agent-eval-score --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-export-summary --report <path> [--run-validation <path>] [--output <dir>]
-          agent-eval-gate --manifest <path> --runs <dir> [--output <dir>]
+          agent-eval-gate --manifest <path> --runs <dir> [--output <dir>] [--fail-on-warnings <true|false>]
           agent-eval-worklist --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-init-runs --manifest <path> --runs <dir> [--output <dir>]
           agent-eval-preflight [--output <dir>]
           agent-eval-validate-manifest --manifest <path> [--output <dir>]
-          agent-eval-validate-runs --manifest <path> --runs <dir> [--output <dir>]
-          agent-eval-register-run --manifest <path> --runs <dir> --task <id> --condition <id> ...
+          agent-eval-validate-runs --manifest <path> --runs <dir> [--output <dir>] [--fail-on-warnings <true|false>]
+          agent-eval-register-run --manifest <path> --runs <dir> --task <id> --condition <id> ... [--prompt-tokens <n>] [--completion-tokens <n>] [--total-tokens <n>]
 
         Notes:
           - Default rq1 scenario file: benchmarks/scenarios/rq1-structured-vs-grep.json
@@ -623,6 +653,26 @@ static int? ParseNullableIntOption(IReadOnlyList<string> args, string optionName
     }
 
     return parsed;
+}
+
+static string FormatNullableDouble(double? value)
+{
+    if (!value.HasValue)
+    {
+        return "n/a";
+    }
+
+    return value.Value.ToString("0.00");
+}
+
+static string FormatNullablePercent(double? value)
+{
+    if (!value.HasValue)
+    {
+        return "n/a";
+    }
+
+    return value.Value.ToString("P2");
 }
 
 static IReadOnlyList<string> ParseCsvOption(IReadOnlyList<string> args, string optionName)

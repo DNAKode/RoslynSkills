@@ -1,0 +1,85 @@
+{
+  "run_id": "run-treatment-task-003-r1",
+  "task_id": "task-003-direction-change",
+  "condition_id": "treatment-roslyn-optional",
+  "replicate": 1,
+  "agent": "codex-cli",
+  "model": "gpt-5-codex",
+  "succeeded": true,
+  "compile_passed": true,
+  "tests_passed": true,
+  "duration_seconds": 559.7,
+  "prompt_tokens": 4380,
+  "completion_tokens": 1860,
+  "total_tokens": 6240,
+  "tools_offered": [
+    "read_file",
+    "run_shell",
+    "search",
+    "apply_patch",
+    "ctx.file_outline",
+    "ctx.member_source",
+    "session.open",
+    "session.apply_text_edits",
+    "session.status",
+    "session.commit",
+    "edit.transaction",
+    "diag.get_solution_snapshot"
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "ctx.file_outline",
+      "ok": true
+    },
+    {
+      "tool_name": "edit.transaction",
+      "ok": true
+    },
+    {
+      "tool_name": "session.open",
+      "ok": true
+    },
+    {
+      "tool_name": "session.apply_text_edits",
+      "ok": true
+    },
+    {
+      "tool_name": "session.status",
+      "ok": true
+    },
+    {
+      "tool_name": "session.commit",
+      "ok": true
+    },
+    {
+      "tool_name": "run_shell",
+      "ok": true
+    }
+  ],
+  "context": {
+    "task_title": "Pivot design to a dungeon-run mechanic with rollback support",
+    "repo": "DNAKode/RoslynSkill",
+    "repo_url": "https://github.com/DNAKode/RoslynSkill",
+    "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
+    "acceptance_checks": [
+      "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+      "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+    ],
+    "task_prompt_file": "prompts/task-003-direction-pivot.md"
+  },
+  "post_run_reflection": {
+    "summary": "The pivot benefited from multi-file edit.transaction plus session guards, catching conflicts early and avoiding late rollback regressions.",
+    "helpful_tools": [
+      "edit.transaction",
+      "session.status",
+      "session.apply_text_edits"
+    ],
+    "unhelpful_tools": [],
+    "roslyn_helpfulness_score": 5
+  },
+  "transcript_fragments": [
+    "Ran scripts/roscli run edit.transaction --input-stdin",
+    "Session commit used expected generation and disk-unchanged guard."
+  ]
+}
+

@@ -24,6 +24,8 @@ public sealed class AgentEvalRunValidator
         int contaminatedControlRuns = 0;
         int treatmentRunsWithoutRoslynOffered = 0;
         int treatmentRunsWithoutRoslynUsage = 0;
+        int runsWithTokenCounts = 0;
+        int runsMissingTokenCounts = 0;
 
         foreach (AgentEvalRun run in runs)
         {
@@ -170,6 +172,15 @@ public sealed class AgentEvalRunValidator
             {
                 ValidateContext(issues, run, task!, runId, taskId, conditionId);
             }
+
+            if (TryGetTotalTokens(run).HasValue)
+            {
+                runsWithTokenCounts++;
+            }
+            else
+            {
+                runsMissingTokenCounts++;
+            }
         }
 
         int expectedRuns = manifest.Tasks.Count * manifest.Conditions.Count * manifest.RunsPerCell;
@@ -223,7 +234,9 @@ public sealed class AgentEvalRunValidator
             treatment_runs_without_roslyn_offered: treatmentRunsWithoutRoslynOffered,
             treatment_runs_without_roslyn_usage: treatmentRunsWithoutRoslynUsage,
             issues: issues,
-            output_path: outputPath);
+            output_path: outputPath,
+            runs_with_token_counts: runsWithTokenCounts,
+            runs_missing_token_counts: runsMissingTokenCounts);
 
         AgentEvalStorage.WriteJson(outputPath, report);
         return Task.FromResult(report);
@@ -275,6 +288,21 @@ public sealed class AgentEvalRunValidator
         }
 
         return false;
+    }
+
+    private static double? TryGetTotalTokens(AgentEvalRun run)
+    {
+        if (run.TotalTokens.HasValue)
+        {
+            return run.TotalTokens.Value;
+        }
+
+        if (run.PromptTokens.HasValue && run.CompletionTokens.HasValue)
+        {
+            return run.PromptTokens.Value + run.CompletionTokens.Value;
+        }
+
+        return null;
     }
 
     private static void AddIssue(

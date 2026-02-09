@@ -1,0 +1,64 @@
+{
+  "run_id": "run-control-task-002-r1",
+  "task_id": "task-002-refactor-improvements",
+  "condition_id": "control-text-only",
+  "replicate": 1,
+  "agent": "codex-cli",
+  "model": "gpt-5-codex",
+  "succeeded": true,
+  "compile_passed": true,
+  "tests_passed": true,
+  "duration_seconds": 532.6,
+  "prompt_tokens": 4820,
+  "completion_tokens": 2240,
+  "total_tokens": 7060,
+  "tools_offered": [
+    "read_file",
+    "run_shell",
+    "search",
+    "apply_patch"
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "search",
+      "ok": true
+    },
+    {
+      "tool_name": "read_file",
+      "ok": true
+    },
+    {
+      "tool_name": "apply_patch",
+      "ok": true
+    },
+    {
+      "tool_name": "run_shell",
+      "ok": true
+    }
+  ],
+  "context": {
+    "task_title": "Refactor for reliability and add quick analytics",
+    "repo": "DNAKode/RoslynSkill",
+    "repo_url": "https://github.com/DNAKode/RoslynSkill",
+    "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
+    "acceptance_checks": [
+      "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+      "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+    ],
+    "task_prompt_file": "prompts/task-002-analytics-refactor.md"
+  },
+  "post_run_reflection": {
+    "summary": "Refactor was successful but required multiple passes to track call chains and constructor dependencies manually.",
+    "helpful_tools": [
+      "search",
+      "run_shell"
+    ],
+    "unhelpful_tools": [],
+    "roslyn_helpfulness_score": null
+  },
+  "transcript_fragments": [
+    "Ran rg -n \"IClock|Score|Report\" src",
+    "Repeated file reads to confirm reference updates."
+  ]
+}
+

@@ -1,7 +1,7 @@
 # Research Proposal: Roslyn-Native Agentic Coding for C#/.NET
 
 Date: February 8, 2026  
-Status: Planning and design (pre-implementation hardening)
+Status: Active implementation and benchmark validation (proposal remains source of truth for RQs/methodology)
 
 ## 1. Executive Summary
 

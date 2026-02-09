@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace RoslynAgent.Contracts;
 
@@ -15,12 +16,14 @@ public sealed record CommandError(
     object? Details = null);
 
 public sealed record CommandEnvelope(
-    bool Ok,
-    string CommandId,
-    string Version,
-    object? Data,
-    IReadOnlyList<CommandError> Errors,
-    string? TraceId);
+    [property: JsonPropertyOrder(-100)] bool Ok,
+    [property: JsonPropertyOrder(-90)] string CommandId,
+    [property: JsonPropertyOrder(-80)] string Version,
+    [property: JsonPropertyOrder(-60)] object? Data,
+    [property: JsonPropertyOrder(0)] IReadOnlyList<CommandError> Errors,
+    [property: JsonPropertyOrder(90)] string? TraceId,
+    [property: JsonPropertyOrder(-70)] string? Preview = null,
+    [property: JsonPropertyOrder(100)] string? Summary = null);
 
 public sealed record CommandExecutionResult(
     object? Data,

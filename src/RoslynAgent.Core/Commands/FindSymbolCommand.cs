@@ -56,7 +56,13 @@ public sealed class FindSymbolCommand : IAgentCommand
         }
 
         int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 50, minValue: 1, maxValue: 1_000);
-        int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 2, minValue: 0, maxValue: 20);
+        bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
+        int contextLines = InputParsing.GetOptionalInt(
+            input,
+            "context_lines",
+            defaultValue: brief ? 0 : 2,
+            minValue: 0,
+            maxValue: 20);
 
         string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
@@ -81,6 +87,21 @@ public sealed class FindSymbolCommand : IAgentCommand
             resultMatches.Add(CreateMatch(match, sourceText, contextLines, semanticModel, cancellationToken));
         }
 
+        object matchesPayload = brief
+            ? resultMatches.Select(m => new
+            {
+                m.text,
+                m.syntax_kind,
+                m.is_declaration,
+                m.line,
+                m.column,
+                symbol_kind = m.semantic.symbol_kind,
+                symbol_display = m.semantic.symbol_display,
+                symbol_id = m.semantic.symbol_id,
+                is_resolved = m.semantic.is_resolved,
+            }).ToArray()
+            : resultMatches;
+
         object data = new
         {
             query = new
@@ -89,10 +110,11 @@ public sealed class FindSymbolCommand : IAgentCommand
                 symbol_name = symbolName,
                 max_results = maxResults,
                 context_lines = contextLines,
+                brief,
                 semantic_enrichment = true,
             },
             total_matches = resultMatches.Count,
-            matches = resultMatches,
+            matches = matchesPayload,
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());

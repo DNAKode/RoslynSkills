@@ -78,28 +78,32 @@ public sealed class AgentEvalReportExporter
             sb.AppendLine($"- Compile delta: `{FormatPercent(report.primary_comparison.compile_rate_delta)}`");
             sb.AppendLine($"- Tests delta: `{FormatPercent(report.primary_comparison.tests_rate_delta)}`");
             sb.AppendLine($"- Treatment Roslyn usage rate: `{FormatPercent(report.primary_comparison.roslyn_used_rate_in_treatment)}`");
+            sb.AppendLine($"- Avg total tokens (control): `{FormatDouble(report.primary_comparison.average_total_tokens_control)}`");
+            sb.AppendLine($"- Avg total tokens (treatment): `{FormatDouble(report.primary_comparison.average_total_tokens_treatment)}`");
+            sb.AppendLine($"- Avg total tokens delta (treatment-control): `{FormatDouble(report.primary_comparison.average_total_tokens_delta)}`");
+            sb.AppendLine($"- Token reduction ratio: `{FormatPercent(report.primary_comparison.token_reduction_ratio)}`");
         }
 
         sb.AppendLine();
         sb.AppendLine("## Condition Summaries");
         sb.AppendLine();
-        sb.AppendLine("| Condition | Runs | Success | Compile | Tests | Roslyn Used | Roslyn Call Share | Avg Roslyn Helpfulness |");
-        sb.AppendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+        sb.AppendLine("| Condition | Runs | Success | Compile | Tests | Roslyn Used | Roslyn Call Share | Avg Roslyn Helpfulness | Runs w/ Tokens | Avg Total Tokens | Median Total Tokens |");
+        sb.AppendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         foreach (AgentEvalConditionSummary condition in report.condition_summaries)
         {
             sb.AppendLine(
-                $"| `{condition.condition_id}` | {condition.run_count} | {FormatPercent(condition.success_rate)} | {FormatPercent(condition.compile_rate)} | {FormatPercent(condition.tests_rate)} | {FormatPercent(condition.roslyn_used_rate)} | {FormatPercent(condition.roslyn_call_share)} | {FormatDouble(condition.average_roslyn_helpfulness_score)} |");
+                $"| `{condition.condition_id}` | {condition.run_count} | {FormatPercent(condition.success_rate)} | {FormatPercent(condition.compile_rate)} | {FormatPercent(condition.tests_rate)} | {FormatPercent(condition.roslyn_used_rate)} | {FormatPercent(condition.roslyn_call_share)} | {FormatDouble(condition.average_roslyn_helpfulness_score)} | {condition.runs_with_token_counts} | {FormatDouble(condition.average_total_tokens)} | {FormatDouble(condition.median_total_tokens)} |");
         }
 
         sb.AppendLine();
         sb.AppendLine("## Task Comparisons");
         sb.AppendLine();
-        sb.AppendLine("| Task | Sufficient Data | Control Runs | Treatment Runs | Success Delta | Compile Delta | Tests Delta | Treatment Roslyn Usage |");
-        sb.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        sb.AppendLine("| Task | Sufficient Data | Control Runs | Treatment Runs | Success Delta | Compile Delta | Tests Delta | Treatment Roslyn Usage | Avg Total Tokens Delta |");
+        sb.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         foreach (AgentEvalTaskComparison task in report.task_comparisons)
         {
             sb.AppendLine(
-                $"| `{task.task_id}` | {BoolYesNo(task.sufficient_data)} | {task.control_run_count} | {task.treatment_run_count} | {FormatPercent(task.success_rate_delta)} | {FormatPercent(task.compile_rate_delta)} | {FormatPercent(task.tests_rate_delta)} | {FormatPercent(task.treatment_roslyn_used_rate)} |");
+                $"| `{task.task_id}` | {BoolYesNo(task.sufficient_data)} | {task.control_run_count} | {task.treatment_run_count} | {FormatPercent(task.success_rate_delta)} | {FormatPercent(task.compile_rate_delta)} | {FormatPercent(task.tests_rate_delta)} | {FormatPercent(task.treatment_roslyn_used_rate)} | {FormatDouble(task.average_total_tokens_delta)} |");
         }
 
         if (runValidation is not null)

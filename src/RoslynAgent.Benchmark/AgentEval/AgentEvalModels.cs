@@ -41,7 +41,10 @@ public sealed record AgentEvalRun(
     [property: JsonPropertyName("tools_offered")] IReadOnlyList<string> ToolsOffered,
     [property: JsonPropertyName("tool_calls")] IReadOnlyList<AgentToolCall> ToolCalls,
     [property: JsonPropertyName("context")] AgentEvalRunContext? Context,
-    [property: JsonPropertyName("post_run_reflection")] AgentPostRunReflection? PostRunReflection);
+    [property: JsonPropertyName("post_run_reflection")] AgentPostRunReflection? PostRunReflection,
+    [property: JsonPropertyName("prompt_tokens")] int? PromptTokens = null,
+    [property: JsonPropertyName("completion_tokens")] int? CompletionTokens = null,
+    [property: JsonPropertyName("total_tokens")] int? TotalTokens = null);
 
 public sealed record AgentEvalRunContext(
     [property: JsonPropertyName("task_title")] string TaskTitle,
@@ -72,7 +75,10 @@ public sealed record AgentEvalConditionSummary(
     int roslyn_used_runs,
     double roslyn_used_rate,
     double roslyn_call_share,
-    double? average_roslyn_helpfulness_score);
+    double? average_roslyn_helpfulness_score,
+    int runs_with_token_counts = 0,
+    double? average_total_tokens = null,
+    double? median_total_tokens = null);
 
 public sealed record AgentEvalComparison(
     bool sufficient_data,
@@ -84,7 +90,11 @@ public sealed record AgentEvalComparison(
     double? compile_rate_delta,
     double? tests_rate_delta,
     double? roslyn_used_rate_in_treatment,
-    string? note);
+    double? average_total_tokens_control = null,
+    double? average_total_tokens_treatment = null,
+    double? average_total_tokens_delta = null,
+    double? token_reduction_ratio = null,
+    string? note = null);
 
 public sealed record AgentEvalTaskComparison(
     string task_id,
@@ -96,7 +106,8 @@ public sealed record AgentEvalTaskComparison(
     double? compile_rate_delta,
     double? tests_rate_delta,
     double? treatment_roslyn_used_rate,
-    string? note);
+    double? average_total_tokens_delta = null,
+    string? note = null);
 
 public sealed record AgentEvalReport(
     string experiment_id,
@@ -164,7 +175,9 @@ public sealed record AgentEvalRunValidationReport(
     int treatment_runs_without_roslyn_offered,
     int treatment_runs_without_roslyn_usage,
     IReadOnlyList<AgentEvalRunValidationIssue> issues,
-    string output_path);
+    string output_path,
+    int runs_with_token_counts = 0,
+    int runs_missing_token_counts = 0);
 
 public sealed record AgentEvalGateReport(
     string experiment_id,
@@ -175,6 +188,7 @@ public sealed record AgentEvalGateReport(
     bool gate_passed,
     int run_validation_error_count,
     int run_validation_warning_count,
+    bool fail_on_run_warnings,
     string manifest_validation_path,
     string run_validation_path,
     string score_report_path,

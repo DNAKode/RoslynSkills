@@ -44,6 +44,8 @@ public sealed class AgentEvalRunValidatorTests
             Assert.True(report.valid);
             Assert.Equal(0, report.error_count);
             Assert.Equal(0, report.issue_count);
+            Assert.Equal(2, report.runs_with_token_counts);
+            Assert.Equal(0, report.runs_missing_token_counts);
             Assert.True(File.Exists(report.output_path));
         }
         finally
@@ -95,6 +97,8 @@ public sealed class AgentEvalRunValidatorTests
             Assert.True(report.error_count > 0);
             Assert.True(report.warning_count > 0);
             Assert.True(report.contaminated_control_runs > 0);
+            Assert.Equal(2, report.runs_with_token_counts);
+            Assert.Equal(0, report.runs_missing_token_counts);
             Assert.Contains(report.issues, i => i.message.Contains("condition contamination", StringComparison.OrdinalIgnoreCase));
             Assert.Contains(report.issues, i => i.message.Contains("1..5", StringComparison.OrdinalIgnoreCase));
         }
@@ -172,6 +176,9 @@ public sealed class AgentEvalRunValidatorTests
             compile_passed = true,
             tests_passed = true,
             duration_seconds = 120.0,
+            prompt_tokens = 1000,
+            completion_tokens = 500,
+            total_tokens = 1500,
             tools_offered = toolsOffered,
             tool_calls = toolCalls,
             context = new

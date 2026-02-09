@@ -1,0 +1,80 @@
+{
+  "run_id": "run-treatment-task-002-r1",
+  "task_id": "task-002-refactor-improvements",
+  "condition_id": "treatment-roslyn-optional",
+  "replicate": 1,
+  "agent": "codex-cli",
+  "model": "gpt-5-codex",
+  "succeeded": true,
+  "compile_passed": true,
+  "tests_passed": true,
+  "duration_seconds": 426.8,
+  "prompt_tokens": 3450,
+  "completion_tokens": 1670,
+  "total_tokens": 5120,
+  "tools_offered": [
+    "read_file",
+    "run_shell",
+    "search",
+    "apply_patch",
+    "ctx.file_outline",
+    "ctx.member_source",
+    "session.open",
+    "session.apply_text_edits",
+    "session.diff",
+    "session.commit",
+    "edit.transaction"
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "ctx.file_outline",
+      "ok": true
+    },
+    {
+      "tool_name": "ctx.member_source",
+      "ok": true
+    },
+    {
+      "tool_name": "session.open",
+      "ok": true
+    },
+    {
+      "tool_name": "session.apply_text_edits",
+      "ok": true
+    },
+    {
+      "tool_name": "session.diff",
+      "ok": true
+    },
+    {
+      "tool_name": "run_shell",
+      "ok": true
+    }
+  ],
+  "context": {
+    "task_title": "Refactor for reliability and add quick analytics",
+    "repo": "DNAKode/RoslynSkill",
+    "repo_url": "https://github.com/DNAKode/RoslynSkill",
+    "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
+    "acceptance_checks": [
+      "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+      "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+    ],
+    "task_prompt_file": "prompts/task-002-analytics-refactor.md"
+  },
+  "post_run_reflection": {
+    "summary": "Roslyn symbol-level context made constructor and dependency updates faster, reducing retries during refactor.",
+    "helpful_tools": [
+      "ctx.member_source",
+      "session.apply_text_edits",
+      "session.diff"
+    ],
+    "unhelpful_tools": [],
+    "roslyn_helpfulness_score": 4
+  },
+  "transcript_fragments": [
+    "Ran scripts/roscli ctx.member_source src/... 171 20 member",
+    "Used session.diff after each scoped edit before commit."
+  ]
+}
+

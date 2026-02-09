@@ -105,4 +105,31 @@ internal static class InputParsing
 
         return property.GetBoolean();
     }
+
+    public static string[] GetOptionalStringArray(JsonElement input, string propertyName)
+    {
+        if (!input.TryGetProperty(propertyName, out JsonElement property) || property.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        List<string> values = new();
+        foreach (JsonElement item in property.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            string? value = item.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            values.Add(value);
+        }
+
+        return values.ToArray();
+    }
 }

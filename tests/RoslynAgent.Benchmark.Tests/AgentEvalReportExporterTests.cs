@@ -23,8 +23,8 @@ public sealed class AgentEvalReportExporterTests
                 total_runs: 2,
                 condition_summaries: new[]
                 {
-                    new AgentEvalConditionSummary("control-text-only", "Control", 1, 0, 0, 0, 210, 0, 0, 0, null),
-                    new AgentEvalConditionSummary("treatment-roslyn-optional", "Treatment", 1, 1, 1, 1, 180, 1, 1, 0.4, 4),
+                    new AgentEvalConditionSummary("control-text-only", "Control", 1, 0, 0, 0, 210, 0, 0, 0, null, 1, 1200, 1200),
+                    new AgentEvalConditionSummary("treatment-roslyn-optional", "Treatment", 1, 1, 1, 1, 180, 1, 1, 0.4, 4, 1, 900, 900),
                 },
                 primary_comparison: new AgentEvalComparison(
                     sufficient_data: true,
@@ -36,6 +36,10 @@ public sealed class AgentEvalReportExporterTests
                     compile_rate_delta: 1,
                     tests_rate_delta: 1,
                     roslyn_used_rate_in_treatment: 1,
+                    average_total_tokens_control: 1200,
+                    average_total_tokens_treatment: 900,
+                    average_total_tokens_delta: -300,
+                    token_reduction_ratio: 0.25,
                     note: null),
                 task_comparisons: new[]
                 {
@@ -49,6 +53,7 @@ public sealed class AgentEvalReportExporterTests
                         compile_rate_delta: 1,
                         tests_rate_delta: 1,
                         treatment_roslyn_used_rate: 1,
+                        average_total_tokens_delta: -300,
                         note: null),
                 },
                 output_path: reportPath);
@@ -87,6 +92,8 @@ public sealed class AgentEvalReportExporterTests
             Assert.Contains("# Agent Eval Summary", markdown);
             Assert.Contains("## Task Comparisons", markdown);
             Assert.Contains("task-001", markdown);
+            Assert.Contains("Token reduction ratio", markdown);
+            Assert.Contains("Avg Total Tokens", markdown);
             Assert.Contains("## Run Validation", markdown);
             Assert.Contains("Contaminated control runs", markdown);
         }

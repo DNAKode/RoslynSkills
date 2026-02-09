@@ -6,7 +6,8 @@ public sealed class AgentEvalGateRunner
         string manifestPath,
         string runsDirectory,
         string outputDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool failOnWarnings = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -40,7 +41,8 @@ public sealed class AgentEvalGateRunner
             cancellationToken).ConfigureAwait(false);
 
         bool sufficientData = scoreReport.primary_comparison?.sufficient_data == true;
-        bool gatePassed = manifestValidation.valid && runValidation.valid && sufficientData;
+        bool warningFailure = failOnWarnings && runValidation.warning_count > 0;
+        bool gatePassed = manifestValidation.valid && runValidation.valid && sufficientData && !warningFailure;
 
         List<string> notes = new();
         if (!manifestValidation.valid)
@@ -63,6 +65,11 @@ public sealed class AgentEvalGateRunner
             notes.Add($"Run validation reported {runValidation.warning_count} warning(s).");
         }
 
+        if (warningFailure)
+        {
+            notes.Add("Gate failed because run-validation warnings are configured as hard failures.");
+        }
+
         string outputPath = Path.GetFullPath(Path.Combine(outputDirectory, "agent-eval-gate-report.json"));
         AgentEvalGateReport report = new(
             experiment_id: manifestValidation.experiment_id,
@@ -73,6 +80,7 @@ public sealed class AgentEvalGateRunner
             gate_passed: gatePassed,
             run_validation_error_count: runValidation.error_count,
             run_validation_warning_count: runValidation.warning_count,
+            fail_on_run_warnings: failOnWarnings,
             manifest_validation_path: manifestValidation.output_path,
             run_validation_path: runValidation.output_path,
             score_report_path: scoreReport.output_path,

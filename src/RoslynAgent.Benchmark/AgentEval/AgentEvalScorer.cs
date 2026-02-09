@@ -59,7 +59,10 @@ public sealed class AgentEvalScorer
             roslyn_used_runs: metrics.roslyn_used_runs,
             roslyn_used_rate: metrics.roslyn_used_rate,
             roslyn_call_share: metrics.roslyn_call_share,
-            average_roslyn_helpfulness_score: metrics.average_roslyn_helpfulness_score);
+            average_roslyn_helpfulness_score: metrics.average_roslyn_helpfulness_score,
+            runs_with_token_counts: metrics.runs_with_token_counts,
+            average_total_tokens: metrics.average_total_tokens,
+            median_total_tokens: metrics.median_total_tokens);
     }
 
     private static bool IsRoslynTool(string toolName, IReadOnlyList<string> roslynToolPrefixes)
@@ -109,6 +112,10 @@ public sealed class AgentEvalScorer
                 compile_rate_delta: null,
                 tests_rate_delta: null,
                 roslyn_used_rate_in_treatment: treatmentSummary.run_count > 0 ? treatmentSummary.roslyn_used_rate : null,
+                average_total_tokens_control: controlSummary.average_total_tokens,
+                average_total_tokens_treatment: treatmentSummary.average_total_tokens,
+                average_total_tokens_delta: TrySubtract(treatmentSummary.average_total_tokens, controlSummary.average_total_tokens),
+                token_reduction_ratio: TryComputeReductionRatio(controlSummary.average_total_tokens, treatmentSummary.average_total_tokens),
                 note: "Insufficient runs in one or both conditions. Collect additional runs before interpreting deltas.");
         }
 
@@ -122,6 +129,10 @@ public sealed class AgentEvalScorer
             compile_rate_delta: treatmentSummary.compile_rate - controlSummary.compile_rate,
             tests_rate_delta: treatmentSummary.tests_rate - controlSummary.tests_rate,
             roslyn_used_rate_in_treatment: treatmentSummary.roslyn_used_rate,
+            average_total_tokens_control: controlSummary.average_total_tokens,
+            average_total_tokens_treatment: treatmentSummary.average_total_tokens,
+            average_total_tokens_delta: TrySubtract(treatmentSummary.average_total_tokens, controlSummary.average_total_tokens),
+            token_reduction_ratio: TryComputeReductionRatio(controlSummary.average_total_tokens, treatmentSummary.average_total_tokens),
             note: null);
     }
 
@@ -166,6 +177,7 @@ public sealed class AgentEvalScorer
                 compile_rate_delta: sufficientData ? treatmentMetrics.compile_rate - controlMetrics.compile_rate : null,
                 tests_rate_delta: sufficientData ? treatmentMetrics.tests_rate - controlMetrics.tests_rate : null,
                 treatment_roslyn_used_rate: treatmentMetrics.run_count > 0 ? treatmentMetrics.roslyn_used_rate : null,
+                average_total_tokens_delta: TrySubtract(treatmentMetrics.average_total_tokens, controlMetrics.average_total_tokens),
                 note: sufficientData ? null : "Insufficient task-level data for control/treatment comparison."));
         }
 
@@ -188,7 +200,10 @@ public sealed class AgentEvalScorer
                 roslyn_used_runs: 0,
                 roslyn_used_rate: 0,
                 roslyn_call_share: 0,
-                average_roslyn_helpfulness_score: null);
+                average_roslyn_helpfulness_score: null,
+                runs_with_token_counts: 0,
+                average_total_tokens: null,
+                median_total_tokens: null);
         }
 
         int successCount = runs.Count(r => r.Succeeded);
@@ -206,8 +221,16 @@ public sealed class AgentEvalScorer
             .Select(s => s!.Value)
             .ToArray();
 
+        double[] totalTokens = runs
+            .Select(TryGetTotalTokens)
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToArray();
+
         double? avgReflection = reflectionScores.Length == 0 ? null : reflectionScores.Average();
         double roslynCallShare = totalToolCalls == 0 ? 0 : (double)roslynToolCalls / totalToolCalls;
+        double? avgTotalTokens = totalTokens.Length == 0 ? null : totalTokens.Average();
+        double? medianTotalTokens = totalTokens.Length == 0 ? null : ComputeMedian(totalTokens);
 
         return new AgentEvalRunMetrics(
             run_count: runCount,
@@ -218,7 +241,62 @@ public sealed class AgentEvalScorer
             roslyn_used_runs: roslynUsedRuns,
             roslyn_used_rate: (double)roslynUsedRuns / runCount,
             roslyn_call_share: roslynCallShare,
-            average_roslyn_helpfulness_score: avgReflection);
+            average_roslyn_helpfulness_score: avgReflection,
+            runs_with_token_counts: totalTokens.Length,
+            average_total_tokens: avgTotalTokens,
+            median_total_tokens: medianTotalTokens);
+    }
+
+    private static double? TryGetTotalTokens(AgentEvalRun run)
+    {
+        if (run.TotalTokens.HasValue)
+        {
+            return run.TotalTokens.Value;
+        }
+
+        if (run.PromptTokens.HasValue && run.CompletionTokens.HasValue)
+        {
+            return run.PromptTokens.Value + run.CompletionTokens.Value;
+        }
+
+        return null;
+    }
+
+    private static double? TrySubtract(double? left, double? right)
+    {
+        if (!left.HasValue || !right.HasValue)
+        {
+            return null;
+        }
+
+        return left.Value - right.Value;
+    }
+
+    private static double? TryComputeReductionRatio(double? controlTokens, double? treatmentTokens)
+    {
+        if (!controlTokens.HasValue || !treatmentTokens.HasValue)
+        {
+            return null;
+        }
+
+        if (controlTokens.Value <= 0)
+        {
+            return null;
+        }
+
+        return (controlTokens.Value - treatmentTokens.Value) / controlTokens.Value;
+    }
+
+    private static double ComputeMedian(double[] values)
+    {
+        double[] sorted = values.OrderBy(v => v).ToArray();
+        int mid = sorted.Length / 2;
+        if (sorted.Length % 2 == 0)
+        {
+            return (sorted[mid - 1] + sorted[mid]) / 2.0;
+        }
+
+        return sorted[mid];
     }
 
     private sealed record AgentEvalRunMetrics(
@@ -230,5 +308,8 @@ public sealed class AgentEvalScorer
         int roslyn_used_runs,
         double roslyn_used_rate,
         double roslyn_call_share,
-        double? average_roslyn_helpfulness_score);
+        double? average_roslyn_helpfulness_score,
+        int runs_with_token_counts,
+        double? average_total_tokens,
+        double? median_total_tokens);
 }

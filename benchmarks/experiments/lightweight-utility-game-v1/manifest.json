@@ -1,0 +1,76 @@
+{
+  "experiment_id": "lightweight-utility-game-v1",
+  "description": "Lightweight first-pass control vs Roslyn-enabled run-through using a creative utility/game prompt with follow-up direction changes.",
+  "roslyn_tool_prefixes": [
+    "roslyn-agent.",
+    "nav.",
+    "ctx.",
+    "diag.",
+    "edit.",
+    "repair.",
+    "session."
+  ],
+  "runs_per_cell": 1,
+  "conditions": [
+    {
+      "id": "control-text-only",
+      "name": "Control (Text-first)",
+      "roslyn_tools_enabled": false,
+      "notes": "Default text-first tools only."
+    },
+    {
+      "id": "treatment-roslyn-optional",
+      "name": "Treatment (Roslyn-enabled)",
+      "roslyn_tools_enabled": true,
+      "notes": "Roslyn tools available and optional."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-001-initial-build",
+      "title": "Build SprintQuest CLI utility-game",
+      "repo": "DNAKode/RoslynSkill",
+      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
+      "task_prompt_file": "prompts/task-001-sprint-quest.md",
+      "setup_commands": [
+        "dotnet restore"
+      ],
+      "acceptance_checks": [
+        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+      ]
+    },
+    {
+      "id": "task-002-refactor-improvements",
+      "title": "Refactor for reliability and add quick analytics",
+      "repo": "DNAKode/RoslynSkill",
+      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
+      "task_prompt_file": "prompts/task-002-analytics-refactor.md",
+      "setup_commands": [
+        "dotnet restore"
+      ],
+      "acceptance_checks": [
+        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+      ]
+    },
+    {
+      "id": "task-003-direction-change",
+      "title": "Pivot design to a dungeon-run mechanic with rollback support",
+      "repo": "DNAKode/RoslynSkill",
+      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
+      "task_prompt_file": "prompts/task-003-direction-pivot.md",
+      "setup_commands": [
+        "dotnet restore"
+      ],
+      "acceptance_checks": [
+        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+      ]
+    }
+  ]
+}
+
