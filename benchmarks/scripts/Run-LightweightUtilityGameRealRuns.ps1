@@ -157,8 +157,6 @@ function New-TrajectoryWorkspace {
     & git -C $WorkspacePath config user.name "Benchmark Runner" | Out-Null
     & git -C $WorkspacePath config user.email "benchmark-runner@local.invalid" | Out-Null
     & git -C $WorkspacePath config commit.gpgSign false | Out-Null
-    & git -C $WorkspacePath config core.autocrlf false | Out-Null
-    & git -C $WorkspacePath config core.eol lf | Out-Null
 
     if ($UseWorkingTreeOverlay) {
         $overlayStatus = Convert-ToText (& git -C $WorkspacePath status --porcelain)
@@ -232,9 +230,10 @@ function Invoke-LoggedCommand {
 
     $ErrorActionPreference = "Continue"
     $exitCode = 1
+    New-Item -ItemType File -Force -Path $LogPath | Out-Null
     Push-Location $WorkingDirectory
     try {
-        & powershell.exe -NoProfile -NonInteractive -Command $CommandText 2>&1 | Tee-Object -FilePath $LogPath | Out-Host
+        & powershell.exe -NoProfile -NonInteractive -Command $CommandText 2>&1 | Tee-Object -FilePath $LogPath -Append | Out-Host
         if ($null -ne $LASTEXITCODE) {
             $exitCode = [int]$LASTEXITCODE
         }
@@ -475,7 +474,8 @@ function Get-TokenAttribution {
                 if ($event.item.type -eq "command_execution") {
                     $commandRoundTrips++
                     $commandText = Convert-ToText $event.item.command
-                    if (-not [string]::IsNullOrWhiteSpace($commandText) -and (Get-RoslynCommandIds -CommandText $commandText).Count -gt 0) {
+                    $roslynIds = @(Get-RoslynCommandIds -CommandText $commandText)
+                    if (-not [string]::IsNullOrWhiteSpace($commandText) -and $roslynIds.Count -gt 0) {
                         $roslynCommandRoundTrips++
                     }
 
@@ -500,7 +500,8 @@ function Get-TokenAttribution {
                     if ($content.type -eq "tool_use" -and $content.name -eq "Bash") {
                         $commandRoundTrips++
                         $commandText = Convert-ToText $content.input.command
-                        if (-not [string]::IsNullOrWhiteSpace($commandText) -and (Get-RoslynCommandIds -CommandText $commandText).Count -gt 0) {
+                        $roslynIds = @(Get-RoslynCommandIds -CommandText $commandText)
+                        if (-not [string]::IsNullOrWhiteSpace($commandText) -and $roslynIds.Count -gt 0) {
                             $roslynCommandRoundTrips++
                         }
                     } elseif ($content.type -eq "text") {
@@ -1281,13 +1282,25 @@ foreach ($agent in $agents) {
     }
 }
 
+$realManifestTasks = @()
+foreach ($task in $selectedTasks) {
+    $taskPromptRelative = Convert-ToText $task.task_prompt_file
+    $taskPromptAbsolute = [System.IO.Path]::GetFullPath((Join-Path $manifestDirectory $taskPromptRelative))
+    $taskCopy = [ordered]@{}
+    foreach ($property in $task.PSObject.Properties) {
+        $taskCopy[$property.Name] = $property.Value
+    }
+    $taskCopy.task_prompt_file = $taskPromptAbsolute
+    $realManifestTasks += [pscustomobject]$taskCopy
+}
+
 $realManifest = @{
     experiment_id = ("{0}-real-tools" -f (Convert-ToText $manifest.experiment_id))
     description = ("Real-agent trajectory runs from {0} with Codex/Claude control+treatment conditions." -f (Convert-ToText $manifest.experiment_id))
     roslyn_tool_prefixes = @($manifest.roslyn_tool_prefixes | ForEach-Object { $_ })
     runs_per_cell = [int]$agents.Count
     conditions = @($selectedConditions | ForEach-Object { $_ })
-    tasks = @($selectedTasks | ForEach-Object { $_ })
+    tasks = @($realManifestTasks)
 }
 
 $realManifestPath = Join-Path $outputDirectory "manifest.real-tools.json"

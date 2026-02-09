@@ -1,0 +1,63 @@
+{
+  "experiment_id": "creative-skyforge-planner-v1",
+  "description": "Creative two-step C# narrative benchmark: build a sky-heist planner, then pivot mechanics and naming in-place.",
+  "roslyn_tool_prefixes": [
+    "roslyn-agent.",
+    "nav.",
+    "ctx.",
+    "diag.",
+    "edit.",
+    "repair.",
+    "session."
+  ],
+  "runs_per_cell": 1,
+  "conditions": [
+    {
+      "id": "control-text-only",
+      "name": "Control (Text-first)",
+      "roslyn_tools_enabled": false,
+      "notes": "No Roslyn helpers allowed."
+    },
+    {
+      "id": "treatment-roslyn-optional",
+      "name": "Treatment (Roslyn-enabled)",
+      "roslyn_tools_enabled": true,
+      "notes": "Roslyn helpers available and optional."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-001-skyforge-build",
+      "title": "Build Skyforge heist planner core",
+      "repo": "DNAKode/RoslynSkill",
+      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "commit": "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+      "task_prompt_file": "prompts/task-001-skyforge-build.md",
+      "setup_commands": [
+        "Write-Output 'setup-ok'"
+      ],
+      "acceptance_checks": [
+        "if (-not (Test-Path 'benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs')) { throw 'SkyforgePlanner.cs missing.' }",
+        "$c = Get-Content 'benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs' -Raw; if ($c -notmatch 'class\\s+SkyforgePlanner') { throw 'Expected class SkyforgePlanner.' }",
+        "$c = Get-Content 'benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs' -Raw; foreach($m in 'AddMission','CompleteMission','AbortMission','GetStatusReport'){ if($c -notmatch ('\\b' + $m + '\\s*\\(')){ throw ('Missing method: ' + $m) } }"
+      ]
+    },
+    {
+      "id": "task-002-carnival-pivot",
+      "title": "Pivot to Clockwork Carnival semantics with undo",
+      "repo": "DNAKode/RoslynSkill",
+      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "commit": "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+      "task_prompt_file": "prompts/task-002-carnival-pivot.md",
+      "setup_commands": [
+        "Write-Output 'setup-ok'"
+      ],
+      "acceptance_checks": [
+        "if (-not (Test-Path 'benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs')) { throw 'SkyforgePlanner.cs missing.' }",
+        "$c = Get-Content 'benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs' -Raw; if ($c -notmatch 'class\\s+ClockworkPlanner') { throw 'Expected class ClockworkPlanner.' }",
+        "$c = Get-Content 'benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs' -Raw; foreach($m in 'MarkShowSuccess','MarkShowFailure','UndoLast','GetCarnivalReport'){ if($c -notmatch ('\\b' + $m + '\\s*\\(')){ throw ('Missing method: ' + $m) } }",
+        "$c = Get-Content 'benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs' -Raw; if ($c -notmatch '\\bBestStreak\\b') { throw 'Expected BestStreak field/property.' }"
+      ]
+    }
+  ]
+}

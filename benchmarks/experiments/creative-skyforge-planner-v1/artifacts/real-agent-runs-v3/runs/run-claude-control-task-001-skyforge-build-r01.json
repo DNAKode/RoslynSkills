@@ -1,0 +1,70 @@
+{
+    "run_id":  "run-claude-control-task-001-skyforge-build-r01",
+    "task_id":  "task-001-skyforge-build",
+    "condition_id":  "control-text-only",
+    "replicate":  1,
+    "agent":  "claude-code",
+    "model":  "claude-default",
+    "succeeded":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "duration_seconds":  73.266,
+    "prompt_tokens":  2,
+    "completion_tokens":  2751,
+    "total_tokens":  2753,
+    "cached_input_tokens":  null,
+    "cache_read_input_tokens":  134120,
+    "cache_creation_input_tokens":  9329,
+    "token_attribution":  {
+                              "turns":  1,
+                              "command_round_trips":  7,
+                              "roslyn_command_round_trips":  0,
+                              "non_roslyn_command_round_trips":  7,
+                              "command_output_chars":  3284,
+                              "agent_message_chars":  1457
+                          },
+    "tools_offered":  [
+                          "run_shell",
+                          "search",
+                          "text_editing"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "run_shell",
+                           "ok":  true
+                       }
+                   ],
+    "context":  {
+                    "task_title":  "Build Skyforge heist planner core",
+                    "repo":  "DNAKode/RoslynSkill",
+                    "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                    "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                    "workspace_source":  "baseline-commit",
+                    "setup_checks":  [
+                                         "Write-Output \u0027setup-ok\u0027"
+                                     ],
+                    "acceptance_checks":  [
+                                              "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+SkyforgePlanner\u0027) { throw \u0027Expected class SkyforgePlanner.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027AddMission\u0027,\u0027CompleteMission\u0027,\u0027AbortMission\u0027,\u0027GetStatusReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }"
+                                          ],
+                    "task_prompt_file":  "prompts/task-001-skyforge-build.md"
+                },
+    "post_run_reflection":  {
+                                "summary":  "---\n\n## Summary\n\n### 1) Changed Files\n\n| File | Action |\n|------|--------|\n| `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs` | Created |\n\n### 2) Tests/Checks Ran\n\n- **Compilation check**: Created a temporary .NET console project, added the `SkyforgePlanner.cs` file, and ran `dotnet build` — **Build succeeded with 0 warnings and 0 errors**.\n- **File verification**: Confirmed the file exists at the expected path with correct content.\n\n### 3) Open Issues or Risks\n\n- **No runtime tests**: Only compilation was verified. No unit tests were written to validate the scoring logic (e.g., that `CompleteMission` correctly adds `actualMinutes + 12` when `actualMinutes \u003e= plannedMinutes`, or that `AbortMission` applies the `-7` penalty).\n- **Thread safety**: The `SkyforgePlanner` class is not thread-safe. If used in a concurrent scenario, external synchronization would be needed.\n- **No input validation**: Methods don\u0027t validate negative values for `plannedMinutes` or `actualMinutes`. Depending on game requirements, this could allow unexpected scoring.\n- **Mission ID reuse**: If missions are ever removed, IDs are not recycled (by design, but worth noting).",
+                                "helpful_tools":  [
+
+                                                  ],
+                                "unhelpful_tools":  [
+
+                                                    ],
+                                "roslyn_helpfulness_score":  null
+                            },
+    "transcript_fragments":  [
+                                 "Ran ls -la benchmarks/experiments/creative-skyforge-planner-v1/",
+                                 "Ran mkdir -p benchmarks/experiments/creative-skyforge-planner-v1/workbench",
+                                 "Ran cd benchmarks/experiments/creative-skyforge-planner-v1/workbench \u0026\u0026 cat SkyforgePlanner.cs | head -50",
+                                 "Ran which dotnet 2\u003e/dev/null \u0026\u0026 dotnet --version || echo \"dotnet not available for syntax check\"",
+                                 "---\n\n## Summary\n\n### 1) Changed Files\n\n| File | Action |\n|------|--------|\n| `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs` | Created |\n\n### 2) Tests/Checks Ran\n\n- **Compilation check**: Created a tempora"
+                             ]
+}

@@ -1,0 +1,75 @@
+{
+    "run_id":  "run-claude-control-task-002-carnival-pivot-r01",
+    "task_id":  "task-002-carnival-pivot",
+    "condition_id":  "control-text-only",
+    "replicate":  1,
+    "agent":  "claude-code",
+    "model":  "claude-default",
+    "succeeded":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "duration_seconds":  158.651,
+    "prompt_tokens":  2,
+    "completion_tokens":  6470,
+    "total_tokens":  6472,
+    "cached_input_tokens":  null,
+    "cache_read_input_tokens":  418776,
+    "cache_creation_input_tokens":  16877,
+    "token_attribution":  {
+                              "turns":  1,
+                              "command_round_trips":  7,
+                              "roslyn_command_round_trips":  0,
+                              "non_roslyn_command_round_trips":  7,
+                              "command_output_chars":  22234,
+                              "agent_message_chars":  2983
+                          },
+    "tools_offered":  [
+                          "run_shell",
+                          "search",
+                          "text_editing"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "run_shell",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "text_editing",
+                           "ok":  true
+                       }
+                   ],
+    "context":  {
+                    "task_title":  "Pivot to Clockwork Carnival semantics with undo",
+                    "repo":  "DNAKode/RoslynSkill",
+                    "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                    "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                    "workspace_source":  "baseline-commit",
+                    "setup_checks":  [
+                                         "Write-Output \u0027setup-ok\u0027"
+                                     ],
+                    "acceptance_checks":  [
+                                              "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+ClockworkPlanner\u0027) { throw \u0027Expected class ClockworkPlanner.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027MarkShowSuccess\u0027,\u0027MarkShowFailure\u0027,\u0027UndoLast\u0027,\u0027GetCarnivalReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027\\bBestStreak\\b\u0027) { throw \u0027Expected BestStreak field/property.\u0027 }"
+                                          ],
+                    "task_prompt_file":  "prompts/task-002-carnival-pivot.md"
+                },
+    "post_run_reflection":  {
+                                "summary":  "Build succeeds. Here\u0027s the summary:\n\n---\n\n## Task 002 Complete: Direction Pivot to Clockwork Carnival\n\n### 1) Changed Files\n\n- **`benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`** - Complete rewrite:\n  - Namespace changed from `Skyforge.Heist` to `Clockwork.Carnival`\n  - Main class renamed from `SkyforgePlanner` to `ClockworkPlanner`\n  - Replaced mission model with streak-based show outcomes (`ShowRecord`, `ShowOutcome`)\n  - Added `UndoSnapshot` record for undo support\n  - Implemented required methods: `MarkShowSuccess`, `MarkShowFailure`, `UndoLast`, `GetCarnivalReport`\n  - Properties: `CurrentStreak`, `BestStreak`, `ShowCount`\n\n- **`benchmarks/experiments/creative-skyforge-planner-v1/workbench/Workbench.csproj`** - Created for build verification (net8.0 library)\n\n### 2) Tests/Checks Ran\n\n- **Compilation**: `dotnet build` - passed with 0 warnings, 0 errors\n- **Behavioral verification** (ran inline then removed):\n  - `UndoLast()` on empty history returns `false` (safe)\n  - Successful shows increment `CurrentStreak` correctly\n  - `BestStreak` updates only when `CurrentStreak` exceeds it\n  - Failed shows reset `CurrentStreak` to 0, preserve `BestStreak`\n  - `UndoLast()` restores previous streak state correctly\n  - Double undo prevented (single-level undo)\n  - `GetCarnivalReport()` outputs formatted report\n\n### 3) Open Issues or Risks\n\n- **Single-level undo**: Only the most recent action can be undone. If full history undo is needed later, the design would need a stack of snapshots.\n- **Determinism**: `ShowRecord.Timestamp` uses `DateTime.UtcNow`, which is non-deterministic. If strict determinism is required for testing, consider making the timestamp injectable or removing it.\n- **No backward compatibility wrappers**: The old `SkyforgePlanner` class was completely replaced. If external code depends on the old API, compatibility shims would be needed.",
+                                "helpful_tools":  [
+                                                      "text_editing"
+                                                  ],
+                                "unhelpful_tools":  [
+
+                                                    ],
+                                "roslyn_helpfulness_score":  null
+                            },
+    "transcript_fragments":  [
+                                 "Ran cd \"C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\trajectories\\claude-control\\workspace\\benchmarks\\experiments\\creative-skyforge-planner-v1\\workbench\" \u0026\u0026 dotnet build --nologo 2\u003e\u00261 || echo \"Build completed with status: $?\"",
+                                 "Ran cd \"C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\trajectories\\claude-control\\workspace\\benchmarks\\experiments\\creative-skyforge-planner-v1\\workbench\" \u0026\u0026 dotnet build --nologo 2\u003e\u00261",
+                                 "Ran cd \"C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\trajectories\\claude-control\\workspace\\benchmarks\\experiments\\creative-skyforge-planner-v1\\workbench\" \u0026\u0026 dotnet run --nologo 2\u003e\u00261",
+                                 "Ran cd \"C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\trajectories\\claude-control\\workspace\\benchmarks\\experiments\\creative-skyforge-planner-v1\\workbench\" \u0026\u0026 dotnet run --nologo 2\u003e\u00261",
+                                 "Build succeeds. Here\u0027s the summary:\n\n---\n\n## Task 002 Complete: Direction Pivot to Clockwork Carnival\n\n### 1) Changed Files\n\n- **`benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`** - Complete rewrite:\n  - Na"
+                             ]
+}

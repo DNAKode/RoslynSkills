@@ -1,0 +1,32 @@
+{
+  "experiment_id": "creative-skyforge-planner-v1-real-tools",
+  "generated_utc": "2026-02-09T16:27:43.4720509+00:00",
+  "valid": true,
+  "total_runs": 8,
+  "expected_runs": 8,
+  "issue_count": 2,
+  "error_count": 0,
+  "warning_count": 2,
+  "contaminated_control_runs": 0,
+  "treatment_runs_without_roslyn_offered": 0,
+  "treatment_runs_without_roslyn_usage": 0,
+  "issues": [
+    {
+      "severity": "warning",
+      "run_id": "run-codex-treatment-task-001-skyforge-build-r01",
+      "task_id": "task-001-skyforge-build",
+      "condition_id": "treatment-roslyn-optional",
+      "message": "tool_calls contains \u0027edit.create_file\u0027 which is not listed in tools_offered."
+    },
+    {
+      "severity": "warning",
+      "run_id": "run-codex-treatment-task-002-carnival-pivot-r01",
+      "task_id": "task-002-carnival-pivot",
+      "condition_id": "treatment-roslyn-optional",
+      "message": "tool_calls contains \u0027session.apply_text_edits\u0027 which is not listed in tools_offered."
+    }
+  ],
+  "output_path": "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\validation\\agent-eval-run-validation.json",
+  "runs_with_token_counts": 8,
+  "runs_missing_token_counts": 0
+}

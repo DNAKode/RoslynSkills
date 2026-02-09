@@ -1,0 +1,19 @@
+{
+  "experiment_id": "creative-skyforge-planner-v1-real-tools",
+  "generated_utc": "2026-02-09T16:27:43.5670479+00:00",
+  "manifest_valid": true,
+  "runs_valid": true,
+  "sufficient_data": true,
+  "gate_passed": true,
+  "run_validation_error_count": 0,
+  "run_validation_warning_count": 2,
+  "fail_on_run_warnings": false,
+  "manifest_validation_path": "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\validation\\agent-eval-manifest-validation.json",
+  "run_validation_path": "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\validation\\agent-eval-run-validation.json",
+  "score_report_path": "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\score\\agent-eval-report.json",
+  "summary_path": "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\summary\\agent-eval-summary.md",
+  "notes": [
+    "Run validation reported 2 warning(s)."
+  ],
+  "output_path": "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\agent-eval-gate-report.json"
+}

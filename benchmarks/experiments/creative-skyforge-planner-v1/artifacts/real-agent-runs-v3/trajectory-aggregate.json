@@ -1,0 +1,14 @@
+{
+    "generated_utc":  "2026-02-09T16:32:16.6913394Z",
+    "gate_exit_code":  0,
+    "gate_log_path":  "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\agent-eval-gate.log",
+    "aggregate":  {
+                      "key":  "",
+                      "run_count":  8,
+                      "succeeded_count":  8,
+                      "tests_passed_count":  8,
+                      "roslyn_used_count":  4,
+                      "total_tokens_sum":  1878628,
+                      "total_tokens_avg":  234828.5
+                  }
+}

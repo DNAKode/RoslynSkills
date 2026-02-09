@@ -1,0 +1,63 @@
+{
+    "description":  "Real-agent trajectory runs from creative-skyforge-planner-v1 with Codex/Claude control+treatment conditions.",
+    "experiment_id":  "creative-skyforge-planner-v1-real-tools",
+    "tasks":  [
+                  {
+                      "id":  "task-001-skyforge-build",
+                      "title":  "Build Skyforge heist planner core",
+                      "repo":  "DNAKode/RoslynSkill",
+                      "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                      "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                      "task_prompt_file":  "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\prompts\\task-001-skyforge-build.md",
+                      "setup_commands":  [
+                                             "Write-Output \u0027setup-ok\u0027"
+                                         ],
+                      "acceptance_checks":  [
+                                                "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                                "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+SkyforgePlanner\u0027) { throw \u0027Expected class SkyforgePlanner.\u0027 }",
+                                                "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027AddMission\u0027,\u0027CompleteMission\u0027,\u0027AbortMission\u0027,\u0027GetStatusReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }"
+                                            ]
+                  },
+                  {
+                      "id":  "task-002-carnival-pivot",
+                      "title":  "Pivot to Clockwork Carnival semantics with undo",
+                      "repo":  "DNAKode/RoslynSkill",
+                      "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                      "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                      "task_prompt_file":  "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\prompts\\task-002-carnival-pivot.md",
+                      "setup_commands":  [
+                                             "Write-Output \u0027setup-ok\u0027"
+                                         ],
+                      "acceptance_checks":  [
+                                                "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                                "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+ClockworkPlanner\u0027) { throw \u0027Expected class ClockworkPlanner.\u0027 }",
+                                                "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027MarkShowSuccess\u0027,\u0027MarkShowFailure\u0027,\u0027UndoLast\u0027,\u0027GetCarnivalReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }",
+                                                "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027\\bBestStreak\\b\u0027) { throw \u0027Expected BestStreak field/property.\u0027 }"
+                                            ]
+                  }
+              ],
+    "conditions":  [
+                       {
+                           "id":  "control-text-only",
+                           "name":  "Control (Text-first)",
+                           "roslyn_tools_enabled":  false,
+                           "notes":  "No Roslyn helpers allowed."
+                       },
+                       {
+                           "id":  "treatment-roslyn-optional",
+                           "name":  "Treatment (Roslyn-enabled)",
+                           "roslyn_tools_enabled":  true,
+                           "notes":  "Roslyn helpers available and optional."
+                       }
+                   ],
+    "roslyn_tool_prefixes":  [
+                                 "roslyn-agent.",
+                                 "nav.",
+                                 "ctx.",
+                                 "diag.",
+                                 "edit.",
+                                 "repair.",
+                                 "session."
+                             ],
+    "runs_per_cell":  2
+}

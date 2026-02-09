@@ -1,0 +1,84 @@
+{
+  "experiment_id": "creative-skyforge-planner-v1-real-tools",
+  "generated_utc": "2026-02-09T16:27:43.5056154+00:00",
+  "total_runs": 8,
+  "condition_summaries": [
+    {
+      "condition_id": "control-text-only",
+      "condition_name": "Control (Text-first)",
+      "run_count": 4,
+      "success_rate": 1,
+      "compile_rate": 1,
+      "tests_rate": 1,
+      "average_duration_seconds": 109.85425000000001,
+      "roslyn_used_runs": 0,
+      "roslyn_used_rate": 0,
+      "roslyn_call_share": 0,
+      "average_roslyn_helpfulness_score": null,
+      "runs_with_token_counts": 4,
+      "average_total_tokens": 78463,
+      "median_total_tokens": 62366
+    },
+    {
+      "condition_id": "treatment-roslyn-optional",
+      "condition_name": "Treatment (Roslyn-enabled)",
+      "run_count": 4,
+      "success_rate": 1,
+      "compile_rate": 1,
+      "tests_rate": 1,
+      "average_duration_seconds": 248.30775,
+      "roslyn_used_runs": 4,
+      "roslyn_used_rate": 1,
+      "roslyn_call_share": 0.75,
+      "average_roslyn_helpfulness_score": 4,
+      "runs_with_token_counts": 4,
+      "average_total_tokens": 391194,
+      "median_total_tokens": 272246.5
+    }
+  ],
+  "primary_comparison": {
+    "sufficient_data": true,
+    "control_condition_id": "control-text-only",
+    "treatment_condition_id": "treatment-roslyn-optional",
+    "control_run_count": 4,
+    "treatment_run_count": 4,
+    "success_rate_delta": 0,
+    "compile_rate_delta": 0,
+    "tests_rate_delta": 0,
+    "roslyn_used_rate_in_treatment": 1,
+    "average_total_tokens_control": 78463,
+    "average_total_tokens_treatment": 391194,
+    "average_total_tokens_delta": 312731,
+    "token_reduction_ratio": -3.9857130112282224,
+    "note": null
+  },
+  "task_comparisons": [
+    {
+      "task_id": "task-001-skyforge-build",
+      "task_title": "Build Skyforge heist planner core",
+      "sufficient_data": true,
+      "control_run_count": 2,
+      "treatment_run_count": 2,
+      "success_rate_delta": 0,
+      "compile_rate_delta": 0,
+      "tests_rate_delta": 0,
+      "treatment_roslyn_used_rate": 1,
+      "average_total_tokens_delta": 173323.5,
+      "note": null
+    },
+    {
+      "task_id": "task-002-carnival-pivot",
+      "task_title": "Pivot to Clockwork Carnival semantics with undo",
+      "sufficient_data": true,
+      "control_run_count": 2,
+      "treatment_run_count": 2,
+      "success_rate_delta": 0,
+      "compile_rate_delta": 0,
+      "tests_rate_delta": 0,
+      "treatment_roslyn_used_rate": 1,
+      "average_total_tokens_delta": 452138.5,
+      "note": null
+    }
+  ],
+  "output_path": "C:\\Work\\RoslynSkill\\benchmarks\\experiments\\creative-skyforge-planner-v1\\artifacts\\real-agent-runs-v3\\gate\\score\\agent-eval-report.json"
+}

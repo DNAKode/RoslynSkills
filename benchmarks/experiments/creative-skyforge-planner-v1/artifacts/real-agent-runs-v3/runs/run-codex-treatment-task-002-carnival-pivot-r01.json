@@ -1,0 +1,135 @@
+{
+    "run_id":  "run-codex-treatment-task-002-carnival-pivot-r01",
+    "task_id":  "task-002-carnival-pivot",
+    "condition_id":  "treatment-roslyn-optional",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "codex-default",
+    "succeeded":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "duration_seconds":  374.622,
+    "prompt_tokens":  1004018,
+    "completion_tokens":  13044,
+    "total_tokens":  1017062,
+    "cached_input_tokens":  970368,
+    "cache_read_input_tokens":  null,
+    "cache_creation_input_tokens":  null,
+    "token_attribution":  {
+                              "turns":  1,
+                              "command_round_trips":  31,
+                              "roslyn_command_round_trips":  18,
+                              "non_roslyn_command_round_trips":  13,
+                              "command_output_chars":  76653,
+                              "agent_message_chars":  4064
+                          },
+    "tools_offered":  [
+                          "run_shell",
+                          "search",
+                          "text_editing",
+                          "roslyn-agent.run",
+                          "nav.find_symbol",
+                          "ctx.file_outline",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_solution_snapshot",
+                          "diag.get_file_diagnostics",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "repair.apply_plan",
+                          "session.open",
+                          "session.set_content",
+                          "session.get_diagnostics",
+                          "session.diff",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "ctx.file_outline",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "ctx.member_source",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "diag.get_file_diagnostics",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "roslyn-agent.run",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "run_shell",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "session.apply_text_edits",
+                           "ok":  false
+                       },
+                       {
+                           "tool_name":  "session.commit",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "session.diff",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "session.open",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "session.set_content",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "text_editing",
+                           "ok":  true
+                       }
+                   ],
+    "context":  {
+                    "task_title":  "Pivot to Clockwork Carnival semantics with undo",
+                    "repo":  "DNAKode/RoslynSkill",
+                    "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                    "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                    "workspace_source":  "baseline-commit",
+                    "setup_checks":  [
+                                         "Write-Output \u0027setup-ok\u0027"
+                                     ],
+                    "acceptance_checks":  [
+                                              "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+ClockworkPlanner\u0027) { throw \u0027Expected class ClockworkPlanner.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027MarkShowSuccess\u0027,\u0027MarkShowFailure\u0027,\u0027UndoLast\u0027,\u0027GetCarnivalReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027\\bBestStreak\\b\u0027) { throw \u0027Expected BestStreak field/property.\u0027 }"
+                                          ],
+                    "task_prompt_file":  "prompts/task-002-carnival-pivot.md"
+                },
+    "post_run_reflection":  {
+                                "summary":  "1. changed files  \n- `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`  \n  - Replaced main type with `ClockworkPlanner` (`.../SkyforgePlanner.cs:5`)  \n  - Replaced mission model with streak/show model (`ShowOutcome`, `ShowResult`)  \n  - Added required methods with exact names:  \n    - `MarkShowSuccess(string stageName, int applauseLevel)` (`.../SkyforgePlanner.cs:29`)  \n    - `MarkShowFailure(string stageName, string reason)` (`.../SkyforgePlanner.cs:57`)  \n    - `UndoLast()` (`.../SkyforgePlanner.cs:81`)  \n    - `GetCarnivalReport()` (`.../SkyforgePlanner.cs:92`)  \n  - Added undo-approach comment (`.../SkyforgePlanner.cs:113`)  \n  - Kept a small compatibility wrapper: `GetStatusReport()` delegates to `GetCarnivalReport()` (`.../SkyforgePlanner.cs:108`)\n\n2. tests/checks you ran  \n- `scripts\\roscli.cmd diag.get_file_diagnostics benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`  \n  - Result: 0 errors, 0 warnings  \n- `scripts\\roscli.cmd ctx.file_outline benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`  \n  - Result: verified class/method names and signatures  \n- `dotnet test` (workspace root)  \n  - Result: pass, all test projects green (`RoslynAgent.Core.Tests`, `RoslynAgent.Cli.Tests`, `RoslynAgent.Benchmark.Tests`)\n\n3. whether Roslyn commands were helpful  \n- Yes. Roslyn `ctx.*`, `diag.*`, and `session.*` were useful for precise structure checks, in-memory edit validation, and safe guarded commit without text-only fallback for the `.cs` edit.\n\n4. open issues or risks  \n- `SkyforgePlanner` class and prior mission APIs were removed as part of the pivot; anything still depending on those old symbols will need follow-up migration.  \n- `GetStatusReport()` was kept as a compatibility wrapper, but other old method names are no longer present.",
+                                "helpful_tools":  [
+                                                      "ctx.file_outline",
+                                                      "ctx.member_source",
+                                                      "diag.get_file_diagnostics",
+                                                      "session.apply_text_edits",
+                                                      "session.commit",
+                                                      "session.diff",
+                                                      "session.open",
+                                                      "session.set_content"
+                                                  ],
+                                "unhelpful_tools":  [
+
+                                                    ],
+                                "roslyn_helpfulness_score":  4
+                            },
+    "transcript_fragments":  [
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd list-commands\"",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd ctx.file_outline benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\"",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd ctx.member_source benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs 6 1 member\"",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd session.open --help\"",
+                                 "1. changed files  \n- `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`  \n  - Replaced main type with `ClockworkPlanner` (`.../SkyforgePlanner.cs:5`)  \n  - Replaced mission model with streak/show model (`Show"
+                             ]
+}

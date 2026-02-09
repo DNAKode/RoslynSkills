@@ -1,0 +1,128 @@
+{
+    "run_id":  "run-codex-treatment-task-001-skyforge-build-r01",
+    "task_id":  "task-001-skyforge-build",
+    "condition_id":  "treatment-roslyn-optional",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "codex-default",
+    "succeeded":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "duration_seconds":  244.335,
+    "prompt_tokens":  522813,
+    "completion_tokens":  9733,
+    "total_tokens":  532546,
+    "cached_input_tokens":  501504,
+    "cache_read_input_tokens":  null,
+    "cache_creation_input_tokens":  null,
+    "token_attribution":  {
+                              "turns":  1,
+                              "command_round_trips":  22,
+                              "roslyn_command_round_trips":  9,
+                              "non_roslyn_command_round_trips":  13,
+                              "command_output_chars":  48323,
+                              "agent_message_chars":  3405
+                          },
+    "tools_offered":  [
+                          "run_shell",
+                          "search",
+                          "text_editing",
+                          "roslyn-agent.run",
+                          "nav.find_symbol",
+                          "ctx.file_outline",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_solution_snapshot",
+                          "diag.get_file_diagnostics",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "repair.apply_plan",
+                          "session.open",
+                          "session.set_content",
+                          "session.get_diagnostics",
+                          "session.diff",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "ctx.file_outline",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "ctx.member_source",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "diag.get_file_diagnostics",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "edit.create_file",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "edit.transaction",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "roslyn-agent.run",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "run_shell",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "search",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "session.open",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "text_editing",
+                           "ok":  true
+                       }
+                   ],
+    "context":  {
+                    "task_title":  "Build Skyforge heist planner core",
+                    "repo":  "DNAKode/RoslynSkill",
+                    "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                    "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                    "workspace_source":  "baseline-commit",
+                    "setup_checks":  [
+                                         "Write-Output \u0027setup-ok\u0027"
+                                     ],
+                    "acceptance_checks":  [
+                                              "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+SkyforgePlanner\u0027) { throw \u0027Expected class SkyforgePlanner.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027AddMission\u0027,\u0027CompleteMission\u0027,\u0027AbortMission\u0027,\u0027GetStatusReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }"
+                                          ],
+                    "task_prompt_file":  "prompts/task-001-skyforge-build.md"
+                },
+    "post_run_reflection":  {
+                                "summary":  "1. **Changed files**\n- `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`\n- `ROSLYN_FALLBACK_REFLECTION_LOG.md` (required fallback entry for new-file creation gap)\n\n2. **Tests/checks run**\n- `scripts\\roscli.cmd list-commands`\n- `scripts\\roscli.cmd run edit.transaction --input-stdin` (applied final content to `SkyforgePlanner.cs`)\n- `scripts\\roscli.cmd diag.get_file_diagnostics benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs` (final result: 0 errors, 0 warnings)\n- `scripts\\roscli.cmd ctx.file_outline benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs` (verified required class/methods/model present)\n\n3. **Whether Roslyn commands were helpful**\n- Yes. Roslyn commands were useful for validation and structure checks (`diag.*`, `ctx.*`, `edit.transaction`).\n- Limitation found: Roslyn command surface could not create a brand-new `.cs` file (`edit.transaction` + `session.open` require existing file), so a one-time text fallback was needed and logged.\n\n4. **Open issues or risks**\n- `AddMission` was implemented as `int AddMission(...)` to return the generated mission ID (assumption, since return type was not explicitly specified).\n- File is in a benchmark workbench path and may not be part of a compiled project by default; only file-level Roslyn diagnostics were run.\n",
+                                "helpful_tools":  [
+                                                      "ctx.file_outline",
+                                                      "ctx.member_source",
+                                                      "diag.get_file_diagnostics",
+                                                      "edit.create_file",
+                                                      "edit.transaction",
+                                                      "session.open"
+                                                  ],
+                                "unhelpful_tools":  [
+
+                                                    ],
+                                "roslyn_helpfulness_score":  4
+                            },
+    "transcript_fragments":  [
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd list-commands\"",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"Get-Content -Raw C:\\\\Users\\\\GovertvanDrimmelen\\\\.codex\\\\skills\\\\roslyn-agent-research\\\\SKILL.md\"",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027rg --files benchmarks/experiments/creative-skyforge-planner-v1/workbench\u0027",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027Get-ChildItem benchmarks/experiments/creative-skyforge-planner-v1/workbench | Select-Object Name,Length,LastWriteTime\u0027",
+                                 "1. **Changed files**\n- `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`\n- `ROSLYN_FALLBACK_REFLECTION_LOG.md` (required fallback entry for new-file creation gap)\n\n2. **Tests/checks run**\n- `scripts\\roscli.c"
+                             ]
+}

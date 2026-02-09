@@ -1,0 +1,70 @@
+{
+    "run_id":  "run-codex-control-task-001-skyforge-build-r01",
+    "task_id":  "task-001-skyforge-build",
+    "condition_id":  "control-text-only",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "codex-default",
+    "succeeded":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "duration_seconds":  103.647,
+    "prompt_tokens":  181443,
+    "completion_tokens":  4924,
+    "total_tokens":  186367,
+    "cached_input_tokens":  162304,
+    "cache_read_input_tokens":  null,
+    "cache_creation_input_tokens":  null,
+    "token_attribution":  {
+                              "turns":  1,
+                              "command_round_trips":  8,
+                              "roslyn_command_round_trips":  0,
+                              "non_roslyn_command_round_trips":  8,
+                              "command_output_chars":  9067,
+                              "agent_message_chars":  2423
+                          },
+    "tools_offered":  [
+                          "run_shell",
+                          "search",
+                          "text_editing"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "run_shell",
+                           "ok":  true
+                       }
+                   ],
+    "context":  {
+                    "task_title":  "Build Skyforge heist planner core",
+                    "repo":  "DNAKode/RoslynSkill",
+                    "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                    "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                    "workspace_source":  "baseline-commit",
+                    "setup_checks":  [
+                                         "Write-Output \u0027setup-ok\u0027"
+                                     ],
+                    "acceptance_checks":  [
+                                              "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+SkyforgePlanner\u0027) { throw \u0027Expected class SkyforgePlanner.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027AddMission\u0027,\u0027CompleteMission\u0027,\u0027AbortMission\u0027,\u0027GetStatusReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }"
+                                          ],
+                    "task_prompt_file":  "prompts/task-001-skyforge-build.md"
+                },
+    "post_run_reflection":  {
+                                "summary":  "Implemented the planner in a new single file with required class/method names and scoring/state behavior:\n\n1. changed files\n- `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`\n\n2. tests/checks I ran\n- `dotnet build RoslynSkill.slnx -v minimal`  \nResult: **Build succeeded**, 0 warnings, 0 errors.\n- Verified the new file exists and content is in place with `git status --short` and `Get-Content`.\n\n3. open issues or risks\n- `SkyforgePlanner.cs` is outside the existing solution/project graph, so the solution build does not compile this file directly.\n- No dedicated tests were added for `AddMission`, `CompleteMission`, `AbortMission`, or report formatting.\n- A direct standalone compile attempt for just this file was blocked by environment command policy, so syntax validation relied on content review plus repo build.",
+                                "helpful_tools":  [
+
+                                                  ],
+                                "unhelpful_tools":  [
+
+                                                    ],
+                                "roslyn_helpfulness_score":  null
+                            },
+    "transcript_fragments":  [
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027pwd; git status --short; if (Test-Path \"benchmarks/experiments/creative-skyforge-planner-v1/workbench\") { Write-Output \"WORKBENCH_EXISTS\"; Get-ChildItem \"benchmarks/experiments/creative-skyforge-planner-v1/workbench\" | Select-Object -ExpandProperty Name } else { Write-Output \"WORKBENCH_MISSING\" }\u0027",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027Get-ChildItem -Name; if (Test-Path \"benchmarks\") { Get-ChildItem \"benchmarks/experiments/creative-skyforge-planner-v1\" -Recurse -Depth 2 | Select-Object -First 60 -ExpandProperty FullName } else { Write-Output \"NO_BENCHMARKS_DIR\" }\u0027",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027if (Test-Path \"benchmarks/experiments\") { Write-Output \"EXPERIMENTS_EXISTS\"; Get-ChildItem \"benchmarks/experiments\" -Name } else { Write-Output \"EXPERIMENTS_MISSING\"; Get-ChildItem \"benchmarks\" -Name }\u0027",
+                                 "Ran \"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"New-Item -ItemType Directory -Path \\\"benchmarks/experiments/creative-skyforge-planner-v1/workbench\\\" -Force | Out-Null\n@\u0027\nusing System;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Text;\n\npublic sealed class SkyforgePlanner\n{\n    private enum MissionState\n    {\n        Planned,\n        Completed,\n        Aborted\n    }\n\n    // Compact mission model for in-memory planning state.\n    private sealed class Mission\n    {\n        public int Id { get; }\n        public string Codename { get; }\n        public int PlannedMinutes { get; }\n        public int? ActualMinutes { get; set; }\n        public MissionState State { get; set; }\n\n        public Mission(int id, string codename, int plannedMinutes)\n        {\n            Id = id;\n            Codename = codename;\n            PlannedMinutes = plannedMinutes;\n            State = MissionState.Planned;\n        }\n    }\n\n    private readonly Dictionary\u003cint, Mission\u003e _missions = new();\n    private int _nextMissionId = 1;\n    private int _score;\n\n    public void AddMission(string codename, int plannedMinutes)\n    {\n        if (string.IsNullOrWhiteSpace(codename))\n        {\n            throw new ArgumentException(\\\"Mission codename is required.\\\", nameof(codename));\n        }\n\n        if (plannedMinutes \u003c= 0)\n        {\n            throw new ArgumentOutOfRangeException(nameof(plannedMinutes), \\\"Planned minutes must be greater than zero.\\\");\n        }\n\n        var mission = new Mission(_nextMissionId++, codename.Trim(), plannedMinutes);\n        _missions.Add(mission.Id, mission);\n    }\n\n    public void CompleteMission(int missionId, int actualMinutes)\n    {\n        if (actualMinutes \u003c= 0)\n        {\n            throw new ArgumentOutOfRangeException(nameof(actualMinutes), \\\"Actual minutes must be greater than zero.\\\");\n        }\n\n        var mission = GetMission(missionId);\n        EnsureMissionIsPlanned(mission);\n\n        mission.ActualMinutes = actualMinutes;\n        mission.State = MissionState.Completed;\n\n        // Scoring rule: base gain is actual time, plus a bonus if target time is met/exceeded.\n        _score += actualMinutes;\n        if (actualMinutes \u003e= mission.PlannedMinutes)\n        {\n            _score += 12;\n        }\n    }\n\n    public void AbortMission(int missionId)\n    {\n        var mission = GetMission(missionId);\n        EnsureMissionIsPlanned(mission);\n\n        mission.State = MissionState.Aborted;\n        _score -= 7;\n    }\n\n    public string GetStatusReport()\n    {\n        var builder = new StringBuilder();\n        builder.AppendLine(\\\"Skyforge Planner Status\\\");\n        builder.AppendLine(\"\u0027$\"Score: {_score}\");\n\n        foreach (var mission in _missions.Values.OrderBy(m =\u003e m.Id))\n        {\n            var actualLabel = mission.ActualMinutes?.ToString() ?? \"-\";\n            builder.AppendLine(\n                $\"#{mission.Id} {mission.Codename} | planned={mission.PlannedMinutes}m | actual={actualLabel}m | state={ToStateToken(mission.State)}\");\n        }\n\n        return builder.ToString().TrimEnd();\n    }\n\n    private Mission GetMission(int missionId)\n    {\n        if (!_missions.TryGetValue(missionId, out var mission))\n        {\n            throw new KeyNotFoundException($\"Mission with id {missionId} was not found.\");\n        }\n\n        return mission;\n    }\n\n    private static void EnsureMissionIsPlanned(Mission mission)\n    {\n        if (mission.State != MissionState.Planned)\n        {\n            throw new InvalidOperationException(\n                $\"Mission {mission.Id} cannot be changed because it is already {ToStateToken(mission.State)}.\");\n        }\n    }\n\n    private static string ToStateToken(MissionState state)\n    {\n        return state switch\n        {\n            MissionState.Planned =\u003e \"planned\",\n            MissionState.Completed =\u003e \"completed\",\n            MissionState.Aborted =\u003e \"aborted\",\n            _ =\u003e throw new ArgumentOutOfRangeException(nameof(state), state, \"Unknown mission state.\")\n        };\n    }\n}\n\u0027\"\u0027@ | Set-Content -Path \\\"benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\\\" -Encoding UTF8\"",
+                                 "Implemented the planner in a new single file with required class/method names and scoring/state behavior:\n\n1. changed files\n- `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`\n\n2. tests/checks I ran\n- `dotne"
+                             ]
+}

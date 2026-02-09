@@ -1,9 +1,11 @@
 param(
     [string]$OutputRoot = "",
+    [string]$IsolationRoot = "",
     [string]$CodexModel = "",
     [string]$ClaudeModel = "",
     [string]$CliPublishConfiguration = "Release",
     [bool]$FailOnControlContamination = $true,
+    [switch]$KeepIsolatedWorkspaces,
     [switch]$SkipCodex,
     [switch]$SkipClaude
 )
@@ -26,6 +28,169 @@ function Resolve-OutputDirectory {
     }
 
     return (Join-Path $RepoRoot $OutputRoot)
+}
+
+function Get-FullPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Test-PathIsUnderRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    $normalizedPath = (Get-FullPath -Path $Path).TrimEnd('\', '/')
+    $normalizedRoot = (Get-FullPath -Path $Root).TrimEnd('\', '/')
+
+    if ($normalizedPath.Equals($normalizedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+
+    $rootWithSep = $normalizedRoot + [System.IO.Path]::DirectorySeparatorChar
+    $rootWithAltSep = $normalizedRoot + [System.IO.Path]::AltDirectorySeparatorChar
+
+    return (
+        $normalizedPath.StartsWith($rootWithSep, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $normalizedPath.StartsWith($rootWithAltSep, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Resolve-IsolationRootDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$IsolationRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($IsolationRoot)) {
+        $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
+        $suffix = [Guid]::NewGuid().ToString("n").Substring(0, 8)
+        return (Join-Path ([System.IO.Path]::GetTempPath()) "roslyn-agent-paired-runs/$stamp-$suffix")
+    }
+
+    if ([System.IO.Path]::IsPathRooted($IsolationRoot)) {
+        return $IsolationRoot
+    }
+
+    return (Join-Path $RepoRoot $IsolationRoot)
+}
+
+function New-IsolatedRunWorkspace {
+    param(
+        [Parameter(Mandatory = $true)][string]$IsolationRoot,
+        [Parameter(Mandatory = $true)][string]$RunId
+    )
+
+    $suffix = [Guid]::NewGuid().ToString("n").Substring(0, 8)
+    $workspaceDirectory = Join-Path $IsolationRoot ("workspace-{0}-{1}" -f $RunId, $suffix)
+    New-Item -ItemType Directory -Force -Path $workspaceDirectory | Out-Null
+    return [string](Resolve-Path $workspaceDirectory).Path
+}
+
+function Resolve-RepoTopLevel {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $resolvedRoot = & git -C $Path rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedRoot)) {
+        throw "Failed to resolve git top-level for '$Path'."
+    }
+
+    return (Get-FullPath -Path $resolvedRoot.Trim())
+}
+
+function Assert-IsolatedRunWorkspace {
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkspaceDirectory,
+        [Parameter(Mandatory = $true)][string]$RepoRoot
+    )
+
+    if (Test-PathIsUnderRoot -Path $WorkspaceDirectory -Root $RepoRoot) {
+        throw "Run workspace '$WorkspaceDirectory' is inside repo root '$RepoRoot'. Isolation requires a workspace outside the repository tree."
+    }
+
+    $workspaceRepoTop = & git -C $WorkspaceDirectory rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($workspaceRepoTop)) {
+        throw "Run workspace '$WorkspaceDirectory' is inside git repo '$($workspaceRepoTop.Trim())'."
+    }
+}
+
+function Copy-RunArtifactFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkspaceDirectory,
+        [Parameter(Mandatory = $true)][string]$ArtifactDirectory
+    )
+
+    New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
+
+    foreach ($fileName in @(
+            "Target.cs",
+            "Target.original.cs",
+            "prompt.txt",
+            "transcript.jsonl",
+            "diff.patch",
+            "constraint-checks.json"
+        )) {
+        $sourcePath = Join-Path $WorkspaceDirectory $fileName
+        if (Test-Path $sourcePath) {
+            Copy-Item -Path $sourcePath -Destination (Join-Path $ArtifactDirectory $fileName) -Force
+        }
+    }
+
+    $scriptsSource = Join-Path $WorkspaceDirectory "scripts"
+    if (Test-Path $scriptsSource) {
+        Copy-Item -Path $scriptsSource -Destination (Join-Path $ArtifactDirectory "scripts") -Recurse -Force
+    }
+
+    foreach ($helperFile in @(
+            "roslyn-list-commands.ps1",
+            "roslyn-find-symbol.ps1",
+            "roslyn-rename-symbol.ps1",
+            "roslyn-rename-and-verify.ps1"
+        )) {
+        $helperSource = Join-Path $WorkspaceDirectory $helperFile
+        if (Test-Path $helperSource) {
+            Copy-Item -Path $helperSource -Destination (Join-Path $ArtifactDirectory $helperFile) -Force
+        }
+    }
+}
+
+function Assert-HostContextIntegrity {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExpectedWorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$ExpectedRepoRoot,
+        [Parameter(Mandatory = $true)][string]$ExpectedHead
+    )
+
+    $expectedWorkingDirectoryFull = Get-FullPath -Path $ExpectedWorkingDirectory
+    $expectedRepoRootFull = Get-FullPath -Path $ExpectedRepoRoot
+    $currentLocationFull = Get-FullPath -Path (Get-Location).Path
+
+    if (-not $currentLocationFull.Equals($expectedWorkingDirectoryFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host ("Host location drift detected: '{0}' -> restoring '{1}'." -f $currentLocationFull, $expectedWorkingDirectoryFull)
+        Set-Location $expectedWorkingDirectoryFull
+    }
+
+    $actualRepoRoot = Resolve-RepoTopLevel -Path $expectedWorkingDirectoryFull
+    if (-not $actualRepoRoot.Equals($expectedRepoRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host ("Host git root drift detected: '{0}' -> restoring '{1}'." -f $actualRepoRoot, $expectedRepoRootFull)
+        Set-Location $expectedRepoRootFull
+        $actualRepoRoot = Resolve-RepoTopLevel -Path $expectedRepoRootFull
+        if (-not $actualRepoRoot.Equals($expectedRepoRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Failed to restore host git repo root to '$expectedRepoRootFull'. Current: '$actualRepoRoot'."
+        }
+    }
+
+    $actualHead = (& git -C $expectedRepoRootFull rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($actualHead)) {
+        throw "Failed to resolve host repo HEAD for '$expectedRepoRootFull'."
+    }
+
+    $actualHead = $actualHead.Trim()
+    if (-not $actualHead.Equals($ExpectedHead, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Host repo HEAD changed during paired runs. Expected '$ExpectedHead', actual '$actualHead'."
+    }
 }
 
 function Publish-RoslynCli {
@@ -935,157 +1100,197 @@ function Invoke-AgentRun {
         [Parameter(Mandatory = $true)][string]$Agent,
         [Parameter(Mandatory = $true)][string]$Mode,
         [Parameter(Mandatory = $true)][string]$BundleDirectory,
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$IsolationRoot,
         [Parameter(Mandatory = $true)][string]$PromptText,
         [Parameter(Mandatory = $true)][string]$TargetContent,
         [Parameter(Mandatory = $true)][string]$CliDllPath,
         [Parameter(Mandatory = $false)][bool]$FailOnControlContamination = $true,
+        [Parameter(Mandatory = $false)][bool]$KeepIsolatedWorkspace = $false,
         [Parameter(Mandatory = $false)][string]$Model = ""
     )
 
     $runId = "$Agent-$Mode"
-    $runDirectory = Join-Path $BundleDirectory $runId
-    New-Item -ItemType Directory -Force -Path $runDirectory | Out-Null
+    $artifactRunDirectory = Join-Path $BundleDirectory $runId
+    New-Item -ItemType Directory -Force -Path $artifactRunDirectory | Out-Null
 
-    $targetPath = Join-Path $runDirectory "Target.cs"
-    $targetOriginalPath = Join-Path $runDirectory "Target.original.cs"
-    $promptPath = Join-Path $runDirectory "prompt.txt"
-    $transcriptPath = Join-Path $runDirectory "transcript.jsonl"
+    $workspaceDirectory = New-IsolatedRunWorkspace -IsolationRoot $IsolationRoot -RunId $runId
+    Assert-IsolatedRunWorkspace -WorkspaceDirectory $workspaceDirectory -RepoRoot $RepoRoot
 
-    Set-Content -Path $targetPath -Value $TargetContent -NoNewline
-    Copy-Item -Path $targetPath -Destination $targetOriginalPath -Force
-    Set-Content -Path $promptPath -Value $PromptText -NoNewline
-    Set-Content -Path $transcriptPath -Value "" -NoNewline
+    $targetPath = Join-Path $workspaceDirectory "Target.cs"
+    $targetOriginalPath = Join-Path $workspaceDirectory "Target.original.cs"
+    $promptPath = Join-Path $workspaceDirectory "prompt.txt"
+    $transcriptPath = Join-Path $workspaceDirectory "transcript.jsonl"
 
-    if ($Mode -eq "treatment") {
-        Write-RoslynHelperScripts -RunDirectory $runDirectory -CliDllPath $CliDllPath
-    }
-
-    $environmentOverrides = New-AgentEnvironmentOverrides -Agent $Agent -RunDirectory $runDirectory
-
-    $exitCode = 1
-    Push-Location $runDirectory
     try {
-        if ($Agent -eq "codex") {
-            $codexExecutable = "codex.cmd"
-            if (-not (Get-Command $codexExecutable -ErrorAction SilentlyContinue)) {
-                $codexExecutable = "codex"
-            }
+        Set-Content -Path $targetPath -Value $TargetContent -NoNewline
+        Copy-Item -Path $targetPath -Destination $targetOriginalPath -Force
+        Set-Content -Path $promptPath -Value $PromptText -NoNewline
+        Set-Content -Path $transcriptPath -Value "" -NoNewline
 
-            $args = @(
-                "exec",
-                "--json",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--skip-git-repo-check",
-                "-"
-            )
-            if (-not [string]::IsNullOrWhiteSpace($Model)) {
-                $args = @("exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--model", $Model, "-")
-            }
-
-            $exitCode = Invoke-AgentProcess -Executable $codexExecutable -Arguments $args -PromptText $PromptText -TranscriptPath $transcriptPath -EnvironmentOverrides $environmentOverrides
-        } elseif ($Agent -eq "claude") {
-            $claudeExecutable = "claude.cmd"
-            if (-not (Get-Command $claudeExecutable -ErrorAction SilentlyContinue)) {
-                $claudeExecutable = "claude"
-            }
-
-            $args = @(
-                "--print",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--input-format",
-                "text",
-                "--permission-mode",
-                "bypassPermissions",
-                "--dangerously-skip-permissions"
-            )
-            if (-not [string]::IsNullOrWhiteSpace($Model)) {
-                $args += @("--model", $Model)
-            }
-
-            $exitCode = Invoke-AgentProcess -Executable $claudeExecutable -Arguments $args -PromptText $PromptText -TranscriptPath $transcriptPath -EnvironmentOverrides $environmentOverrides
-        } else {
-            throw "Unsupported agent '$Agent'."
+        if ($Mode -eq "treatment") {
+            Write-RoslynHelperScripts -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath
         }
+
+        $environmentOverrides = New-AgentEnvironmentOverrides -Agent $Agent -RunDirectory $workspaceDirectory
+
+        $exitCode = 1
+        Push-Location $workspaceDirectory
+        try {
+            if ($Agent -eq "codex") {
+                $codexExecutable = "codex.cmd"
+                if (-not (Get-Command $codexExecutable -ErrorAction SilentlyContinue)) {
+                    $codexExecutable = "codex"
+                }
+
+                $args = @(
+                    "exec",
+                    "--json",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--skip-git-repo-check",
+                    "-"
+                )
+                if (-not [string]::IsNullOrWhiteSpace($Model)) {
+                    $args = @("exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--model", $Model, "-")
+                }
+
+                $exitCode = Invoke-AgentProcess -Executable $codexExecutable -Arguments $args -PromptText $PromptText -TranscriptPath $transcriptPath -EnvironmentOverrides $environmentOverrides
+            } elseif ($Agent -eq "claude") {
+                $claudeExecutable = "claude.cmd"
+                if (-not (Get-Command $claudeExecutable -ErrorAction SilentlyContinue)) {
+                    $claudeExecutable = "claude"
+                }
+
+                $args = @(
+                    "--print",
+                    "--output-format",
+                    "stream-json",
+                    "--verbose",
+                    "--input-format",
+                    "text",
+                    "--permission-mode",
+                    "bypassPermissions",
+                    "--dangerously-skip-permissions"
+                )
+                if (-not [string]::IsNullOrWhiteSpace($Model)) {
+                    $args += @("--model", $Model)
+                }
+
+                $exitCode = Invoke-AgentProcess -Executable $claudeExecutable -Arguments $args -PromptText $PromptText -TranscriptPath $transcriptPath -EnvironmentOverrides $environmentOverrides
+            } else {
+                throw "Unsupported agent '$Agent'."
+            }
+        } finally {
+            Pop-Location
+        }
+
+        $diffHasChanges = Get-Diff -RunDirectory $workspaceDirectory
+
+        $usage = if ($Agent -eq "codex") {
+            Get-CodexRoslynUsage -TranscriptPath $transcriptPath
+        } else {
+            Get-ClaudeRoslynUsage -TranscriptPath $transcriptPath
+        }
+        $tokens = Get-TokenMetrics -Agent $Agent -TranscriptPath $transcriptPath
+        $tokenAttribution = Get-TokenAttribution -Agent $Agent -TranscriptPath $transcriptPath
+        $constraintChecks = Invoke-RenameConstraintChecks -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath
+        $constraintChecksPath = Join-Path $workspaceDirectory "constraint-checks.json"
+        $constraintChecks | ConvertTo-Json -Depth 40 | Set-Content -Path $constraintChecksPath
+
+        Copy-RunArtifactFiles -WorkspaceDirectory $workspaceDirectory -ArtifactDirectory $artifactRunDirectory
+
+        $artifactTargetPath = Join-Path $artifactRunDirectory "Target.cs"
+        $artifactTargetOriginalPath = Join-Path $artifactRunDirectory "Target.original.cs"
+        $artifactPromptPath = Join-Path $artifactRunDirectory "prompt.txt"
+        $artifactTranscriptPath = Join-Path $artifactRunDirectory "transcript.jsonl"
+        $artifactDiffPath = Join-Path $artifactRunDirectory "diff.patch"
+        $artifactConstraintChecksPath = Join-Path $artifactRunDirectory "constraint-checks.json"
+
+        $controlContaminationDetected = ($Mode -eq "control" -and $usage.Commands.Count -gt 0)
+        $failureReasons = New-Object System.Collections.Generic.List[string]
+        if ($exitCode -ne 0) {
+            $failureReasons.Add("agent_exit_code_non_zero")
+        }
+        if (-not [bool]$constraintChecks.ok) {
+            $failureReasons.Add("constraint_checks_failed")
+        }
+        if ($controlContaminationDetected -and $FailOnControlContamination) {
+            $failureReasons.Add("control_contamination_detected")
+        }
+        $runPassed = ($failureReasons.Count -eq 0)
+
+        $metadata = [ordered]@{
+            agent = $Agent
+            mode = $Mode
+            timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
+            exit_code = $exitCode
+            workspace_path = $workspaceDirectory
+            workspace_deleted = (-not $KeepIsolatedWorkspace)
+            artifact_directory = (Resolve-Path $artifactRunDirectory).Path
+            roslyn_used = ($usage.Successful -gt 0)
+            roslyn_attempted_calls = $usage.Commands.Count
+            roslyn_successful_calls = $usage.Successful
+            roslyn_usage_indicators = $usage.Commands
+            diff_has_changes = $diffHasChanges
+            transcript_path = (Resolve-Path $artifactTranscriptPath).Path
+            prompt_path = (Resolve-Path $artifactPromptPath).Path
+            original_file = (Resolve-Path $artifactTargetOriginalPath).Path
+            edited_file = (Resolve-Path $artifactTargetPath).Path
+            diff_path = (Resolve-Path $artifactDiffPath).Path
+            prompt_tokens = $tokens.PromptTokens
+            completion_tokens = $tokens.CompletionTokens
+            total_tokens = $tokens.TotalTokens
+            cached_input_tokens = $tokens.CachedInputTokens
+            cache_read_input_tokens = $tokens.CacheReadInputTokens
+            cache_creation_input_tokens = $tokens.CacheCreationInputTokens
+            cache_inclusive_total_tokens = $tokenAttribution.cache_inclusive_total_tokens
+            command_round_trips = $tokenAttribution.command_round_trips
+            roslyn_command_round_trips = $tokenAttribution.roslyn_command_round_trips
+            non_roslyn_command_round_trips = $tokenAttribution.non_roslyn_command_round_trips
+            control_contamination_detected = $controlContaminationDetected
+            fail_on_control_contamination = $FailOnControlContamination
+            run_passed = $runPassed
+            failure_reasons = $failureReasons.ToArray()
+            constraint_checks_passed = [bool]$constraintChecks.ok
+            constraint_checks_path = (Resolve-Path $artifactConstraintChecksPath).Path
+            agent_environment = $environmentOverrides
+            token_attribution = $tokenAttribution
+        }
+
+        $metadataPath = Join-Path $artifactRunDirectory "run-metadata.json"
+        $metadata | ConvertTo-Json -Depth 40 | Set-Content -Path $metadataPath
+
+        Write-Host ("RUN {0} exit={1} run_passed={2} control_contamination={3} roslyn_used={4} roslyn_attempted_calls={5} roslyn_successful_calls={6} diff_has_changes={7} round_trips={8} model_total_tokens={9} cache_inclusive_tokens={10}" -f $runId, $exitCode, $metadata.run_passed, $metadata.control_contamination_detected, $metadata.roslyn_used, $metadata.roslyn_attempted_calls, $metadata.roslyn_successful_calls, $diffHasChanges, $metadata.command_round_trips, $metadata.total_tokens, $metadata.cache_inclusive_total_tokens)
+
+        if ($controlContaminationDetected -and $FailOnControlContamination) {
+            throw ("Control contamination detected for run '{0}'. Roslyn indicators: {1}" -f $runId, ($usage.Commands -join " | "))
+        }
+
+        return $metadata
     } finally {
-        Pop-Location
+        if (-not $KeepIsolatedWorkspace -and (Test-Path $workspaceDirectory)) {
+            Remove-Item -Recurse -Force $workspaceDirectory -ErrorAction SilentlyContinue
+        }
     }
-
-    $diffHasChanges = Get-Diff -RunDirectory $runDirectory
-
-    $usage = if ($Agent -eq "codex") {
-        Get-CodexRoslynUsage -TranscriptPath $transcriptPath
-    } else {
-        Get-ClaudeRoslynUsage -TranscriptPath $transcriptPath
-    }
-    $tokens = Get-TokenMetrics -Agent $Agent -TranscriptPath $transcriptPath
-    $tokenAttribution = Get-TokenAttribution -Agent $Agent -TranscriptPath $transcriptPath
-    $constraintChecks = Invoke-RenameConstraintChecks -RunDirectory $runDirectory -CliDllPath $CliDllPath
-    $constraintChecksPath = Join-Path $runDirectory "constraint-checks.json"
-    $constraintChecks | ConvertTo-Json -Depth 40 | Set-Content -Path $constraintChecksPath
-
-    $controlContaminationDetected = ($Mode -eq "control" -and $usage.Commands.Count -gt 0)
-    $failureReasons = New-Object System.Collections.Generic.List[string]
-    if ($exitCode -ne 0) {
-        $failureReasons.Add("agent_exit_code_non_zero")
-    }
-    if (-not [bool]$constraintChecks.ok) {
-        $failureReasons.Add("constraint_checks_failed")
-    }
-    if ($controlContaminationDetected -and $FailOnControlContamination) {
-        $failureReasons.Add("control_contamination_detected")
-    }
-    $runPassed = ($failureReasons.Count -eq 0)
-
-    $metadata = [ordered]@{
-        agent = $Agent
-        mode = $Mode
-        timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
-        exit_code = $exitCode
-        roslyn_used = ($usage.Successful -gt 0)
-        roslyn_attempted_calls = $usage.Commands.Count
-        roslyn_successful_calls = $usage.Successful
-        roslyn_usage_indicators = $usage.Commands
-        diff_has_changes = $diffHasChanges
-        transcript_path = (Resolve-Path $transcriptPath).Path
-        prompt_path = (Resolve-Path $promptPath).Path
-        original_file = (Resolve-Path $targetOriginalPath).Path
-        edited_file = (Resolve-Path $targetPath).Path
-        diff_path = (Resolve-Path (Join-Path $runDirectory "diff.patch")).Path
-        prompt_tokens = $tokens.PromptTokens
-        completion_tokens = $tokens.CompletionTokens
-        total_tokens = $tokens.TotalTokens
-        cached_input_tokens = $tokens.CachedInputTokens
-        cache_read_input_tokens = $tokens.CacheReadInputTokens
-        cache_creation_input_tokens = $tokens.CacheCreationInputTokens
-        cache_inclusive_total_tokens = $tokenAttribution.cache_inclusive_total_tokens
-        command_round_trips = $tokenAttribution.command_round_trips
-        roslyn_command_round_trips = $tokenAttribution.roslyn_command_round_trips
-        non_roslyn_command_round_trips = $tokenAttribution.non_roslyn_command_round_trips
-        control_contamination_detected = $controlContaminationDetected
-        fail_on_control_contamination = $FailOnControlContamination
-        run_passed = $runPassed
-        failure_reasons = $failureReasons.ToArray()
-        constraint_checks_passed = [bool]$constraintChecks.ok
-        constraint_checks_path = (Resolve-Path $constraintChecksPath).Path
-        agent_environment = $environmentOverrides
-        token_attribution = $tokenAttribution
-    }
-
-    $metadataPath = Join-Path $runDirectory "run-metadata.json"
-    $metadata | ConvertTo-Json -Depth 40 | Set-Content -Path $metadataPath
-
-    Write-Host ("RUN {0} exit={1} run_passed={2} control_contamination={3} roslyn_used={4} roslyn_attempted_calls={5} roslyn_successful_calls={6} diff_has_changes={7} round_trips={8} model_total_tokens={9} cache_inclusive_tokens={10}" -f $runId, $exitCode, $metadata.run_passed, $metadata.control_contamination_detected, $metadata.roslyn_used, $metadata.roslyn_attempted_calls, $metadata.roslyn_successful_calls, $diffHasChanges, $metadata.command_round_trips, $metadata.total_tokens, $metadata.cache_inclusive_total_tokens)
-
-    if ($controlContaminationDetected -and $FailOnControlContamination) {
-        throw ("Control contamination detected for run '{0}'. Roslyn indicators: {1}" -f $runId, ($usage.Commands -join " | "))
-    }
-
-    return $metadata
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$homeWorkingDirectory = (Get-Location).Path
+$expectedRepoRoot = Resolve-RepoTopLevel -Path $repoRoot
+$expectedRepoHead = (& git -C $expectedRepoRoot rev-parse HEAD 2>$null)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($expectedRepoHead)) {
+    throw "Failed to resolve initial HEAD for repo '$expectedRepoRoot'."
+}
+$expectedRepoHead = $expectedRepoHead.Trim()
+
+$isolationRootDirectory = Resolve-IsolationRootDirectory -RepoRoot $repoRoot -IsolationRoot $IsolationRoot
+New-Item -ItemType Directory -Force -Path $isolationRootDirectory | Out-Null
+$isolationRootDirectory = [string](Resolve-Path $isolationRootDirectory).Path
+if (Test-PathIsUnderRoot -Path $isolationRootDirectory -Root $repoRoot) {
+    throw "Isolation root '$isolationRootDirectory' is inside repo root '$repoRoot'. Choose an isolation root outside the repository."
+}
+Write-Host ("ISOLATION_ROOT={0}" -f $isolationRootDirectory)
+
 $bundleDirectory = Resolve-OutputDirectory -RepoRoot $repoRoot -OutputRoot $OutputRoot
 New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
 
@@ -1181,14 +1386,20 @@ After editing, say explicitly whether Roslyn helpers were invoked successfully.
 $runs = New-Object System.Collections.Generic.List[object]
 
 if (-not $SkipCodex) {
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -Model $CodexModel))
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -Model $CodexModel))
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+    Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+    Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
 }
 
 if (-not $SkipClaude) {
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -Model $ClaudeModel))
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -Model $ClaudeModel))
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+    Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -CliDllPath $cliDllPath -FailOnControlContamination $FailOnControlContamination -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+    Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
 }
+
+Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
 
 $summaryPath = Join-Path $bundleDirectory "paired-run-summary.json"
 if ($runs.Count -eq 0) {

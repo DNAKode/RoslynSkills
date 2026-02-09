@@ -1,0 +1,109 @@
+{
+    "run_id":  "run-claude-treatment-task-001-skyforge-build-r01",
+    "task_id":  "task-001-skyforge-build",
+    "condition_id":  "treatment-roslyn-optional",
+    "replicate":  1,
+    "agent":  "claude-code",
+    "model":  "claude-default",
+    "succeeded":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "duration_seconds":  103.167,
+    "prompt_tokens":  2,
+    "completion_tokens":  3219,
+    "total_tokens":  3221,
+    "cached_input_tokens":  null,
+    "cache_read_input_tokens":  196898,
+    "cache_creation_input_tokens":  14156,
+    "token_attribution":  {
+                              "turns":  1,
+                              "command_round_trips":  6,
+                              "roslyn_command_round_trips":  4,
+                              "non_roslyn_command_round_trips":  2,
+                              "command_output_chars":  24245,
+                              "agent_message_chars":  2301
+                          },
+    "tools_offered":  [
+                          "run_shell",
+                          "search",
+                          "text_editing",
+                          "roslyn-agent.run",
+                          "nav.find_symbol",
+                          "ctx.file_outline",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_solution_snapshot",
+                          "diag.get_file_diagnostics",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "repair.apply_plan",
+                          "session.open",
+                          "session.set_content",
+                          "session.get_diagnostics",
+                          "session.diff",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "ctx.file_outline",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "diag.get_file_diagnostics",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "roslyn-agent.run",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "run_shell",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "session.open",
+                           "ok":  false
+                       },
+                       {
+                           "tool_name":  "text_editing",
+                           "ok":  true
+                       }
+                   ],
+    "context":  {
+                    "task_title":  "Build Skyforge heist planner core",
+                    "repo":  "DNAKode/RoslynSkill",
+                    "repo_url":  "https://github.com/DNAKode/RoslynSkill",
+                    "commit":  "64d178d53aa384ceb51c1c3e31254d3bb8f90b95",
+                    "workspace_source":  "baseline-commit",
+                    "setup_checks":  [
+                                         "Write-Output \u0027setup-ok\u0027"
+                                     ],
+                    "acceptance_checks":  [
+                                              "if (-not (Test-Path \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027)) { throw \u0027SkyforgePlanner.cs missing.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; if ($c -notmatch \u0027class\\s+SkyforgePlanner\u0027) { throw \u0027Expected class SkyforgePlanner.\u0027 }",
+                                              "$c = Get-Content \u0027benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\u0027 -Raw; foreach($m in \u0027AddMission\u0027,\u0027CompleteMission\u0027,\u0027AbortMission\u0027,\u0027GetStatusReport\u0027){ if($c -notmatch (\u0027\\b\u0027 + $m + \u0027\\s*\\(\u0027)){ throw (\u0027Missing method: \u0027 + $m) } }"
+                                          ],
+                    "task_prompt_file":  "prompts/task-001-skyforge-build.md"
+                },
+    "post_run_reflection":  {
+                                "summary":  "The file is complete and verified. Let me provide a summary:\n\n---\n\n## Summary\n\n### 1) Changed Files\n- **Created:** `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`\n\n### 2) Tests/Checks Run\n- **`diag.get_file_diagnostics`**: Confirmed 0 errors, 0 warnings - file compiles cleanly\n- **`ctx.file_outline`**: Verified structure contains:\n  - `MissionState` enum with 3 values (Planned, Completed, Aborted)\n  - `Mission` record with 5 properties (Id, Codename, PlannedMinutes, ActualMinutes, State)\n  - `SkyforgePlanner` class with 4 required methods:\n    - `AddMission(string codename, int plannedMinutes)` ? returns `int`\n    - `CompleteMission(int missionId, int actualMinutes)` ? void\n    - `AbortMission(int missionId)` ? void\n    - `GetStatusReport()` ? returns `string`\n\n### 3) Roslyn Commands Helpfulness\n**Yes, helpful for validation:**\n- `diag.get_file_diagnostics` confirmed the code compiles with no issues\n- `ctx.file_outline` verified the exact structure matches requirements (3 types, 17 members)\n- The session commands (`session.open`) require the file to exist first, so initial file creation used Write tool\n\n### 4) Open Issues or Risks\n- **None identified.** The implementation is self-contained with:\n  - Clear scoring logic (+actualMinutes on completion, +12 bonus if actual \u003e= planned, -7 penalty on abort)\n  - Proper state validation (only Planned missions can be completed/aborted)\n  - XML documentation for all public members\n  - Comments explaining non-obvious scoring constants",
+                                "helpful_tools":  [
+                                                      "ctx.file_outline",
+                                                      "diag.get_file_diagnostics",
+                                                      "session.open"
+                                                  ],
+                                "unhelpful_tools":  [
+
+                                                    ],
+                                "roslyn_helpfulness_score":  4
+                            },
+    "transcript_fragments":  [
+                                 "Ran scripts/roscli.cmd list-commands",
+                                 "Ran mkdir -p benchmarks/experiments/creative-skyforge-planner-v1/workbench",
+                                 "Ran scripts/roscli.cmd run session.open --input \u0027{\"filePath\": \"benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\", \"createIfMissing\": true}\u0027",
+                                 "Ran scripts/roscli.cmd run session.open --input \u0027{\"file_path\": \"benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs\", \"create_if_missing\": true}\u0027",
+                                 "The file is complete and verified. Let me provide a summary:\n\n---\n\n## Summary\n\n### 1) Changed Files\n- **Created:** `benchmarks/experiments/creative-skyforge-planner-v1/workbench/SkyforgePlanner.cs`\n\n### 2) Tests/Checks Run\n- **`diag.get_fil"
+                             ]
+}
