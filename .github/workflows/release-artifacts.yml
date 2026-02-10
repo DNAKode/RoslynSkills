@@ -1,0 +1,85 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example 0.1.0 or v0.1.0). Required for manual runs."
+        required: false
+        type: string
+      publish_release:
+        description: "Create/update GitHub Release after building artifacts."
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Resolve version
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version_input=""
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            version_input="${GITHUB_REF_NAME}"
+          else
+            version_input="${{ inputs.version }}"
+          fi
+
+          if [[ -z "$version_input" ]]; then
+            echo "version input is required for workflow_dispatch" >&2
+            exit 1
+          fi
+
+          version="${version_input#v}"
+          tag="v${version}"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "artifact_dir=artifacts/release/$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release artifacts
+        shell: pwsh
+        run: |
+          ./scripts/release/Build-ReleaseArtifacts.ps1 `
+            -Version '${{ steps.vars.outputs.version }}' `
+            -OutputRoot '${{ steps.vars.outputs.artifact_dir }}'
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: roslyn-agent-release-${{ steps.vars.outputs.version }}
+          path: ${{ steps.vars.outputs.artifact_dir }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' || inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: RoslynAgent ${{ steps.vars.outputs.tag }}
+          generate_release_notes: true
+          target_commitish: ${{ github.sha }}
+          files: |
+            ${{ steps.vars.outputs.artifact_dir }}/*.zip
+            ${{ steps.vars.outputs.artifact_dir }}/*.nupkg
+            ${{ steps.vars.outputs.artifact_dir }}/release-manifest.json
+            ${{ steps.vars.outputs.artifact_dir }}/checksums.sha256

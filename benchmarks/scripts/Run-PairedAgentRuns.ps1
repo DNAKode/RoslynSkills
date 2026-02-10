@@ -3,6 +3,7 @@ param(
     [string]$IsolationRoot = "",
     [string]$CodexModel = "",
     [string]$ClaudeModel = "",
+    [ValidateSet("standard", "brief-first", "surgical")][string]$RoslynGuidanceProfile = "standard",
     [string]$CliPublishConfiguration = "Release",
     [switch]$IncludeMcpTreatment,
     [bool]$FailOnControlContamination = $true,
@@ -1321,6 +1322,30 @@ function Write-PairedRunSummaryMarkdown {
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("# Paired Agent Run Summary")
     $lines.Add("")
+    $guidanceProfiles = @(
+        $Runs |
+        ForEach-Object {
+            if ($null -eq $_) {
+                return $null
+            }
+
+            if ($_ -is [System.Collections.IDictionary]) {
+                return $_["roslyn_guidance_profile"]
+            }
+
+            if ($_.PSObject.Properties.Name -contains "roslyn_guidance_profile") {
+                return $_.roslyn_guidance_profile
+            }
+
+            return $null
+        } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+        Sort-Object -Unique
+    )
+    if ($guidanceProfiles.Count -gt 0) {
+        $lines.Add("- Roslyn guidance profile(s): $([string]::Join(', ', $guidanceProfiles))")
+        $lines.Add("")
+    }
 
     if ($Runs.Count -eq 0) {
         $lines.Add("No runs executed.")
@@ -1628,6 +1653,7 @@ function Invoke-AgentRun {
         $metadata = [ordered]@{
             agent = $Agent
             mode = $Mode
+            roslyn_guidance_profile = $RoslynGuidanceProfile
             timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
             exit_code = $exitCode
             workspace_path = $workspaceDirectory
@@ -1732,30 +1758,16 @@ public class Overloads
 }
 "@
 
-$controlPrompt = @"
-Edit Target.cs in this directory.
-Task:
-1) Rename method Process(int value) to Handle(int value).
-2) Update only the matching invocation Process(1) to Handle(1).
-Constraints:
-- Do NOT change Process(string value).
-- Do NOT change Process("x").
-- Do NOT change string literal "Process".
-Baseline condition:
-- Do NOT invoke Roslyn helper scripts/commands in this run.
-- Use plain editor/text operations only.
-After editing, briefly summarize what changed.
-"@
+function Get-CliRoslynGuidanceBlock {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("codex", "claude")][string]$Agent,
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical")][string]$Profile
+    )
 
-$treatmentPromptCodex = @"
-Edit Target.cs in this directory.
-Task:
-1) Rename method Process(int value) to Handle(int value).
-2) Update only the matching invocation Process(1) to Handle(1).
-Constraints:
-- Do NOT change Process(string value).
-- Do NOT change Process("x").
-- Do NOT change string literal "Process".
+    switch ($Profile) {
+        "standard" {
+            if ($Agent -eq "codex") {
+                return @"
 Roslyn helper scripts are available in this directory and recommended.
 Run Roslyn commands sequentially (not in parallel) to avoid transient dotnet build locks.
 - scripts\roscli.cmd list-commands --ids-only
@@ -1770,18 +1782,10 @@ Compatibility helpers are also available:
 - powershell.exe -ExecutionPolicy Bypass -File ./roslyn-rename-symbol.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -Apply
 - powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
 Prefer using Roslyn helpers before editing. If they fail, continue with best effort.
-After editing, say explicitly whether Roslyn helpers were invoked successfully.
 "@
+            }
 
-$treatmentPromptClaude = @"
-Edit Target.cs in this directory.
-Task:
-1) Rename method Process(int value) to Handle(int value).
-2) Update only the matching invocation Process(1) to Handle(1).
-Constraints:
-- Do NOT change Process(string value).
-- Do NOT change Process("x").
-- Do NOT change string literal "Process".
+            return @"
 Roslyn helper scripts are available in this directory and recommended.
 Run Roslyn commands sequentially (not in parallel) to avoid transient dotnet build locks.
 For Bash environments, use:
@@ -1795,46 +1799,134 @@ For PowerShell environments, compatibility helpers are also available:
 - powershell.exe -ExecutionPolicy Bypass -File ./roslyn-rename-symbol.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -Apply
 - powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
 Prefer using Roslyn helpers before editing. If they fail, continue with best effort.
+"@
+        }
+        "brief-first" {
+            if ($Agent -eq "codex") {
+                return @"
+Roslyn helper scripts are available in this directory and recommended.
+Prioritize compact/surgical usage:
+- Skip list-commands unless a Roslyn call fails.
+- Prefer brief outputs and direct command targets.
+Run this sequence first:
+- powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
+Fallback direct Roslyn calls only if needed:
+- scripts\roscli.cmd nav.find_symbol Target.cs Process --brief true --max-results 50
+- scripts\roscli.cmd edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
+- scripts\roscli.cmd diag.get_file_diagnostics Target.cs
+"@
+            }
+
+            return @"
+Roslyn helper scripts are available in this directory and recommended.
+Prioritize compact/surgical usage:
+- Skip list-commands unless a Roslyn call fails.
+- Prefer brief outputs and direct command targets.
+For Bash environments, start with:
+- bash scripts/roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
+- bash scripts/roscli diag.get_file_diagnostics Target.cs
+Fallback with targeted symbol check only if needed:
+- bash scripts/roscli nav.find_symbol Target.cs Process --brief true --max-results 50
+For PowerShell environments, you may run:
+- powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
+"@
+        }
+        "surgical" {
+            return @"
+Roslyn helper scripts are available in this directory and recommended.
+Use the minimum Roslyn sequence:
+1) Run exactly one semantic rename+verify command first:
+- powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
+2) Do not call list-commands unless rename+verify fails.
+3) If fallback is required, use only:
+- scripts\roscli.cmd edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
+- scripts\roscli.cmd diag.get_file_diagnostics Target.cs
+"@
+        }
+    }
+}
+
+function Get-McpRoslynGuidanceBlock {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical")][string]$Profile
+    )
+
+    switch ($Profile) {
+        "standard" {
+            return @"
+Roslyn MCP resources are available for this run and should be used before manual edits.
+Use MCP in this sequence:
+1) list_mcp_resource_templates server=roslyn
+2) read_mcp_resource server=roslyn uri=roslyn://commands
+3) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=200
+4) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=100
+5) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+Use MCP calls sequentially and keep responses compact.
+"@
+        }
+        "brief-first" {
+            return @"
+Roslyn MCP resources are available for this run and should be used before manual edits.
+Prioritize compact MCP usage:
+1) Skip roslyn://commands unless direct command URIs fail.
+2) Run only targeted calls first:
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
+- read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
+- read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+"@
+        }
+        "surgical" {
+            return @"
+Roslyn MCP resources are available for this run and should be used before manual edits.
+Use the minimum MCP sequence:
+1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
+2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+Only call discovery/catalog resources if these fail.
+"@
+        }
+    }
+}
+
+$taskPromptCore = @"
+Edit Target.cs in this directory.
+Task:
+1) Rename method Process(int value) to Handle(int value).
+2) Update only the matching invocation Process(1) to Handle(1).
+Constraints:
+- Do NOT change Process(string value).
+- Do NOT change Process("x").
+- Do NOT change string literal "Process".
+"@
+
+$controlPrompt = @"
+$taskPromptCore
+Baseline condition:
+- Do NOT invoke Roslyn helper scripts/commands in this run.
+- Use plain editor/text operations only.
+After editing, briefly summarize what changed.
+"@
+
+$treatmentPromptCodex = @"
+$taskPromptCore
+$(Get-CliRoslynGuidanceBlock -Agent "codex" -Profile $RoslynGuidanceProfile)
+After editing, say explicitly whether Roslyn helpers were invoked successfully.
+"@
+
+$treatmentPromptClaude = @"
+$taskPromptCore
+$(Get-CliRoslynGuidanceBlock -Agent "claude" -Profile $RoslynGuidanceProfile)
 After editing, say explicitly whether Roslyn helpers were invoked successfully.
 "@
 
 $treatmentPromptCodexMcp = @"
-Edit Target.cs in this directory.
-Task:
-1) Rename method Process(int value) to Handle(int value).
-2) Update only the matching invocation Process(1) to Handle(1).
-Constraints:
-- Do NOT change Process(string value).
-- Do NOT change Process("x").
-- Do NOT change string literal "Process".
-Roslyn MCP resources are available for this run and should be used before manual edits.
-Use MCP in this sequence:
-1) list_mcp_resource_templates server=roslyn
-2) read_mcp_resource server=roslyn uri=roslyn://commands
-3) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=200
-4) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=100
-5) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
-Use MCP calls sequentially and keep responses compact.
+$taskPromptCore
+$(Get-McpRoslynGuidanceBlock -Profile $RoslynGuidanceProfile)
 After editing, say explicitly whether Roslyn MCP tools were invoked successfully.
 "@
 
 $treatmentPromptClaudeMcp = @"
-Edit Target.cs in this directory.
-Task:
-1) Rename method Process(int value) to Handle(int value).
-2) Update only the matching invocation Process(1) to Handle(1).
-Constraints:
-- Do NOT change Process(string value).
-- Do NOT change Process("x").
-- Do NOT change string literal "Process".
-Roslyn MCP resources are available for this run and should be used before manual edits.
-Use MCP in this sequence:
-1) list_mcp_resource_templates server=roslyn
-2) read_mcp_resource server=roslyn uri=roslyn://commands
-3) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=200
-4) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=100
-5) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
-Use MCP calls sequentially and keep responses compact.
+$taskPromptCore
+$(Get-McpRoslynGuidanceBlock -Profile $RoslynGuidanceProfile)
 After editing, say explicitly whether Roslyn MCP tools were invoked successfully.
 "@
 

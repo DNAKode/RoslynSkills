@@ -74,11 +74,14 @@ for reflection capture format.
 
 For lightweight real-agent bundles, `Run-LightweightUtilityGameRealRuns.ps1` now supports:
 
-- `-ConditionIds <id1,id2,...>` for explicit condition selection from manifest.
+- `-ConditionIds` for explicit condition selection from manifest.
+  - PowerShell example: `-ConditionIds @('control-text-only','treatment-roslyn-optional')`.
 - `-RoslynGuidanceProfile <standard|brief-first|verbose-first>` for treatment prompt posture experiments.
+- Condition-level environment overrides via manifest `conditions[*].environment` plus optional agent-scoped `conditions[*].agent_environment.<agent>`.
 - Per-task agent-home isolation (`CODEX_HOME` / `CLAUDE_CONFIG_DIR` + profile/appdata overrides) to reduce cross-run/session leakage.
 - Control-workspace Roslyn wrapper disablement (`scripts/roscli*` exits non-zero in control condition) to harden contamination prevention.
 - Host anchor checks around run/gate stages (fail-fast if harness cwd/git-root drifts from launch context).
+- Automatic gate skip when selected conditions do not include both control and treatment (writes explicit skip reason to `gate/agent-eval-gate.log`).
 
 ## 4. Validate run quality before scoring
 
@@ -108,6 +111,7 @@ Outputs:
   - per-task control/treatment comparison slices,
   - Roslyn tool adoption metrics,
   - reflection aggregates.
+- `run-efficiency-analysis.(json|md)` can now include generic condition-pair deltas (for treatment-only optimization bundles without control lanes).
 
 Optional report export:
 
@@ -128,7 +132,7 @@ With `--fail-on-warnings true`, the gate treats run-validation warnings as hard 
 For fast paired control/treatment smoke runs with transcript + token attribution artifacts:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 -OutputRoot <artifact-dir> [-IsolationRoot <temp-dir>] [-KeepIsolatedWorkspaces]
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 -OutputRoot <artifact-dir> [-IsolationRoot <temp-dir>] [-KeepIsolatedWorkspaces] [-RoslynGuidanceProfile <standard|brief-first|surgical>]
 ```
 
 Optional MCP treatment arm:
@@ -137,6 +141,10 @@ Optional MCP treatment arm:
 - The harness publishes `RoslynAgent.McpServer` once per bundle and wires MCP in isolated per-run configs only.
 - Control lanes remain MCP-free under the same agent-home/session isolation guarantees.
 - For codex MCP runs, prompt guidance should use resource APIs with explicit server id (`server=roslyn`) and command URIs (for example `roslyn://command/edit.rename_symbol?...`).
+- Use `-RoslynGuidanceProfile` to compare treatment prompt posture:
+  - `standard`: broad helper guidance (discovery + edit paths).
+  - `brief-first`: compact-first guidance (skip catalog unless blocked).
+  - `surgical`: minimum-call path (rename/verify first, fallback only on failure).
 
 Isolation and integrity defaults:
 
@@ -179,6 +187,22 @@ Use it to quantify:
 - `brief` usage vs non-brief usage by lane/command,
 - explicit `--brief` flag adoption,
 - output-size proxies (`output_chars`, `source_chars`) for payload pressure diagnostics.
+- discovery vs edit-like call mix (`cli/nav/ctx/diag` vs `edit/session/helper` families),
+- `cli.list_commands` overhead,
+- pre-edit exploration load (`roslyn_calls_before_first_edit`, `discovery_calls_before_first_edit`).
+
+Optional roscli load profiling (wrapper mode tuning):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Measure-RoscliLoadProfiles.ps1 [-IncludeStaleCheckOnProfiles] [-IncludeStaleCheckOffProfiles]
+```
+
+Wrapper knobs for high-call local sessions:
+
+- `ROSCLI_USE_PUBLISHED=1` to use cached published CLI instead of `dotnet run`.
+- `ROSCLI_STALE_CHECK=1` (optional; default is off) to auto-refresh published cache when watched source/config inputs change.
+- `ROSCLI_REFRESH_PUBLISHED=1` for one-call republish refresh.
+- `scripts/roscli-warm(.cmd)` to prewarm cache before long runs.
 
 ## 6. Interpretation rule
 

@@ -20,9 +20,25 @@
     },
     {
       "id": "treatment-roslyn-optional",
-      "name": "Treatment (Roslyn-enabled)",
+      "name": "Treatment (Roslyn-enabled, dotnet run)",
       "roslyn_tools_enabled": true,
-      "notes": "Roslyn tools available and optional."
+      "notes": "Roslyn tools available via scripts/roscli* using process-per-call dotnet run mode.",
+      "instruction_preamble": "Keep ROSCLI_USE_PUBLISHED disabled for this condition to measure process-per-call overhead.",
+      "environment": {
+        "ROSCLI_USE_PUBLISHED": "0",
+        "ROSCLI_STALE_CHECK": "1"
+      }
+    },
+    {
+      "id": "treatment-roslyn-published-cache",
+      "name": "Treatment (Roslyn-enabled, published cache)",
+      "roslyn_tools_enabled": true,
+      "notes": "Roslyn tools available via scripts/roscli* with published-DLL cache and stale-check disabled for low-latency loops.",
+      "instruction_preamble": "Keep ROSCLI_USE_PUBLISHED enabled and stale-check disabled for this condition to evaluate warmed published mode.",
+      "environment": {
+        "ROSCLI_USE_PUBLISHED": "1",
+        "ROSCLI_STALE_CHECK": "0"
+      }
     }
   ],
   "tasks": [
@@ -73,4 +89,3 @@
     }
   ]
 }
-

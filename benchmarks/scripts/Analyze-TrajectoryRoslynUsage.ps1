@@ -57,7 +57,14 @@ function Test-IsRoscliCommandText {
         return $false
     }
 
-    return ($CommandText -match "roscli(\.cmd)?\b" -or $CommandText -match "RoslynAgent\.Cli")
+    return (
+        $CommandText -match "roscli(\.cmd)?\b" -or
+        $CommandText -match "RoslynAgent\.Cli" -or
+        $CommandText -match "roslyn-list-commands\.ps1" -or
+        $CommandText -match "roslyn-find-symbol\.ps1" -or
+        $CommandText -match "roslyn-rename-symbol\.ps1" -or
+        $CommandText -match "roslyn-rename-and-verify\.ps1"
+    )
 }
 
 function Get-ExplicitBriefFlag {
@@ -66,12 +73,179 @@ function Get-ExplicitBriefFlag {
     return ($CommandText -match "(^|\s)--brief(\s+|=)(true|false)?(\s|$)")
 }
 
+function Get-CommandFamily {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$CommandId)
+
+    if ([string]::IsNullOrWhiteSpace($CommandId)) {
+        return "unknown"
+    }
+
+    if ($CommandId.StartsWith("roslyn.", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return "helper"
+    }
+
+    $separator = $CommandId.IndexOf(".")
+    if ($separator -le 0) {
+        return "other"
+    }
+
+    return $CommandId.Substring(0, $separator).ToLowerInvariant()
+}
+
+function Test-IsDiscoveryFamily {
+    param([Parameter(Mandatory = $true)][string]$Family)
+
+    return ($Family -in @("cli", "nav", "ctx", "diag"))
+}
+
+function Test-IsEditLikeFamily {
+    param([Parameter(Mandatory = $true)][string]$Family)
+
+    return ($Family -in @("edit", "session", "helper"))
+}
+
+function Test-IsCatalogCommand {
+    param([Parameter(Mandatory = $true)][string]$CommandId)
+
+    return ($CommandId -eq "cli.list_commands")
+}
+
+function Try-ParseRoscliEnvelope {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$OutputText)
+
+    if ([string]::IsNullOrWhiteSpace($OutputText)) {
+        return $null
+    }
+
+    try {
+        $direct = $OutputText | ConvertFrom-Json
+        if ($null -ne $direct) {
+            return [pscustomobject]@{
+                parsed = $direct
+                parse_mode = "direct"
+            }
+        }
+    } catch {
+    }
+
+    $jsonStart = $OutputText.IndexOf("{")
+    $jsonEnd = $OutputText.LastIndexOf("}")
+    if ($jsonStart -lt 0 -or $jsonEnd -le $jsonStart) {
+        return $null
+    }
+
+    $candidate = $OutputText.Substring($jsonStart, ($jsonEnd - $jsonStart + 1))
+    try {
+        $extracted = $candidate | ConvertFrom-Json
+        if ($null -ne $extracted) {
+            return [pscustomobject]@{
+                parsed = $extracted
+                parse_mode = "extracted"
+            }
+        }
+    } catch {
+    }
+
+    return $null
+}
+
+function Get-CommandInputPayload {
+    param(
+        [Parameter(Mandatory = $true)][string]$CommandText,
+        [AllowEmptyString()][string]$WorkspaceDirectory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CommandText)) {
+        return $null
+    }
+
+    $match = [regex]::Match($CommandText, "--input\s+@(?:""([^""]+)""|'([^']+)'|([^\s]+))", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) {
+        return $null
+    }
+
+    $rawPath = ""
+    for ($groupIndex = 1; $groupIndex -le 3; $groupIndex++) {
+        if ($match.Groups[$groupIndex].Success) {
+            $rawPath = Convert-ToText $match.Groups[$groupIndex].Value
+            break
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($rawPath)) {
+        return $null
+    }
+
+    $candidatePath = $rawPath.Trim()
+    if ($candidatePath.StartsWith("{") -or $candidatePath.StartsWith("[")) {
+        return $null
+    }
+
+    $isPathRooted = $false
+    try {
+        $isPathRooted = [System.IO.Path]::IsPathRooted($candidatePath)
+    } catch {
+        return $null
+    }
+
+    if (-not $isPathRooted) {
+        if ([string]::IsNullOrWhiteSpace($WorkspaceDirectory)) {
+            return $null
+        }
+
+        $candidatePath = Join-Path $WorkspaceDirectory $candidatePath
+    }
+
+    if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -LiteralPath $candidatePath -Raw | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Get-InputBriefValue {
+    param([AllowNull()][object]$InputPayload)
+
+    if ($null -eq $InputPayload) {
+        return [pscustomobject]@{
+            has_brief = $false
+            brief = $null
+        }
+    }
+
+    if ($InputPayload.PSObject.Properties.Name -contains "brief") {
+        return [pscustomobject]@{
+            has_brief = $true
+            brief = [bool]$InputPayload.brief
+        }
+    }
+
+    if (($InputPayload.PSObject.Properties.Name -contains "query") -and $null -ne $InputPayload.query -and ($InputPayload.query.PSObject.Properties.Name -contains "brief")) {
+        return [pscustomobject]@{
+            has_brief = $true
+            brief = [bool]$InputPayload.query.brief
+        }
+    }
+
+    return [pscustomobject]@{
+        has_brief = $false
+        brief = $null
+    }
+}
+
 function Add-RoscliResultRecord {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Records,
         [Parameter(Mandatory = $true)][string]$Lane,
         [Parameter(Mandatory = $true)][string]$Task,
         [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$TranscriptPath,
+        [AllowEmptyString()][string]$WorkspaceDirectory,
+        [Parameter(Mandatory = $true)][int]$EventIndex,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$CommandText,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$OutputText
     )
@@ -84,39 +258,78 @@ function Add-RoscliResultRecord {
         return
     }
 
-    try {
-        $parsed = $OutputText | ConvertFrom-Json
-    } catch {
+    $parsedEnvelope = Try-ParseRoscliEnvelope -OutputText $OutputText
+    if ($null -eq $parsedEnvelope) {
         return
     }
 
-    if ($null -eq $parsed -or -not ($parsed.PSObject.Properties.Name -contains "CommandId")) {
+    $parsed = $parsedEnvelope.parsed
+    if ($null -eq $parsed) {
         return
+    }
+
+    $commandId = ""
+    if ($parsed.PSObject.Properties.Name -contains "CommandId" -and $null -ne $parsed.CommandId) {
+        $commandId = Convert-ToText $parsed.CommandId
+    } elseif ($parsed.PSObject.Properties.Name -contains "command" -and $null -ne $parsed.command) {
+        $helperCommand = Convert-ToText $parsed.command
+        if ($helperCommand.StartsWith("roslyn.", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $commandId = $helperCommand
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($commandId)) {
+        return
+    }
+
+    $commandFamily = Get-CommandFamily -CommandId $commandId
+    $parsedData = $null
+    if ($parsed.PSObject.Properties.Name -contains "Data") {
+        $parsedData = $parsed.Data
     }
 
     $briefField = $false
     $briefValue = $null
-    if ($null -ne $parsed.Data -and ($parsed.Data.PSObject.Properties.Name -contains "query") -and $null -ne $parsed.Data.query -and ($parsed.Data.query.PSObject.Properties.Name -contains "brief")) {
+    if ($null -ne $parsedData -and ($parsedData.PSObject.Properties.Name -contains "query") -and $null -ne $parsedData.query -and ($parsedData.query.PSObject.Properties.Name -contains "brief")) {
         $briefField = $true
-        $briefValue = [bool]$parsed.Data.query.brief
+        $briefValue = [bool]$parsedData.query.brief
     }
 
     $sourceChars = $null
-    if ($null -ne $parsed.Data -and ($parsed.Data.PSObject.Properties.Name -contains "source") -and $null -ne $parsed.Data.source -and ($parsed.Data.source.PSObject.Properties.Name -contains "character_count")) {
-        $sourceChars = [int]$parsed.Data.source.character_count
+    if ($null -ne $parsedData -and ($parsedData.PSObject.Properties.Name -contains "source") -and $null -ne $parsedData.source -and ($parsedData.source.PSObject.Properties.Name -contains "character_count")) {
+        $sourceChars = [int]$parsedData.source.character_count
     }
+
+    $inputPayload = Get-CommandInputPayload -CommandText $CommandText -WorkspaceDirectory $WorkspaceDirectory
+    $inputBriefInfo = Get-InputBriefValue -InputPayload $inputPayload
+    $inputBriefField = [bool]$inputBriefInfo.has_brief
+    $inputBriefValue = $inputBriefInfo.brief
+
+    $effectiveBriefField = ($briefField -or $inputBriefField)
+    $effectiveBriefValue = if ($briefField) { $briefValue } elseif ($inputBriefField) { $inputBriefValue } else { $null }
 
     $Records.Add([pscustomobject]@{
             lane = $Lane
             task = $Task
             source = $Source
-            command_id = (Convert-ToText $parsed.CommandId)
+            transcript_path = $TranscriptPath
+            event_index = $EventIndex
+            command_id = $commandId
+            command_family = $commandFamily
+            is_discovery_call = (Test-IsDiscoveryFamily -Family $commandFamily)
+            is_edit_like_call = (Test-IsEditLikeFamily -Family $commandFamily)
+            is_catalog_call = (Test-IsCatalogCommand -CommandId $commandId)
             brief_field = $briefField
             brief_value = $briefValue
+            input_brief_field = $inputBriefField
+            input_brief_value = $inputBriefValue
+            effective_brief_field = $effectiveBriefField
+            effective_brief_value = $effectiveBriefValue
             explicit_brief_flag = (Get-ExplicitBriefFlag -CommandText $CommandText)
             output_chars = $OutputText.Length
             source_chars = $sourceChars
             command_text = $CommandText
+            parse_mode = [string]$parsedEnvelope.parse_mode
         }) | Out-Null
 }
 
@@ -142,20 +355,134 @@ function Get-TranscriptEvents {
     return $events.ToArray()
 }
 
-function Get-GroupSummary {
-    param([Parameter(Mandatory = $true)][object[]]$Rows)
+function Get-NullableAverage {
+    param([double[]]$Values)
 
-    $outputChars = @($Rows | Where-Object { $null -ne $_.output_chars } | ForEach-Object { [double]$_.output_chars })
-    $sourceChars = @($Rows | Where-Object { $null -ne $_.source_chars } | ForEach-Object { [double]$_.source_chars })
+    if ($null -eq $Values -or $Values.Count -eq 0) {
+        return $null
+    }
+
+    return [Math]::Round(($Values | Measure-Object -Average).Average, 3)
+}
+
+function Get-TranscriptTimelineRows {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Rows)
+
+    $rowsArray = @($Rows)
+    $rowCount = ($rowsArray | Measure-Object).Count
+    if ($rowCount -eq 0) {
+        return @()
+    }
+
+    $timeline = New-Object System.Collections.Generic.List[object]
+    $byTranscript = @($rowsArray | Group-Object transcript_path)
+    foreach ($group in $byTranscript) {
+        $ordered = @($group.Group | Sort-Object event_index)
+        $orderedCount = ($ordered | Measure-Object).Count
+        if ($orderedCount -eq 0) {
+            continue
+        }
+
+        $first = $ordered[0]
+        $firstEdit = @($ordered | Where-Object { $_.is_edit_like_call } | Select-Object -First 1)
+        $firstEditIndex = if ($firstEdit.Count -eq 0) { $null } else { [int]$firstEdit[0].event_index }
+
+        $rowsBeforeEdit = if ($firstEdit.Count -eq 0) {
+            @($ordered)
+        } else {
+            @($ordered | Where-Object { [int]$_.event_index -lt $firstEditIndex })
+        }
+
+        $timeline.Add([pscustomobject]@{
+                transcript_path = [string]$group.Name
+                lane = [string]$first.lane
+                task = [string]$first.task
+                source = [string]$first.source
+                first_roslyn_event_index = [int]$first.event_index
+                first_edit_event_index = $firstEditIndex
+                has_edit_call = ($null -ne $firstEditIndex)
+                roslyn_calls_total = (($ordered | Measure-Object).Count)
+                roslyn_calls_before_first_edit = (($rowsBeforeEdit | Measure-Object).Count)
+                discovery_calls_before_first_edit = @($rowsBeforeEdit | Where-Object { $_.is_discovery_call }).Count
+                list_commands_before_first_edit = @($rowsBeforeEdit | Where-Object { $_.is_catalog_call }).Count
+            }) | Out-Null
+    }
+
+    return @($timeline.ToArray())
+}
+
+function Get-TimelineSummary {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Rows)
+
+    $rowsArray = @($Rows)
+    $timelineRows = @(Get-TranscriptTimelineRows -Rows $rowsArray)
+    $timelineCount = ($timelineRows | Measure-Object).Count
+    if ($timelineCount -eq 0) {
+        return [ordered]@{
+            transcript_count = 0
+            transcripts_with_edit_calls = 0
+            avg_roslyn_calls_per_transcript = $null
+            avg_roslyn_calls_before_first_edit = $null
+            avg_discovery_calls_before_first_edit = $null
+            avg_list_commands_before_first_edit = $null
+        }
+    }
+
+    $withEdit = @($timelineRows | Where-Object { $_.has_edit_call })
+    $withEditCount = ($withEdit | Measure-Object).Count
+    $rowsForBeforeEdit = if ($withEditCount -gt 0) { $withEdit } else { $timelineRows }
 
     return [ordered]@{
-        count = $Rows.Count
-        with_brief_field = @($Rows | Where-Object { $_.brief_field }).Count
-        brief_true = @($Rows | Where-Object { $_.brief_field -and $_.brief_value -eq $true }).Count
-        brief_false = @($Rows | Where-Object { $_.brief_field -and $_.brief_value -eq $false }).Count
-        explicit_brief_flag = @($Rows | Where-Object { $_.explicit_brief_flag }).Count
+        transcript_count = $timelineCount
+        transcripts_with_edit_calls = $withEditCount
+        avg_roslyn_calls_per_transcript = Get-NullableAverage -Values @($timelineRows | ForEach-Object { [double]$_.roslyn_calls_total })
+        avg_roslyn_calls_before_first_edit = Get-NullableAverage -Values @($rowsForBeforeEdit | ForEach-Object { [double]$_.roslyn_calls_before_first_edit })
+        avg_discovery_calls_before_first_edit = Get-NullableAverage -Values @($rowsForBeforeEdit | ForEach-Object { [double]$_.discovery_calls_before_first_edit })
+        avg_list_commands_before_first_edit = Get-NullableAverage -Values @($rowsForBeforeEdit | ForEach-Object { [double]$_.list_commands_before_first_edit })
+    }
+}
+
+function Get-GroupSummary {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Rows)
+
+    $rowsArray = @($Rows)
+    $outputChars = @($rowsArray | Where-Object { $null -ne $_.output_chars } | ForEach-Object { [double]$_.output_chars })
+    $sourceChars = @($rowsArray | Where-Object { $null -ne $_.source_chars } | ForEach-Object { [double]$_.source_chars })
+    $discoveryCalls = @($rowsArray | Where-Object { $_.is_discovery_call }).Count
+    $editLikeCalls = @($rowsArray | Where-Object { $_.is_edit_like_call }).Count
+    $helperCalls = @($rowsArray | Where-Object { $_.command_family -eq "helper" }).Count
+    $listCommandsCalls = @($rowsArray | Where-Object { $_.is_catalog_call }).Count
+    $parsedDirect = @($rowsArray | Where-Object { $_.parse_mode -eq "direct" }).Count
+    $parsedExtracted = @($rowsArray | Where-Object { $_.parse_mode -eq "extracted" }).Count
+    $timeline = Get-TimelineSummary -Rows $rowsArray
+
+    return [ordered]@{
+        count = (($rowsArray | Measure-Object).Count)
+        with_brief_field = @($rowsArray | Where-Object { $_.brief_field }).Count
+        brief_true = @($rowsArray | Where-Object { $_.brief_field -and $_.brief_value -eq $true }).Count
+        brief_false = @($rowsArray | Where-Object { $_.brief_field -and $_.brief_value -eq $false }).Count
+        input_brief_field = @($rowsArray | Where-Object { $_.input_brief_field }).Count
+        input_brief_true = @($rowsArray | Where-Object { $_.input_brief_field -and $_.input_brief_value -eq $true }).Count
+        input_brief_false = @($rowsArray | Where-Object { $_.input_brief_field -and $_.input_brief_value -eq $false }).Count
+        effective_brief_field = @($rowsArray | Where-Object { $_.effective_brief_field }).Count
+        effective_brief_true = @($rowsArray | Where-Object { $_.effective_brief_field -and $_.effective_brief_value -eq $true }).Count
+        effective_brief_false = @($rowsArray | Where-Object { $_.effective_brief_field -and $_.effective_brief_value -eq $false }).Count
+        explicit_brief_flag = @($rowsArray | Where-Object { $_.explicit_brief_flag }).Count
+        parsed_direct = $parsedDirect
+        parsed_extracted = $parsedExtracted
         avg_output_chars = if ($outputChars.Count -eq 0) { $null } else { [Math]::Round(($outputChars | Measure-Object -Average).Average, 2) }
         avg_source_chars = if ($sourceChars.Count -eq 0) { $null } else { [Math]::Round(($sourceChars | Measure-Object -Average).Average, 2) }
+        discovery_calls = $discoveryCalls
+        edit_like_calls = $editLikeCalls
+        helper_calls = $helperCalls
+        list_commands_calls = $listCommandsCalls
+        discovery_to_edit_ratio = if ($editLikeCalls -eq 0) { $null } else { [Math]::Round(([double]$discoveryCalls / [double]$editLikeCalls), 3) }
+        transcript_count = $timeline.transcript_count
+        transcripts_with_edit_calls = $timeline.transcripts_with_edit_calls
+        avg_roslyn_calls_per_transcript = $timeline.avg_roslyn_calls_per_transcript
+        avg_roslyn_calls_before_first_edit = $timeline.avg_roslyn_calls_before_first_edit
+        avg_discovery_calls_before_first_edit = $timeline.avg_discovery_calls_before_first_edit
+        avg_list_commands_before_first_edit = $timeline.avg_list_commands_before_first_edit
     }
 }
 
@@ -164,17 +491,22 @@ $allRecords = New-Object System.Collections.Generic.List[object]
 
 foreach ($transcript in (Get-ChildItem $resolvedTrajectoriesRoot -Recurse -Filter "transcript.jsonl")) {
     $meta = Get-LaneAndTask -ResolvedTrajectoriesRoot $resolvedTrajectoriesRoot -TranscriptPath $transcript.FullName
+    $workspaceDirectory = Join-Path (Join-Path $resolvedTrajectoriesRoot $meta.lane) "workspace"
     $events = @(Get-TranscriptEvents -TranscriptPath $transcript.FullName)
 
     $claudeCommandsByToolUseId = @{}
 
-    foreach ($event in $events) {
+    for ($eventIndex = 0; $eventIndex -lt $events.Count; $eventIndex++) {
+        $event = $events[$eventIndex]
         if ($event.type -eq "item.completed" -and $null -ne $event.item -and $event.item.type -eq "command_execution") {
             Add-RoscliResultRecord `
                 -Records $allRecords `
                 -Lane $meta.lane `
                 -Task $meta.task `
                 -Source "codex" `
+                -TranscriptPath $transcript.FullName `
+                -WorkspaceDirectory $workspaceDirectory `
+                -EventIndex $eventIndex `
                 -CommandText (Convert-ToText $event.item.command) `
                 -OutputText (Convert-ToText $event.item.aggregated_output)
             continue
@@ -211,6 +543,9 @@ foreach ($transcript in (Get-ChildItem $resolvedTrajectoriesRoot -Recurse -Filte
                     -Lane $meta.lane `
                     -Task $meta.task `
                     -Source "claude" `
+                    -TranscriptPath $transcript.FullName `
+                    -WorkspaceDirectory $workspaceDirectory `
+                    -EventIndex $eventIndex `
                     -CommandText (Convert-ToText $claudeCommandsByToolUseId[$toolUseId]) `
                     -OutputText (Convert-ToText $content.content)
             }
@@ -245,10 +580,29 @@ $byCommand = @(
     }
 )
 
+$bySource = @(
+    $records |
+    Group-Object source |
+    Sort-Object Name |
+    ForEach-Object {
+        [ordered]@{
+            source = $_.Name
+            summary = Get-GroupSummary -Rows @($_.Group)
+        }
+    }
+)
+
+$timelineRows = @(Get-TranscriptTimelineRows -Rows $records)
+$timelineExamples = @(
+    $timelineRows |
+    Sort-Object -Property @{ Expression = "discovery_calls_before_first_edit"; Descending = $true }, @{ Expression = "roslyn_calls_total"; Descending = $true } |
+    Select-Object -First 10 lane, task, source, roslyn_calls_total, roslyn_calls_before_first_edit, discovery_calls_before_first_edit, list_commands_before_first_edit, first_edit_event_index
+)
+
 $examples = @(
     $records |
-    Where-Object { $_.brief_field } |
-    Select-Object -First 10 lane, task, source, command_id, brief_value, source_chars, output_chars
+    Where-Object { $_.effective_brief_field } |
+    Select-Object -First 10 lane, task, source, command_id, effective_brief_value, source_chars, output_chars
 )
 
 $report = [ordered]@{
@@ -256,7 +610,9 @@ $report = [ordered]@{
     trajectories_root = $resolvedTrajectoriesRoot
     overall = $overall
     by_lane = $byLane
+    by_source = $bySource
     by_command = $byCommand
+    timeline_examples = $timelineExamples
     brief_examples = $examples
 }
 
@@ -287,27 +643,63 @@ $markdown.Add("")
 $markdown.Add("| Metric | Value |")
 $markdown.Add("|---|---:|")
 $markdown.Add("| Parsed Roslyn results | $($report.overall.count) |")
-$markdown.Add("| Results with brief field | $($report.overall.with_brief_field) |")
-$markdown.Add("| brief=true | $($report.overall.brief_true) |")
-$markdown.Add("| brief=false | $($report.overall.brief_false) |")
+$markdown.Add("| Results with response brief field | $($report.overall.with_brief_field) |")
+$markdown.Add("| Response brief=true | $($report.overall.brief_true) |")
+$markdown.Add("| Response brief=false | $($report.overall.brief_false) |")
+$markdown.Add("| Results with input brief field | $($report.overall.input_brief_field) |")
+$markdown.Add("| Input brief=true | $($report.overall.input_brief_true) |")
+$markdown.Add("| Input brief=false | $($report.overall.input_brief_false) |")
+$markdown.Add("| Results with effective brief value | $($report.overall.effective_brief_field) |")
+$markdown.Add("| Effective brief=true | $($report.overall.effective_brief_true) |")
+$markdown.Add("| Effective brief=false | $($report.overall.effective_brief_false) |")
 $markdown.Add("| Explicit --brief flags | $($report.overall.explicit_brief_flag) |")
+$markdown.Add("| Parsed via direct JSON | $($report.overall.parsed_direct) |")
+$markdown.Add("| Parsed via extracted JSON envelope | $($report.overall.parsed_extracted) |")
+$markdown.Add("| Discovery calls | $($report.overall.discovery_calls) |")
+$markdown.Add("| Edit-like calls | $($report.overall.edit_like_calls) |")
+$markdown.Add("| Helper calls | $($report.overall.helper_calls) |")
+$markdown.Add("| list-commands calls | $($report.overall.list_commands_calls) |")
+$markdown.Add("| Discovery/Edit ratio | $($report.overall.discovery_to_edit_ratio) |")
+$markdown.Add("| Transcript count | $($report.overall.transcript_count) |")
+$markdown.Add("| Transcripts with edit calls | $($report.overall.transcripts_with_edit_calls) |")
+$markdown.Add("| Avg Roslyn calls/transcript | $($report.overall.avg_roslyn_calls_per_transcript) |")
+$markdown.Add("| Avg Roslyn calls before first edit | $($report.overall.avg_roslyn_calls_before_first_edit) |")
+$markdown.Add("| Avg discovery calls before first edit | $($report.overall.avg_discovery_calls_before_first_edit) |")
+$markdown.Add("| Avg list-commands before first edit | $($report.overall.avg_list_commands_before_first_edit) |")
 $markdown.Add("| Avg output chars | $($report.overall.avg_output_chars) |")
 $markdown.Add("| Avg source chars | $($report.overall.avg_source_chars) |")
 $markdown.Add("")
 $markdown.Add("## By Lane")
 $markdown.Add("")
-$markdown.Add("| Lane | Count | brief=true | brief=false | Explicit --brief | Avg output chars |")
-$markdown.Add("|---|---:|---:|---:|---:|---:|")
+$markdown.Add("| Lane | Count | Discovery Calls | Edit-like Calls | list-commands | Discovery/Edit | Avg discovery before first edit | Avg output chars |")
+$markdown.Add("|---|---:|---:|---:|---:|---:|---:|---:|")
 foreach ($lane in $report.by_lane) {
-    $markdown.Add("| $($lane.lane) | $($lane.summary.count) | $($lane.summary.brief_true) | $($lane.summary.brief_false) | $($lane.summary.explicit_brief_flag) | $($lane.summary.avg_output_chars) |")
+    $markdown.Add("| $($lane.lane) | $($lane.summary.count) | $($lane.summary.discovery_calls) | $($lane.summary.edit_like_calls) | $($lane.summary.list_commands_calls) | $($lane.summary.discovery_to_edit_ratio) | $($lane.summary.avg_discovery_calls_before_first_edit) | $($lane.summary.avg_output_chars) |")
+}
+$markdown.Add("")
+$markdown.Add("## By Source")
+$markdown.Add("")
+$markdown.Add("| Source | Count | Effective brief=true | Discovery Calls | Edit-like Calls | list-commands | Discovery/Edit |")
+$markdown.Add("|---|---:|---:|---:|---:|---:|---:|")
+foreach ($source in $report.by_source) {
+    $markdown.Add("| $($source.source) | $($source.summary.count) | $($source.summary.effective_brief_true) | $($source.summary.discovery_calls) | $($source.summary.edit_like_calls) | $($source.summary.list_commands_calls) | $($source.summary.discovery_to_edit_ratio) |")
 }
 $markdown.Add("")
 $markdown.Add("## By Command")
 $markdown.Add("")
-$markdown.Add("| Command | Count | brief=true | brief=false | Avg output chars |")
-$markdown.Add("|---|---:|---:|---:|---:|")
+$markdown.Add("| Command | Family | Count | Effective brief=true | Effective brief=false | Avg output chars |")
+$markdown.Add("|---|---|---:|---:|---:|---:|")
 foreach ($command in $report.by_command) {
-    $markdown.Add("| $($command.command_id) | $($command.summary.count) | $($command.summary.brief_true) | $($command.summary.brief_false) | $($command.summary.avg_output_chars) |")
+    $family = Get-CommandFamily -CommandId ([string]$command.command_id)
+    $markdown.Add("| $($command.command_id) | $family | $($command.summary.count) | $($command.summary.effective_brief_true) | $($command.summary.effective_brief_false) | $($command.summary.avg_output_chars) |")
+}
+$markdown.Add("")
+$markdown.Add("## High Exploration Examples")
+$markdown.Add("")
+$markdown.Add("| Lane | Task | Source | Roslyn Calls | Calls Before First Edit | Discovery Before First Edit | list-commands Before First Edit | First Edit Event Index |")
+$markdown.Add("|---|---|---|---:|---:|---:|---:|---:|")
+foreach ($row in $report.timeline_examples) {
+    $markdown.Add("| $($row.lane) | $($row.task) | $($row.source) | $($row.roslyn_calls_total) | $($row.roslyn_calls_before_first_edit) | $($row.discovery_calls_before_first_edit) | $($row.list_commands_before_first_edit) | $($row.first_edit_event_index) |")
 }
 
 $markdown | Set-Content -Path $OutputMarkdownPath

@@ -297,6 +297,209 @@ Decision:
 - Promote Claude MCP `roslyn_*` telemetry from provisional to trusted for this harness version.
 - Keep collecting replicate bundles before claiming stable MCP-vs-control latency wins.
 
+### F-2026-02-09-11: Paired guidance-profile lane now supports direct prompt-posture experiments; early codex smoke converged to the same one-call Roslyn helper path
+
+Evidence:
+
+- Harness/profile implementation:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`-RoslynGuidanceProfile standard|brief-first|surgical`)
+- New codex paired bundles:
+  - `artifacts/paired-guidance-standard-codex-smoke-r1/paired-run-summary.json`
+  - `artifacts/paired-guidance-surgical-codex-smoke-r2/paired-run-summary.json`
+- Trajectory telemetry:
+  - `artifacts/paired-guidance-standard-codex-smoke-r1/trajectory-roslyn-analysis.md`
+  - `artifacts/paired-guidance-surgical-codex-smoke-r2/trajectory-roslyn-analysis.md`
+
+Result:
+
+- `standard` bundle:
+  - control: `15.365s`, `36,923` tokens
+  - treatment: `11.942s`, `19,065` tokens
+  - treatment Roslyn usage: `1/1` successful call
+- `surgical` bundle:
+  - control: `12.576s`, `36,914` tokens
+  - treatment: `11.484s`, `18,646` tokens
+  - treatment Roslyn usage: `1/1` successful call
+- In both bundles, trajectory analysis reports:
+  - command: `roslyn.rename_and_verify` (helper family),
+  - discovery calls before first edit: `0`,
+  - `cli.list_commands` calls: `0`.
+
+Interpretation:
+
+- The new guidance-profile arm is working and measurable.
+- On this rename microtask, codex treatment behavior appears dominated by the one-shot helper path, so `standard` and `surgical` produce effectively the same Roslyn usage trajectory.
+- For this specific task shape, compact/surgical guidance did not unlock a distinct call pattern because the model already selected the minimal path.
+
+Decision:
+
+- Keep guidance-profile experiments enabled for paired runs.
+- Use higher-ambiguity/multi-step tasks to test whether profiles diverge in discovery load and token efficiency; this microtask is now mainly a harness sanity check.
+
+### F-2026-02-10-12: Roscli cached published mode materially reduces per-call latency under varied command loads
+
+Evidence:
+
+- Wrapper changes:
+  - `scripts/roscli.cmd` (`ROSCLI_USE_PUBLISHED`, `ROSCLI_REFRESH_PUBLISHED`)
+  - `scripts/roscli` (`ROSCLI_USE_PUBLISHED`, `ROSCLI_REFRESH_PUBLISHED`)
+  - `scripts/roscli-warm.cmd`
+  - `scripts/roscli-warm`
+- Load benchmark:
+  - `benchmarks/scripts/Measure-RoscliLoadProfiles.ps1`
+  - `artifacts/roscli-load-profiles/roscli-load-profiles-v6.json`
+  - `artifacts/roscli-load-profiles/roscli-load-profiles-v6.md`
+
+Result (avg ms/call, dotnet-run vs published-prewarmed):
+
+- `system.ping`:
+  - load 1: `2909.06` vs `147.79` (`19.68x` speedup)
+  - load 5: `2886.67` vs `142.50` (`20.26x`)
+  - load 20: `2891.20` vs `147.81` (`19.56x`)
+- `cli.list_commands.compact`:
+  - load 1: `2786.11` vs `150.88` (`18.47x`)
+  - load 5: `2947.12` vs `188.43` (`15.64x`)
+  - load 20: `2928.56` vs `145.03` (`20.19x`)
+- `nav.find_symbol`:
+  - load 1: `3742.49` vs `995.82` (`3.76x`)
+  - load 5: `3833.99` vs `992.58` (`3.86x`)
+  - load 20: `3864.51` vs `1011.55` (`3.82x`)
+
+Interpretation:
+
+- Process-per-call `dotnet run` overhead remains dominant for lightweight Roslyn calls.
+- Published cached execution sharply improves responsiveness for repeated agent tool calls, including semantic calls.
+- Prewarmed and cached profiles are near-identical in steady state; prewarm mainly removes first-call variance.
+
+Decision:
+
+- Keep default wrapper behavior unchanged for development correctness (`dotnet run`), but use `ROSCLI_USE_PUBLISHED=1` in high-volume agent sessions.
+- Add explicit warm commands (`roscli-warm`) and include this mode in skill/README guidance.
+
+### F-2026-02-10-13: Published-cache wrapper mode improved call startup cost but did not yet translate into better end-to-end agent metrics on a single open-ended task replicate
+
+Evidence:
+
+- Real-run bundle:
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v4/trajectory-run-summary.json`
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v4/run-efficiency-analysis.md`
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v4/trajectory-roslyn-analysis.md`
+- Harness/prompt updates used in this run:
+  - `benchmarks/scripts/Run-LightweightUtilityGameRealRuns.ps1`
+  - `benchmarks/experiments/lightweight-utility-game-v1/manifest.json`
+
+Result (Codex, task `task-001-initial-build`, both lanes succeeded):
+
+- `treatment-roslyn-optional` (`ROSCLI_USE_PUBLISHED=0`):
+  - elapsed `330.902s`
+  - total tokens `1,268,650`
+  - command round-trips `33`
+- `treatment-roslyn-published-cache` (`ROSCLI_USE_PUBLISHED=1`):
+  - elapsed `424.935s`
+  - total tokens `1,390,370`
+  - command round-trips `41`
+
+Interpretation:
+
+- Startup optimization is real at component level (see `F-2026-02-10-12`) but can be overshadowed by trajectory variance on unconstrained tasks.
+- Treatment runs diverged in code structure and exploration depth (more files/round-trips in published lane), dominating wrapper-level savings.
+- `diag.get_solution_snapshot` remained a high-payload risk when not tightly scoped, reinforcing bounded-diagnostics guidance.
+
+Decision:
+
+- Keep published mode as a recommended high-call execution setting, but do not claim end-to-end speed/token benefit from single creative-task replicates.
+- Prioritize replicate-backed comparisons on tighter, higher-ambiguity edit tasks with stricter trajectory controls (same acceptance clauses, constrained edit targets, bounded diagnostic payload policies).
+
+### F-2026-02-10-14: Efficiency reporting needed pairwise deltas beyond control-vs-treatment for orthogonal treatment-only experiments
+
+Evidence:
+
+- Script update:
+  - `benchmarks/scripts/Analyze-RunEfficiency.ps1`
+- Regenerated report:
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v4/run-efficiency-analysis.md`
+
+Result:
+
+- Added `by_agent_condition_pair_delta` JSON section and markdown `Condition Pair Delta` table.
+- Treatment-only runs now emit direct condition comparisons without requiring a control lane.
+- Example from `20260210-lightweight-roscli-mode-v4`:
+  - baseline `treatment-roslyn-optional` vs compare `treatment-roslyn-published-cache`
+  - elapsed ratio `1.2842`
+  - token ratio `1.0959`
+  - round-trip delta `+8`
+
+Interpretation:
+
+- Orthogonal research arms (transport mode, wrapper mode, guidance posture) frequently compare treatment variants directly; control-only deltas were insufficient for fast decision-making.
+
+Decision:
+
+- Keep control-vs-treatment deltas for core claims, and use pairwise condition deltas as default readout for treatment-only optimization experiments.
+
+### F-2026-02-10-15: Published-cache stale-check probes impose significant per-call overhead; low-latency default should keep stale-check opt-in
+
+Evidence:
+
+- Wrapper behavior:
+  - `scripts/roscli.cmd`
+  - `scripts/roscli`
+- Load benchmark artifacts:
+  - `artifacts/roscli-load-profiles/roscli-load-profiles-v9.json`
+  - `artifacts/roscli-load-profiles/roscli-load-profiles-v9.md`
+
+Result (stale-check on/off ratios within v9):
+
+- `published_cached` vs `published_cached_stale_off`:
+  - `system.ping`: `3.15x-3.70x` slower with stale-check on (loads `5/20`).
+  - `cli.list_commands.compact`: `3.22x-3.66x` slower with stale-check on (loads `5/20`).
+  - `nav.find_symbol`: `1.29x-1.42x` slower with stale-check on (loads `5/20`).
+- Same pattern held for prewarmed profile (`published_prewarmed` vs `published_prewarmed_stale_off`).
+
+Interpretation:
+
+- The stale-check path currently adds enough wrapper overhead to erase much of the published-cache latency benefit for light commands.
+- This overhead is wrapper-level and independent from agent trajectory variance.
+
+Decision:
+
+- Set wrapper default to fast mode (`ROSCLI_STALE_CHECK=0` unless explicitly enabled).
+- Keep explicit safety knobs:
+  - `ROSCLI_REFRESH_PUBLISHED=1` for one-call forced refresh.
+  - `ROSCLI_STALE_CHECK=1` for source-development loops where automatic refresh checks matter more than per-call speed.
+
+### F-2026-02-10-16: Follow-up treatment replicate after stale-check default shift showed large published-mode gains, but direction is still replicate-sensitive
+
+Evidence:
+
+- Prior replicate:
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v4/run-efficiency-analysis.md`
+- Follow-up replicate:
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v5/run-efficiency-analysis.md`
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v5/trajectory-roslyn-analysis.md`
+  - `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v5/trajectory-run-summary.json`
+
+Result (Codex, same task id, treatment-vs-treatment):
+
+- v4 (`published` stale-check on):
+  - elapsed ratio (published/dotnet-run): `1.2842`
+  - token ratio: `1.0959`
+  - round-trip delta: `+8`
+- v5 (`published` stale-check off):
+  - elapsed ratio (published/dotnet-run): `0.6328`
+  - token ratio: `0.428`
+  - round-trip delta: `-17`
+
+Interpretation:
+
+- Wrapper-mode defaults materially influence agent trajectory cost in this task family.
+- Single-run directional claims are unstable; the same task can reverse treatment ranking across adjacent replicates.
+
+Decision:
+
+- Keep stale-check disabled by default in published mode.
+- Require replicate bundles (not single-run reads) before promoting wrapper-mode claims to report-level conclusions.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

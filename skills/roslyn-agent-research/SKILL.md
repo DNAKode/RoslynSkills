@@ -23,6 +23,25 @@ Prefer Roslyn commands for navigation, context, diagnostics, repair, and structu
 
 Mandatory policy: if a `.cs` read/edit uses non-Roslyn tooling, append a self-reflection entry to `ROSLYN_FALLBACK_REFLECTION_LOG.md` before continuing.
 
+## Roscli performance mode (high call volume)
+
+For longer agent loops with many Roslyn calls, prefer cached published execution:
+
+```powershell
+scripts\roscli-warm.cmd
+$env:ROSCLI_USE_PUBLISHED = "1"
+```
+
+Cross-platform:
+
+```bash
+./scripts/roscli-warm
+export ROSCLI_USE_PUBLISHED=1
+```
+
+Use `ROSCLI_REFRESH_PUBLISHED=1` for one call when binaries need refresh after local source changes.
+`ROSCLI_STALE_CHECK` is disabled by default in published mode for low latency; enable `ROSCLI_STALE_CHECK=1` during active roscli source development when automatic republish checks matter more than call speed.
+
 ## Simple command mode (positional + optional flags)
 
 Use direct command invocation for common workflows and append optional flags directly:

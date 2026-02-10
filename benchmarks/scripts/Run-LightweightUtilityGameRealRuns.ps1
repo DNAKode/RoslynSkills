@@ -202,18 +202,127 @@ function Write-RoscliShim {
     New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
 
     $cmdPath = Join-Path $scriptsDir "roscli.cmd"
-    $cmdBody = @"
+    $cmdBody = @'
 @echo off
-dotnet run --project src/RoslynAgent.Cli -- %*
-"@
+setlocal
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
+
+set "USE_PUBLISHED=%ROSCLI_USE_PUBLISHED%"
+if /I "%USE_PUBLISHED%"=="1" goto :use_published
+if /I "%USE_PUBLISHED%"=="true" goto :use_published
+if /I "%USE_PUBLISHED%"=="yes" goto :use_published
+if /I "%USE_PUBLISHED%"=="on" goto :use_published
+goto :use_dotnet_run
+
+:use_published
+set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
+set "CLI_DLL=%CACHE_DIR%\RoslynAgent.Cli.dll"
+set "CACHE_STAMP=%CACHE_DIR%\publish.stamp"
+set "REFRESH_PUBLISHED=%ROSCLI_REFRESH_PUBLISHED%"
+set "STALE_CHECK=%ROSCLI_STALE_CHECK%"
+if "%STALE_CHECK%"=="" set "STALE_CHECK=0"
+set "NEED_PUBLISH=0"
+if not exist "%CLI_DLL%" set "NEED_PUBLISH=1"
+if /I "%REFRESH_PUBLISHED%"=="1" set "NEED_PUBLISH=1"
+if /I "%REFRESH_PUBLISHED%"=="true" set "NEED_PUBLISH=1"
+if /I "%REFRESH_PUBLISHED%"=="yes" set "NEED_PUBLISH=1"
+if /I "%REFRESH_PUBLISHED%"=="on" set "NEED_PUBLISH=1"
+
+if "%NEED_PUBLISH%"=="0" (
+    if /I not "%STALE_CHECK%"=="0" if /I not "%STALE_CHECK%"=="false" if /I not "%STALE_CHECK%"=="no" if /I not "%STALE_CHECK%"=="off" (
+        call :check_cache_stale "%REPO_ROOT%" "%CACHE_STAMP%"
+        if errorlevel 1 set "NEED_PUBLISH=1"
+    )
+)
+
+if "%NEED_PUBLISH%"=="1" (
+    dotnet publish "%REPO_ROOT%\src\RoslynAgent.Cli" -c Release -o "%CACHE_DIR%" --nologo
+    if errorlevel 1 (
+        set "EXIT_CODE=%ERRORLEVEL%"
+        goto :done
+    )
+    powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "(Get-Date).ToUniversalTime().ToString('o') | Set-Content -LiteralPath '%CACHE_STAMP%' -NoNewline" >nul 2>nul
+)
+
+dotnet "%CLI_DLL%" %*
+set "EXIT_CODE=%ERRORLEVEL%"
+goto :done
+
+:use_dotnet_run
+dotnet run --project "%REPO_ROOT%\src\RoslynAgent.Cli" -- %*
+set "EXIT_CODE=%ERRORLEVEL%"
+
+:done
+endlocal & exit /b %EXIT_CODE%
+
+:check_cache_stale
+setlocal
+set "CHECK_REPO_ROOT=%~1"
+set "CHECK_STAMP=%~2"
+if not exist "%CHECK_STAMP%" (
+    endlocal & exit /b 1
+)
+
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repoRoot='%CHECK_REPO_ROOT%'; $stampPath='%CHECK_STAMP%'; $extensions=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase); @('.cs','.csproj','.props','.targets','.json') | ForEach-Object { [void]$extensions.Add($_) }; $watchPaths=@((Join-Path $repoRoot 'src')); foreach($name in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json','NuGet.config','RoslynSkill.slnx')) { $watchPaths += (Join-Path $repoRoot $name) }; $stampTime=(Get-Item -LiteralPath $stampPath).LastWriteTimeUtc; foreach($watchPath in $watchPaths) { if (-not (Test-Path -LiteralPath $watchPath)) { continue }; $item=Get-Item -LiteralPath $watchPath; if ($item.PSIsContainer) { foreach($file in Get-ChildItem -LiteralPath $watchPath -Recurse -File -ErrorAction SilentlyContinue) { if (-not $extensions.Contains($file.Extension)) { continue }; if ($file.LastWriteTimeUtc -gt $stampTime) { exit 3 } } } elseif ($item.LastWriteTimeUtc -gt $stampTime) { exit 3 } }; exit 0" >nul 2>nul
+set "STALE_CHECK_EXIT=%ERRORLEVEL%"
+if "%STALE_CHECK_EXIT%"=="0" (
+    endlocal & exit /b 0
+)
+
+endlocal & exit /b 1
+'@
     Set-Content -Path $cmdPath -Value $cmdBody -NoNewline
 
     $shPath = Join-Path $scriptsDir "roscli"
-    $shBody = @"
+    $shBody = @'
 #!/usr/bin/env bash
 set -euo pipefail
-dotnet run --project src/RoslynAgent.Cli -- "$@"
-"@
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+
+use_published="${ROSCLI_USE_PUBLISHED:-}"
+refresh_published="${ROSCLI_REFRESH_PUBLISHED:-}"
+stale_check="${ROSCLI_STALE_CHECK:-0}"
+
+if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" == "yes" || "$use_published" == "on" ]]; then
+  cache_dir="$repo_root/artifacts/roscli-cache"
+  cli_dll="$cache_dir/RoslynAgent.Cli.dll"
+  stamp_file="$cache_dir/publish.stamp"
+  need_publish=0
+  if [[ ! -f "$cli_dll" ]]; then
+    need_publish=1
+  fi
+  if [[ "$refresh_published" == "1" || "$refresh_published" == "true" || "$refresh_published" == "yes" || "$refresh_published" == "on" ]]; then
+    need_publish=1
+  fi
+
+  if [[ "$need_publish" == "0" && "$stale_check" != "0" && "$stale_check" != "false" && "$stale_check" != "no" && "$stale_check" != "off" ]]; then
+    if [[ ! -f "$stamp_file" ]]; then
+      need_publish=1
+    elif find "$repo_root/src" -type f \( -name '*.cs' -o -name '*.csproj' -o -name '*.props' -o -name '*.targets' -o -name '*.json' \) -newer "$stamp_file" -print -quit | grep -q .; then
+      need_publish=1
+    else
+      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkill.slnx"; do
+        if [[ -f "$repo_root/$file" && "$repo_root/$file" -nt "$stamp_file" ]]; then
+          need_publish=1
+          break
+        fi
+      done
+    fi
+  fi
+
+  if [[ "$need_publish" == "1" ]]; then
+    dotnet publish "$repo_root/src/RoslynAgent.Cli" -c Release -o "$cache_dir" --nologo
+    mkdir -p "$cache_dir"
+    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$stamp_file"
+  fi
+
+  dotnet "$cli_dll" "$@"
+else
+  dotnet run --project "$repo_root/src/RoslynAgent.Cli" -- "$@"
+fi
+'@
     Set-Content -Path $shPath -Value $shBody -NoNewline
 }
 
@@ -329,6 +438,55 @@ function New-AgentEnvironmentOverrides {
 
         $overrides["CLAUDE_CONFIG_DIR"] = $claudeConfigRoot
         $overrides["ANTHROPIC_CONFIG_DIR"] = $claudeConfigRoot
+    }
+
+    return $overrides
+}
+
+function Get-ConditionEnvironmentOverrides {
+    param(
+        [Parameter(Mandatory = $true)][object]$Condition,
+        [Parameter(Mandatory = $true)][string]$Agent
+    )
+
+    $overrides = @{}
+
+    $globalEnvironment = Get-ObjectPropertyValue -Object $Condition -PropertyName "environment"
+    if ($null -ne $globalEnvironment) {
+        foreach ($property in $globalEnvironment.PSObject.Properties) {
+            $name = Convert-ToText $property.Name
+            if ([string]::IsNullOrWhiteSpace($name)) {
+                continue
+            }
+
+            $value = Convert-ToText $property.Value
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $overrides[$name] = $value
+            }
+        }
+    }
+
+    $agentEnvironmentRoot = Get-ObjectPropertyValue -Object $Condition -PropertyName "agent_environment"
+    if ($null -eq $agentEnvironmentRoot) {
+        $agentEnvironmentRoot = Get-ObjectPropertyValue -Object $Condition -PropertyName "agent_env"
+    }
+
+    $agentEnvironment = $null
+    if ($null -ne $agentEnvironmentRoot) {
+        $agentEnvironment = Get-ObjectPropertyValue -Object $agentEnvironmentRoot -PropertyName $Agent
+    }
+    if ($null -ne $agentEnvironment) {
+        foreach ($property in $agentEnvironment.PSObject.Properties) {
+            $name = Convert-ToText $property.Name
+            if ([string]::IsNullOrWhiteSpace($name)) {
+                continue
+            }
+
+            $value = Convert-ToText $property.Value
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $overrides[$name] = $value
+            }
+        }
     }
 
     return $overrides
@@ -1231,11 +1389,13 @@ Rules:
 - Prefer Roslyn tooling for C# exploration and edits.
 - Start by listing commands:
   scripts\roscli.cmd list-commands
-- Prefer shorthand commands for simple calls, for example:
-  - scripts\roscli.cmd ctx.file_outline src/Some/File.cs
-  - scripts\roscli.cmd ctx.member_source src/Some/File.cs 120 12 member
-  - scripts\roscli.cmd nav.find_symbol src/Some/File.cs SymbolName
-- Use `run <command-id> --input ...` for structured/multi-field payloads.
+- Invoke Roslyn commands with `run <command-id> --input ...`.
+- Use `--input @payload.json` for structured payloads to avoid shell escaping failures.
+- Minimal examples:
+  - scripts\roscli.cmd run nav.find_symbol --input "{\"file_path\":\"src/Some/File.cs\",\"symbol_name\":\"Target\"}"
+  - scripts\roscli.cmd run diag.get_file_diagnostics --input "{\"file_path\":\"src/Some/File.cs\"}"
+  - scripts\roscli.cmd run edit.rename_symbol --input @rename.json
+- Keep diagnostic payloads bounded: use file-level diagnostics first, and if using `diag.get_solution_snapshot`, provide a scoped `directory_path` plus restrictive filters/limits.
 - Prefer nav.*, ctx.*, diag.*, edit.*, repair.*, session.* where useful before text-only fallbacks.
 - Keep stateful `session.*` operations strictly sequential. Do not run `session.commit` and `session.close` in parallel.
 - Prefer `session.commit` as the terminal step (it can close the session unless explicitly kept open).
@@ -1416,6 +1576,10 @@ foreach ($agent in $agents) {
             Set-Content -Path $promptPath -Value $fullPrompt -NoNewline
             Set-Content -Path $transcriptPath -Value "" -NoNewline
             $agentEnvironmentOverrides = New-AgentEnvironmentOverrides -Agent $agent -RunDirectory $taskDirectory
+            $conditionEnvironmentOverrides = Get-ConditionEnvironmentOverrides -Condition $condition -Agent $agent
+            foreach ($key in $conditionEnvironmentOverrides.Keys) {
+                $agentEnvironmentOverrides[$key] = [string]$conditionEnvironmentOverrides[$key]
+            }
 
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -1506,7 +1670,7 @@ foreach ($agent in $agents) {
             Set-Content -Path $diffPath -Value $diffText
             $diffHasChanges = -not [string]::IsNullOrWhiteSpace($diffText)
 
-            $commandRecords = Get-CommandRecords -Agent $agent -TranscriptPath $transcriptPath
+            $commandRecords = @(Get-CommandRecords -Agent $agent -TranscriptPath $transcriptPath)
             $tokenMetrics = Get-TokenMetrics -Agent $agent -TranscriptPath $transcriptPath
             $tokenAttribution = Get-TokenAttribution -Agent $agent -TranscriptPath $transcriptPath
             $summaryText = Get-RunSummaryText -Agent $agent -TranscriptPath $transcriptPath
@@ -1587,6 +1751,7 @@ foreach ($agent in $agents) {
                     setup_checks = $setupCommands
                     acceptance_checks = $acceptanceChecks
                     task_prompt_file = $taskPromptRelative
+                    condition_environment_overrides = $conditionEnvironmentOverrides
                 }
                 post_run_reflection = [ordered]@{
                     summary = $reflectionSummary
@@ -1618,6 +1783,7 @@ foreach ($agent in $agents) {
                 roslyn_used = [bool]$toolTelemetry.roslyn_used
                 roslyn_successful_calls = [int]$toolTelemetry.roslyn_successful_calls
                 roslyn_usage_indicators = @($toolTelemetry.roslyn_usage_indicators)
+                condition_environment_overrides = $conditionEnvironmentOverrides
                 setup = $setupResult
                 acceptance = $acceptanceResult
                 prompt_tokens = $tokenMetrics.prompt_tokens
@@ -1693,8 +1859,19 @@ $summaryPayload = @{
 $summaryPayload | ConvertTo-Json -Depth 100 | Set-Content -Path $summaryPath
 
 $gateLogPath = Join-Path $gateDirectory "agent-eval-gate.log"
-$gateCommand = "dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest `"$realManifestPath`" --runs `"$runsDirectory`" --output `"$gateDirectory`""
-$gateExitCode = Invoke-LoggedCommand -CommandText $gateCommand -WorkingDirectory $repoRoot -LogPath $gateLogPath
+$hasControlCondition = @($selectedConditions | Where-Object { (Get-ConditionMode -Condition $_) -eq "control" }).Count -gt 0
+$hasTreatmentCondition = @($selectedConditions | Where-Object { (Get-ConditionMode -Condition $_) -eq "treatment" }).Count -gt 0
+$gateSkippedReason = $null
+$gateExitCode = 0
+
+if ($hasControlCondition -and $hasTreatmentCondition) {
+    $gateCommand = "dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest `"$realManifestPath`" --runs `"$runsDirectory`" --output `"$gateDirectory`""
+    $gateExitCode = Invoke-LoggedCommand -CommandText $gateCommand -WorkingDirectory $repoRoot -LogPath $gateLogPath
+} else {
+    $gateSkippedReason = "Skipped gate: selected conditions must include at least one control and one treatment condition."
+    Set-Content -Path $gateLogPath -Value $gateSkippedReason
+}
+
 Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase "post-gate"
 
 $aggregateByAgentMode = $runSummaryRows | Group-Object agent, mode, condition_id | ForEach-Object {
@@ -1715,6 +1892,7 @@ $aggregatePath = Join-Path $outputDirectory "trajectory-aggregate.json"
 [ordered]@{
     generated_utc = (Get-Date).ToUniversalTime().ToString("o")
     gate_exit_code = $gateExitCode
+    gate_skipped_reason = $gateSkippedReason
     gate_log_path = (Resolve-Path $gateLogPath).Path
     aggregate = $aggregateByAgentMode
 } | ConvertTo-Json -Depth 50 | Set-Content -Path $aggregatePath
@@ -1725,4 +1903,7 @@ Write-Host ("MANIFEST={0}" -f ([System.IO.Path]::GetFullPath($realManifestPath))
 Write-Host ("SUMMARY={0}" -f ([System.IO.Path]::GetFullPath($summaryPath)))
 Write-Host ("AGGREGATE={0}" -f ([System.IO.Path]::GetFullPath($aggregatePath)))
 Write-Host ("GATE_EXIT={0}" -f $gateExitCode)
+if (-not [string]::IsNullOrWhiteSpace($gateSkippedReason)) {
+    Write-Host ("GATE_STATUS={0}" -f $gateSkippedReason)
+}
 Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase "script.end"
