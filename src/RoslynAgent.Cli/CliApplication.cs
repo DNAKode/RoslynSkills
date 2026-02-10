@@ -1033,7 +1033,7 @@ public sealed class CliApplication
     {
         return writer.WriteLineAsync(
             """
-            roslyn-agent CLI
+            roscli CLI
 
             Commands:
               list-commands [--compact] [--ids-only]

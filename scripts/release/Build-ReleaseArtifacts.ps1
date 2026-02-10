@@ -78,7 +78,7 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $OutputRoot = (Resolve-Path $OutputRoot).Path
 
-$bundleRoot = Join-Path $OutputRoot "roslyn-agent-bundle"
+$bundleRoot = Join-Path $OutputRoot "roslynskills-bundle"
 $cliPublishDir = Join-Path $bundleRoot "cli"
 $mcpPublishDir = Join-Path $bundleRoot "mcp"
 $transportPublishDir = Join-Path $bundleRoot "transport"
@@ -93,6 +93,7 @@ $solutionPath = Join-Path $repoRoot "RoslynSkill.slnx"
 $cliProjectPath = Join-Path $repoRoot "src\RoslynAgent.Cli\RoslynAgent.Cli.csproj"
 $mcpProjectPath = Join-Path $repoRoot "src\RoslynAgent.McpServer\RoslynAgent.McpServer.csproj"
 $transportProjectPath = Join-Path $repoRoot "src\RoslynAgent.TransportServer\RoslynAgent.TransportServer.csproj"
+$toolPackageId = "DNAKode.RoslynSkills.Cli"
 
 Write-Host ("VERSION={0}" -f $normalizedVersion)
 Write-Host ("OUTPUT_ROOT={0}" -f $OutputRoot)
@@ -192,12 +193,12 @@ if (Test-Path $skillSource -PathType Leaf) {
 }
 
 $bundleReadme = @"
-# RoslynAgent Release Bundle
+# RoslynSkills Release Bundle
 
 Version: $normalizedVersion
 
 Contents:
-- cli/: published RoslynAgent CLI
+- cli/: published RoslynSkills CLI tool package
 - mcp/: published Roslyn MCP server
 - transport/: published persistent transport server
 - bin/: launchers
@@ -214,15 +215,15 @@ $manifest = [ordered]@{
     configuration = $Configuration
     bundle_root = $bundleRoot
     files = @(
-        "roslyn-agent-bundle-$normalizedVersion.zip",
+        "roslynskills-bundle-$normalizedVersion.zip",
         "roslyn-agent-research-skill-$normalizedVersion.zip",
-        "RoslynAgent.Cli.$normalizedVersion.nupkg"
+        "$toolPackageId.$normalizedVersion.nupkg"
     )
 }
 $manifestPath = Join-Path $OutputRoot "release-manifest.json"
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $manifestPath
 
-$bundleZipPath = Join-Path $OutputRoot ("roslyn-agent-bundle-{0}.zip" -f $normalizedVersion)
+$bundleZipPath = Join-Path $OutputRoot ("roslynskills-bundle-{0}.zip" -f $normalizedVersion)
 if (Test-Path $bundleZipPath -PathType Leaf) {
     Remove-Item $bundleZipPath -Force
 }

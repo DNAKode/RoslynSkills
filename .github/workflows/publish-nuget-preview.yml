@@ -54,7 +54,7 @@ jobs:
         if: inputs.run_tests
         run: dotnet test RoslynSkill.slnx -c Release --nologo
 
-      - name: Pack RoslynAgent.Cli
+      - name: Pack DNAKode.RoslynSkills.Cli
         run: |
           dotnet pack src/RoslynAgent.Cli/RoslynAgent.Cli.csproj \
             -c Release \

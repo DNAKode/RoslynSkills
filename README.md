@@ -1,6 +1,6 @@
-# RoslynSkill
+# RoslynSkills
 
-RoslynSkill is an engineering-first research project that tests whether Roslyn-native tooling materially improves agentic coding workflows in C#/.NET compared with text-first editing.
+RoslynSkills is an engineering-first research project that tests whether Roslyn-native tooling materially improves agentic coding workflows in C#/.NET compared with text-first editing.
 
 ## Project Intent
 
@@ -15,59 +15,59 @@ RoslynSkill is an engineering-first research project that tests whether Roslyn-n
 - Paired-run harness supports Codex and Claude runs with control-contamination checks, deterministic post-run constraints, and token/report exports.
 - Lightweight real-tool benchmark scaffold is in place and being iterated toward larger, higher-ambiguity tasks.
 
-## Install `roslyn-agent` (Global Tool, Recommended)
+## Install `roscli` (Global Tool, Recommended)
 
 This is the primary path for users who want to try the tool in their own repositories.
 
 Install from NuGet (preview/stable feed):
 
 ```powershell
-dotnet tool install --global RoslynAgent.Cli --prerelease
-roslyn-agent list-commands --ids-only
+dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
+roscli list-commands --ids-only
 ```
 
 Update later:
 
 ```powershell
-dotnet tool update --global RoslynAgent.Cli --prerelease
+dotnet tool update --global DNAKode.RoslynSkills.Cli --prerelease
 ```
 
 If the package version you want is not on NuGet yet, install from release `.nupkg`:
 
-1. Download `RoslynAgent.Cli.<version>.nupkg` from `https://github.com/DNAKode/RoslynSkill/releases/latest`.
+1. Download `DNAKode.RoslynSkills.Cli.<version>.nupkg` from `https://github.com/DNAKode/RoslynSkills/releases/latest`.
 2. Run:
 
 ```powershell
-dotnet tool install --global RoslynAgent.Cli --version <version> --add-source <folder-containing-nupkg>
-roslyn-agent list-commands --ids-only
+dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source <folder-containing-nupkg>
+roscli list-commands --ids-only
 ```
 
-### Tell Your Agent About `roslyn-agent` (Copy/Paste)
+### Tell Your Agent About `roscli` (Copy/Paste)
 
 Use this at the start of an agentic coding session:
 
 ```text
-Use roslyn-agent for C# work in this session.
-Command: roslyn-agent
+Use roscli for C# work in this session.
+Command: roscli
 
 Workflow:
-1) Run "roslyn-agent list-commands --ids-only" once.
+1) Run "roscli list-commands --ids-only" once.
 2) Prefer nav.* / ctx.* / diag.* before text-only fallback.
 3) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
 4) Run build/tests before finalizing changes.
-5) If roslyn-agent cannot answer a C# query, state why before falling back.
+5) If roscli cannot answer a C# query, state why before falling back.
 ```
 
 Example commands:
 
 ```powershell
-roslyn-agent nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20
-roslyn-agent diag.get_file_diagnostics src/MyProject/File.cs
+roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20
+roscli diag.get_file_diagnostics src/MyProject/File.cs
 ```
 
 ## Optional: Release Bundle (`roscli`, MCP, transport, skill)
 
-Use `roslyn-agent-bundle-<version>.zip` if you specifically want:
+Use `roslynskills-bundle-<version>.zip` if you specifically want:
 
 - `roscli`/`roscli.cmd` launchers,
 - bundled MCP and transport server binaries,
@@ -75,7 +75,7 @@ Use `roslyn-agent-bundle-<version>.zip` if you specifically want:
 
 Bundle download:
 
-- `https://github.com/DNAKode/RoslynSkill/releases/latest`
+- `https://github.com/DNAKode/RoslynSkills/releases/latest`
 
 ### MCP Mode (Optional / Experimental)
 
@@ -110,8 +110,8 @@ Release artifacts are produced by:
 
 For each release version, the pipeline emits:
 
-- `roslyn-agent-bundle-<version>.zip`
-  - `cli/` published `RoslynAgent.Cli`
+- `roslynskills-bundle-<version>.zip`
+  - `cli/` published `DNAKode.RoslynSkills.Cli`
   - `mcp/` published `RoslynAgent.McpServer`
   - `transport/` published `RoslynAgent.TransportServer`
   - `bin/` launchers:
@@ -119,7 +119,7 @@ For each release version, the pipeline emits:
     - `roslyn-mcp` / `roslyn-mcp.cmd`
     - `roslyn-transport` / `roslyn-transport.cmd`
   - `skills/roslyn-agent-research/SKILL.md`
-- `RoslynAgent.Cli.<version>.nupkg` (dotnet tool package)
+- `DNAKode.RoslynSkills.Cli.<version>.nupkg` (dotnet tool package)
 - `roslyn-agent-research-skill-<version>.zip`
 - `release-manifest.json`
 - `checksums.sha256`
@@ -137,7 +137,7 @@ Current CLI exposes 32 commands grouped across:
 
 ## Quick Start (Local Repo Development)
 
-Use this only when you are developing RoslynSkill itself.
+Use this only when you are developing RoslynSkills itself.
 
 Prerequisites:
 
@@ -247,7 +247,7 @@ Workflow: `.github/workflows/publish-nuget-preview.yml`
 
 Required repository secret:
 
-- `NUGET_API_KEY` (NuGet.org API key with push permission for `RoslynAgent.Cli`)
+- `NUGET_API_KEY` (NuGet.org API key with push permission for `DNAKode.RoslynSkills.Cli`)
 
 Run via `workflow_dispatch` with inputs:
 
@@ -293,3 +293,4 @@ Harness outputs include machine-readable summary JSON and markdown summaries wit
 ## License
 
 MIT (`LICENSE`).
+

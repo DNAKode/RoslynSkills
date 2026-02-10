@@ -11,12 +11,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackAsTool>true</PackAsTool>
-    <ToolCommandName>roslyn-agent</ToolCommandName>
-    <PackageId>RoslynAgent.Cli</PackageId>
+    <ToolCommandName>roscli</ToolCommandName>
+    <PackageId>DNAKode.RoslynSkills.Cli</PackageId>
     <Authors>DNA Kode</Authors>
     <Description>Roslyn-native agentic coding CLI primitives for C# workflows.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/DNAKode/RoslynSkill</RepositoryUrl>
+    <RepositoryUrl>https://github.com/DNAKode/RoslynSkills</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>roslyn;csharp;dotnet;agentic-coding;refactoring</PackageTags>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
