@@ -15,38 +15,91 @@ RoslynSkill is an engineering-first research project that tests whether Roslyn-n
 - Paired-run harness supports Codex and Claude runs with control-contamination checks, deterministic post-run constraints, and token/report exports.
 - Lightweight real-tool benchmark scaffold is in place and being iterated toward larger, higher-ambiguity tasks.
 
-## Quick Start (Local Repo)
+## Install `roslyn-agent` (Global Tool, Recommended)
 
-Prerequisites:
+This is the primary path for users who want to try the tool in their own repositories.
 
-- .NET SDK 10.x
-- `git`
-- `rg` (ripgrep) for benchmark/preflight scripts
-
-Enumerate command surface:
+Install from NuGet (preview/stable feed):
 
 ```powershell
-dotnet run --project src/RoslynAgent.Cli -- list-commands --ids-only
+dotnet tool install --global RoslynAgent.Cli --prerelease
+roslyn-agent list-commands --ids-only
 ```
 
-Convenience wrappers from repo root:
+Update later:
 
 ```powershell
-scripts\roscli.cmd list-commands --ids-only
-scripts\roscli.cmd ctx.file_outline src/RoslynAgent.Core/DefaultRegistryFactory.cs
-scripts\roscli.cmd nav.find_symbol src/RoslynAgent.Cli/CliApplication.cs HandleRunDirectAsync --brief true --max-results 5
+dotnet tool update --global RoslynAgent.Cli --prerelease
 ```
 
-## Roslyn Command Surface
+If the package version you want is not on NuGet yet, install from release `.nupkg`:
 
-Current CLI exposes 32 commands grouped across:
+1. Download `RoslynAgent.Cli.<version>.nupkg` from `https://github.com/DNAKode/RoslynSkill/releases/latest`.
+2. Run:
 
-- `nav.*`: semantic symbol/references/overrides/implementations
-- `ctx.*`: file/member/call-chain/dependency context extraction
-- `diag.*`: file/snapshot/diff/proposed-edit diagnostics
-- `edit.*`: structured semantic edits and transactions
-- `repair.*`: diagnostics-driven repair planning/application
-- `session.*`: immutable in-memory edit sessions with diff/diagnostics/commit
+```powershell
+dotnet tool install --global RoslynAgent.Cli --version <version> --add-source <folder-containing-nupkg>
+roslyn-agent list-commands --ids-only
+```
+
+### Tell Your Agent About `roslyn-agent` (Copy/Paste)
+
+Use this at the start of an agentic coding session:
+
+```text
+Use roslyn-agent for C# work in this session.
+Command: roslyn-agent
+
+Workflow:
+1) Run "roslyn-agent list-commands --ids-only" once.
+2) Prefer nav.* / ctx.* / diag.* before text-only fallback.
+3) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
+4) Run build/tests before finalizing changes.
+5) If roslyn-agent cannot answer a C# query, state why before falling back.
+```
+
+Example commands:
+
+```powershell
+roslyn-agent nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20
+roslyn-agent diag.get_file_diagnostics src/MyProject/File.cs
+```
+
+## Optional: Release Bundle (`roscli`, MCP, transport, skill)
+
+Use `roslyn-agent-bundle-<version>.zip` if you specifically want:
+
+- `roscli`/`roscli.cmd` launchers,
+- bundled MCP and transport server binaries,
+- bundled `skills/roslyn-agent-research/SKILL.md`.
+
+Bundle download:
+
+- `https://github.com/DNAKode/RoslynSkill/releases/latest`
+
+### MCP Mode (Optional / Experimental)
+
+MCP support is available, but current benchmark evidence is mixed and not yet a default-recommended path over direct CLI tool usage.
+
+If your client supports local MCP servers, point it at:
+
+- command: `dotnet`
+- args: `["<unzipped>/mcp/RoslynAgent.McpServer.dll"]`
+
+Example (`claude-mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "roslyn": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["<unzipped>/mcp/RoslynAgent.McpServer.dll"],
+      "env": {}
+    }
+  }
+}
+```
 
 ## GitHub Release Artifacts
 
@@ -71,101 +124,39 @@ For each release version, the pipeline emits:
 - `release-manifest.json`
 - `checksums.sha256`
 
-Install from the tool package (local nupkg folder example):
+## Roslyn Command Surface
+
+Current CLI exposes 32 commands grouped across:
+
+- `nav.*`: semantic symbol/references/overrides/implementations
+- `ctx.*`: file/member/call-chain/dependency context extraction
+- `diag.*`: file/snapshot/diff/proposed-edit diagnostics
+- `edit.*`: structured semantic edits and transactions
+- `repair.*`: diagnostics-driven repair planning/application
+- `session.*`: immutable in-memory edit sessions with diff/diagnostics/commit
+
+## Quick Start (Local Repo Development)
+
+Use this only when you are developing RoslynSkill itself.
+
+Prerequisites:
+
+- .NET SDK 10.x
+- `git`
+- `rg` (ripgrep) for benchmark/preflight scripts
+
+Enumerate command surface:
 
 ```powershell
-dotnet tool install --global RoslynAgent.Cli --version <version> --add-source <release-artifact-folder>
-roslyn-agent list-commands --ids-only
+dotnet run --project src/RoslynAgent.Cli -- list-commands --ids-only
 ```
 
-## Use `roscli` Today
-
-### 1) Codex CLI
-
-1. Download and unzip `roslyn-agent-bundle-<version>.zip`.
-2. Use the launcher from the bundle:
-   - Windows: `<unzipped>\bin\roscli.cmd`
-   - Bash: `<unzipped>/bin/roscli`
-3. Run commands:
+Convenience wrappers from repo root:
 
 ```powershell
-.\bin\roscli.cmd list-commands --ids-only
-.\bin\roscli.cmd nav.find_symbol src/RoslynAgent.Cli/CliApplication.cs TryGetCommandAndInputAsync --brief true --max-results 50
-```
-
-For high-call sessions, warm and use published-cache mode:
-
-```powershell
-scripts\roscli-warm.cmd
-$env:ROSCLI_USE_PUBLISHED = "1"
-scripts\roscli.cmd system.ping
-```
-
-Published mode now defaults to fast-path cache reuse (`ROSCLI_STALE_CHECK=0` unless explicitly enabled).
-Use one-call refresh when you know binaries changed:
-
-```powershell
-$env:ROSCLI_REFRESH_PUBLISHED = "1"
-scripts\roscli.cmd system.ping
-$env:ROSCLI_REFRESH_PUBLISHED = "0"
-```
-
-Optional development safety mode:
-
-```powershell
-$env:ROSCLI_STALE_CHECK = "1"
-scripts\roscli.cmd system.ping
-```
-
-### 2) Codex App/Web (MCP-capable surfaces)
-
-If your Codex surface supports local MCP servers, configure the release MCP launcher as a stdio server.
-
-Example MCP server config values:
-
-- command: `dotnet`
-- args: `["<unzipped>/mcp/RoslynAgent.McpServer.dll"]`
-
-Then use MCP reads/calls against `roslyn://command/...` URIs (same pattern used in benchmark harness MCP lanes).
-
-### 3) Claude Code
-
-You can use either CLI helper commands or MCP mode.
-
-Direct helper usage:
-
-```bash
-./bin/roscli list-commands --ids-only
-./bin/roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 100
-```
-
-For high-call sessions in local shells:
-
-```bash
-./scripts/roscli-warm
-export ROSCLI_USE_PUBLISHED=1
-./scripts/roscli system.ping
-```
-
-MCP mode config example (`claude-mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "roslyn": {
-      "type": "stdio",
-      "command": "dotnet",
-      "args": ["<unzipped>/mcp/RoslynAgent.McpServer.dll"],
-      "env": {}
-    }
-  }
-}
-```
-
-Run Claude with MCP config (example):
-
-```powershell
-claude --mcp-config .\claude-mcp.json --strict-mcp-config
+scripts\roscli.cmd list-commands --ids-only
+scripts\roscli.cmd ctx.file_outline src/RoslynAgent.Core/DefaultRegistryFactory.cs
+scripts\roscli.cmd nav.find_symbol src/RoslynAgent.Cli/CliApplication.cs HandleRunDirectAsync --brief true --max-results 5
 ```
 
 ## What Is A "Skill" Here?
@@ -249,6 +240,20 @@ Behavior:
 - produces release artifacts
 - uploads workflow artifact bundle
 - creates/updates GitHub Release with zips, nupkg, manifest, and checksums
+
+## Publish NuGet Preview (Maintainers)
+
+Workflow: `.github/workflows/publish-nuget-preview.yml`
+
+Required repository secret:
+
+- `NUGET_API_KEY` (NuGet.org API key with push permission for `RoslynAgent.Cli`)
+
+Run via `workflow_dispatch` with inputs:
+
+- `version`: for example `0.1.1-preview.1`
+- `run_tests`: `true` (recommended)
+- `publish`: `true` to push to NuGet.org, `false` for dry-run pack artifact only
 
 ## Repository Guide
 

@@ -17,6 +17,13 @@
     <Description>Roslyn-native agentic coding CLI primitives for C# workflows.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/DNAKode/RoslynSkill</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>roslyn;csharp;dotnet;agentic-coding;refactoring</PackageTags>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

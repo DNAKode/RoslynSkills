@@ -1,0 +1,85 @@
+name: Publish NuGet Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "NuGet package version (for example 0.1.1-preview.1)"
+        required: true
+        type: string
+      run_tests:
+        description: "Run tests before pack/publish"
+        required: true
+        default: true
+        type: boolean
+      publish:
+        description: "Publish to NuGet.org (disable for dry-run pack)"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  pack-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Validate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ inputs.version }}'
+          if [[ -z "$version" ]]; then
+            echo "version input is required" >&2
+            exit 1
+          fi
+          # Encourage preview semantics for this workflow.
+          if [[ "$version" != *"-preview."* && "$version" != *"-rc."* ]]; then
+            echo "warning: version '$version' is not a preview/rc version"
+          fi
+
+      - name: Restore
+        run: dotnet restore RoslynSkill.slnx --nologo
+
+      - name: Test
+        if: inputs.run_tests
+        run: dotnet test RoslynSkill.slnx -c Release --nologo
+
+      - name: Pack RoslynAgent.Cli
+        run: |
+          dotnet pack src/RoslynAgent.Cli/RoslynAgent.Cli.csproj \
+            -c Release \
+            -o artifacts/nuget \
+            --nologo \
+            -p:Version=${{ inputs.version }} \
+            -p:PackageVersion=${{ inputs.version }}
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-preview-${{ inputs.version }}
+          path: artifacts/nuget/*.nupkg
+          if-no-files-found: error
+
+      - name: Publish to NuGet.org
+        if: inputs.publish
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY secret is not set" >&2
+            exit 1
+          fi
+          dotnet nuget push artifacts/nuget/*.nupkg \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
