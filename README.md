@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/roslynskills-logo.png" alt="RoslynSkills logo" width="128" />
+</p>
+
 # RoslynSkills
 
 RoslynSkills is a Roslyn-native toolkit for coding agents working on C#/.NET codebases.
@@ -6,7 +10,7 @@ Goal: help agents navigate, edit, and validate C# with semantic correctness, the
 
 ## Start Here (5 Minutes)
 
-If you are trying this from Reddit, use this path first.
+Use this path first.
 
 Prerequisites:
 
@@ -72,14 +76,14 @@ Main artifacts:
 
 - `roslynskills-bundle-<version>.zip`
 - `DNAKode.RoslynSkills.Cli.<version>.nupkg`
-- `roslyn-agent-research-skill-<version>.zip`
+- `roslynskills-research-skill-<version>.zip`
 
 Bundle contents include:
 
 - `bin/roscli(.cmd)`
 - `mcp/RoslynSkills.McpServer.dll`
 - `transport/RoslynSkills.TransportServer.dll`
-- `skills/roslyn-agent-research/SKILL.md`
+- `skills/roslynskills-research/SKILL.md`
 
 If needed, install directly from downloaded `.nupkg`:
 
@@ -136,7 +140,7 @@ Repository layout:
 - `src/`: contracts, core commands, CLI, benchmark tooling
 - `tests/`: command/CLI/benchmark test suites
 - `benchmarks/`: manifests, scripts, prompts, scoring, reports
-- `skills/roslyn-agent-research/`: Roslyn-first operating guidance
+- `skills/roslynskills-research/`: Roslyn-first operating guidance
 - `AGENTS.md`: execution doctrine and meta-learning log
 - `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md`: research design and gates
 

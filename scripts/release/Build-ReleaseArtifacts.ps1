@@ -83,7 +83,7 @@ $cliPublishDir = Join-Path $bundleRoot "cli"
 $mcpPublishDir = Join-Path $bundleRoot "mcp"
 $transportPublishDir = Join-Path $bundleRoot "transport"
 $binDir = Join-Path $bundleRoot "bin"
-$skillDir = Join-Path $bundleRoot "skills\roslyn-agent-research"
+$skillDir = Join-Path $bundleRoot "skills\roslynskills-research"
 
 foreach ($path in @($bundleRoot, $cliPublishDir, $mcpPublishDir, $transportPublishDir, $binDir, $skillDir)) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
@@ -187,7 +187,7 @@ Set-ExecutableIfSupported -Path $roscliShPath
 Set-ExecutableIfSupported -Path $mcpShPath
 Set-ExecutableIfSupported -Path $transportShPath
 
-$skillSource = Join-Path $repoRoot "skills\roslyn-agent-research\SKILL.md"
+$skillSource = Join-Path $repoRoot "skills\roslynskills-research\SKILL.md"
 if (Test-Path $skillSource -PathType Leaf) {
     Copy-Item -Path $skillSource -Destination (Join-Path $skillDir "SKILL.md") -Force
 }
@@ -205,7 +205,7 @@ Contents:
   - roscli(.cmd)
   - roslyn-mcp(.cmd)
   - roslyn-transport(.cmd)
-- skills/roslyn-agent-research/SKILL.md
+- skills/roslynskills-research/SKILL.md
 "@
 Set-Content -Path (Join-Path $bundleRoot "README.txt") -Value $bundleReadme
 
@@ -216,7 +216,7 @@ $manifest = [ordered]@{
     bundle_root = $bundleRoot
     files = @(
         "roslynskills-bundle-$normalizedVersion.zip",
-        "roslyn-agent-research-skill-$normalizedVersion.zip",
+        "roslynskills-research-skill-$normalizedVersion.zip",
         "$toolPackageId.$normalizedVersion.nupkg"
     )
 }
@@ -229,8 +229,8 @@ if (Test-Path $bundleZipPath -PathType Leaf) {
 }
 Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $bundleZipPath -Force
 
-$skillSourceDir = Join-Path $repoRoot "skills\roslyn-agent-research"
-$skillZipPath = Join-Path $OutputRoot ("roslyn-agent-research-skill-{0}.zip" -f $normalizedVersion)
+$skillSourceDir = Join-Path $repoRoot "skills\roslynskills-research"
+$skillZipPath = Join-Path $OutputRoot ("roslynskills-research-skill-{0}.zip" -f $normalizedVersion)
 if (Test-Path $skillZipPath -PathType Leaf) {
     Remove-Item $skillZipPath -Force
 }

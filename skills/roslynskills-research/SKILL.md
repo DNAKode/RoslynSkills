@@ -1,9 +1,9 @@
 ---
-name: roslyn-agent-research
+name: roslynskills-research
 description: Run Roslyn-first coding research workflows for C#/.NET repositories using RoslynSkills CLI commands. Use when you need semantic navigation, context envelopes, diagnostics triage, non-destructive edit validation, or evidence capture for control vs Roslyn-enabled agent comparisons.
 ---
 
-# Roslyn Agent Research
+# RoslynSkills Research
 
 ## Session start
 
