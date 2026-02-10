@@ -179,6 +179,7 @@ For architecture go/no-go decisions, use proposal-defined research gates and dec
 ## Meta-Learning Log (Keep Updating)
 
 Use this section as compact project memory. Add short dated notes.
+Historical note: entries before the 2026-02-10 internal rename may reference the former `RoslynAgent.*` project/assembly names.
 
 Template:
 
@@ -268,3 +269,4 @@ Initial seed entries:
 - `2026-02-10`: Load-profile harness semantics aligned with new defaults -> `Measure-RoscliLoadProfiles.ps1` now treats published mode as stale-check-off baseline and adds explicit `-IncludeStaleCheckOnProfiles` arm -> Keep benchmark profiles representative of actual wrapper defaults.
 - `2026-02-10`: Public distribution naming normalized for launch readiness -> Standardized external package/release branding on `RoslynSkills` (`DNAKode.RoslynSkills.Cli`, `roscli`, `roslynskills-bundle-*`) while retaining internal `RoslynAgent.*` assemblies for compatibility -> Decouple user-facing adoption path from internal refactor cost before repo rename and broader publishing.
 - `2026-02-10`: Internal identity migration completed -> Renamed solution/projects/namespaces and assembly outputs from `RoslynAgent.*` to `RoslynSkills.*` (`RoslynSkills.slnx`, `src/tests` project graph, wrappers, benchmark scripts) with passing build/test/release smoke -> Keep external and internal naming aligned to reduce onboarding friction and path drift.
+- `2026-02-10`: Repo-rename stabilization pass completed -> Updated local `origin` to `DNAKode/RoslynSkills`, clarified historical-name notes in handoff/findings docs, and validated workflow_dispatch runs for `Release Artifacts` and `Publish NuGet Preview` on the renamed repo -> Treat live Actions runs as the final guard against residual naming drift after repo/folder renames.

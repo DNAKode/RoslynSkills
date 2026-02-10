@@ -3,6 +3,8 @@
 Date started: `2026-02-09`  
 Purpose: empirical log for Roslyn-agent benchmark outcomes, with task context and tool identity snapshots.
 
+Naming note: this file contains historical observations captured before the internal rename to `RoslynSkills.*` (2026-02-10), so some entries intentionally reference former `RoslynAgent.*` paths/identifiers.
+
 ## Tool Identity Snapshot
 
 Captured on `2026-02-09`:
