@@ -754,7 +754,7 @@ public sealed class GetSolutionSnapshotCommand : IAgentCommand
 
         return CSharpSyntaxTree.ParseText(
             source,
-            path: "<roslyn-agent-global-usings>",
+            path: "<roslynskills-global-usings>",
             cancellationToken: cancellationToken);
     }
 

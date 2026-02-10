@@ -5,6 +5,12 @@ namespace RoslynSkills.Core.Commands;
 
 public sealed class SessionOpenCommand : IAgentCommand
 {
+    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs",
+        ".csx",
+    };
+
     public CommandDescriptor Descriptor { get; } = new(
         Id: "session.open",
         Summary: "Open a persistent in-memory Roslyn session for a C# file.",
@@ -23,6 +29,16 @@ public sealed class SessionOpenCommand : IAgentCommand
         if (!File.Exists(filePath))
         {
             errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
+        }
+        else
+        {
+            string extension = Path.GetExtension(filePath);
+            if (!SupportedExtensions.Contains(extension))
+            {
+                errors.Add(new CommandError(
+                    "unsupported_file_type",
+                    $"Input file '{filePath}' is not a supported C# source file. session.open only supports .cs/.csx files."));
+            }
         }
 
         if (input.TryGetProperty("session_id", out JsonElement sessionProperty) &&

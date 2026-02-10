@@ -1,6 +1,7 @@
 using RoslynSkills.Contracts;
 using RoslynSkills.Core;
 using System.Globalization;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace RoslynSkills.Cli;
@@ -11,6 +12,7 @@ public sealed class CliApplication
     private readonly ICommandRegistry _registry;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = true,
     };
 
@@ -147,7 +149,11 @@ public sealed class CliApplication
                 Ok: true,
                 CommandId: "cli.describe_command",
                 Version: EnvelopeVersion,
-                Data: new { command = command.Descriptor },
+                Data: new
+                {
+                    command = command.Descriptor,
+                    usage = BuildCommandUsageHints(commandId),
+                },
                 Errors: Array.Empty<CommandError>(),
                 TraceId: null)).ConfigureAwait(false);
 
@@ -547,6 +553,19 @@ public sealed class CliApplication
                 input["new_name"] = positionalArgs[3];
                 break;
 
+            case "edit.create_file":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: "Usage: edit.create_file <file-path> [--content <text>] [--option value ...]");
+                    return false;
+                }
+
+                input["file_path"] = positionalArgs[0];
+                break;
+
             case "session.open":
                 if (positionalArgs.Length < 1 ||
                     positionalArgs.Length > 2 ||
@@ -611,6 +630,7 @@ public sealed class CliApplication
             "repair.propose_from_diagnostics" => true,
             "nav.find_symbol" => true,
             "edit.rename_symbol" => true,
+            "edit.create_file" => true,
             "session.open" => true,
             "session.get_diagnostics" => true,
             "session.status" => true,
@@ -887,6 +907,17 @@ public sealed class CliApplication
             }
         }
 
+        if (string.Equals(commandId, "edit.create_file", StringComparison.OrdinalIgnoreCase))
+        {
+            string file = TryGetString(element, "file_path", out string filePath)
+                ? Path.GetFileName(filePath)
+                : "<unknown>";
+            bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
+            bool created = TryGetBool(element, "created", out bool createdFile) && createdFile;
+            string action = wrote ? "written" : "dry-run";
+            return created ? $"{file}, created, {action}" : $"{file}, updated, {action}";
+        }
+
         if (string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.OrdinalIgnoreCase))
         {
             int files = TryGetInt(element, "total_files", out int tf) ? tf : -1;
@@ -1017,6 +1048,85 @@ public sealed class CliApplication
         return text[..(maxLength - 1)] + "…";
     }
 
+    private static object BuildCommandUsageHints(string commandId)
+    {
+        if (string.Equals(commandId, "session.open", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "session.open <file-path> [session-id] [--option value ...]",
+                run = "run session.open --input '{\"file_path\":\"src/MyFile.cs\",\"session_id\":\"demo\"}'",
+                required_properties = new[] { "file_path" },
+                optional_properties = new[] { "session_id", "max_diagnostics" },
+                notes = new[]
+                {
+                    "session.open supports only .cs/.csx files.",
+                    "Use .sln/.slnx/.csproj with diag/nav commands, not session.open.",
+                    "session diagnostics are file-scoped and may differ from full project build diagnostics.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "edit.create_file", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "edit.create_file <file-path> [--content <text>] [--option value ...]",
+                run = "run edit.create_file --input '{\"file_path\":\"src/NewType.cs\",\"content\":\"public class NewType { }\",\"overwrite\":false}'",
+                required_properties = new[] { "file_path" },
+                optional_properties = new[] { "content", "overwrite", "create_directories", "apply", "include_diagnostics", "max_diagnostics" },
+                notes = new[]
+                {
+                    "Defaults: apply=true, overwrite=false, create_directories=true.",
+                    "For multiline content, prefer --input-stdin JSON.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "edit.rename_symbol", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...]",
+                run = "run edit.rename_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"new_name\":\"Updated\",\"apply\":true}'",
+                required_properties = new[] { "file_path", "line", "column", "new_name" },
+                optional_properties = new[] { "apply", "max_diagnostics" },
+            };
+        }
+
+        if (commandId.StartsWith("session.", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = $"{commandId} <session-id> [--option value ...]",
+                run = $"run {commandId} --input '{{\"session_id\":\"demo\"}}'",
+                required_properties = new[] { "session_id" },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.find_symbol", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.find_symbol <file-path> <symbol-name> [--option value ...]",
+                run = "run nav.find_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"symbol_name\":\"Run\",\"brief\":true}'",
+                required_properties = new[] { "file_path", "symbol_name" },
+                optional_properties = new[] { "brief", "max_results", "context_lines" },
+            };
+        }
+
+        return new
+        {
+            run = $"run {commandId} --input '{{...}}'",
+            validation = $"validate-input {commandId} --input '{{...}}'",
+            notes = new[]
+            {
+                "Use describe-command for command summary and schema versions.",
+                "Use validate-input before run when argument shape is uncertain.",
+            },
+        };
+    }
+
     private static CommandEnvelope ErrorEnvelope(string commandId, string code, string message)
         => new(
             Ok: false,
@@ -1052,6 +1162,7 @@ public sealed class CliApplication
                 repair.propose_from_diagnostics <file-path>
                 nav.find_symbol <file-path> <symbol-name>
                 edit.rename_symbol <file-path> <line> <column> <new-name>
+                edit.create_file <file-path> [--content <text>]
                 session.open <file-path> [session-id]
                 session.get_diagnostics <session-id>
                 session.status <session-id>
@@ -1060,12 +1171,14 @@ public sealed class CliApplication
                 session.close <session-id>
               - Direct shorthand also accepts command options:
                 ctx.file_outline <file-path> --include-members false --max-members 50
+                edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - list-commands supports compact response modes:
                 list-commands --compact
                 list-commands --ids-only
               - Use session.apply_text_edits with --input/--input-stdin for structured span edits.
               - Use session.apply_and_commit with --input/--input-stdin for one-shot edit+commit.
+              - Use describe-command <command-id> when an agent is unsure about command arguments.
               - Use --input with raw JSON, @path-to-json-file, or '-' for stdin.
               - Use --input-stdin to read full JSON from stdin without temp files.
               - Output is always JSON envelopes.

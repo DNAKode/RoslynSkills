@@ -39,6 +39,7 @@ public sealed class CliApplicationTests
         Assert.Contains("edit.replace_member_body", output);
         Assert.Contains("edit.update_usings", output);
         Assert.Contains("edit.apply_code_fix", output);
+        Assert.Contains("edit.create_file", output);
         Assert.Contains("edit.transaction", output);
         Assert.Contains("repair.propose_from_diagnostics", output);
         Assert.Contains("repair.apply_plan", output);
@@ -361,9 +362,69 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_CreateFile_AcceptsPositionalShorthand()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-create-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "NewType.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.create_file",
+                    filePath,
+                    "--content", "public class NewType { }",
+                    "--overwrite", "false",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"edit.create_file\"", output);
+            Assert.Contains("\"wrote_file\": true", output);
+            Assert.Contains("public class NewType { }", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DescribeCommand_SessionOpen_IncludesUsageHints()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "session.open" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"usage\": {", output);
+        Assert.Contains("session.open <file-path> [session-id]", output);
+        Assert.Contains(".sln/.slnx/.csproj", output);
+    }
+
+    [Fact]
     public async Task DirectCommand_SessionOpenAndClose_AcceptsPositionalShorthand()
     {
-        string filePath = Path.GetTempFileName();
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-session-{Guid.NewGuid():N}.cs");
         string sessionId = $"cli-test-{Guid.NewGuid():N}";
 
         try
@@ -419,9 +480,38 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_SessionOpen_RejectsSolutionFile()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-{Guid.NewGuid():N}.slnx");
+        await File.WriteAllTextAsync(filePath, "<Solution />");
+
+        try
+        {
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "session.open", filePath },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("unsupported_file_type", output);
+            Assert.Contains(".cs/.csx", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_SessionApplyTextEdits_AcceptsStructuredInputViaStdin()
     {
-        string filePath = Path.GetTempFileName();
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-session-edit-{Guid.NewGuid():N}.cs");
         string sessionId = $"cli-test-edit-{Guid.NewGuid():N}";
 
         try
@@ -515,7 +605,7 @@ public sealed class CliApplicationTests
     [Fact]
     public async Task DirectCommand_SessionApplyAndCommit_AcceptsStructuredInputViaStdin()
     {
-        string filePath = Path.GetTempFileName();
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-session-apply-{Guid.NewGuid():N}.cs");
         string sessionId = $"cli-test-apply-commit-{Guid.NewGuid():N}";
 
         try

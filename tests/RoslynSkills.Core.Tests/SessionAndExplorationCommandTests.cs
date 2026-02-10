@@ -181,6 +181,34 @@ public sealed class SessionAndExplorationCommandTests
     }
 
     [Fact]
+    public async Task SessionOpenCommand_RejectsNonCSharpFiles()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"roslynskills-session-{Guid.NewGuid():N}.slnx");
+        await File.WriteAllTextAsync(path, "<Solution />");
+        string sessionId = $"reject-{Guid.NewGuid():N}";
+
+        try
+        {
+            SessionOpenCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = path,
+                session_id = sessionId,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.False(result.Ok);
+            Assert.Contains(result.Errors, e => e.Code == "unsupported_file_type");
+        }
+        finally
+        {
+            File.Delete(path);
+            SessionCloseCommand close = new();
+            await close.ExecuteAsync(ToJsonElement(new { session_id = sessionId }), CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task SessionSetContentCommand_ReturnsGenerationConflictWhenExpectedGenerationIsStale()
     {
         string filePath = WriteTempFile(

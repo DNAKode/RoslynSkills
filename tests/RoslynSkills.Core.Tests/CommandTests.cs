@@ -1,4 +1,5 @@
 using RoslynSkills.Core.Commands;
+using RoslynSkills.Contracts;
 using System.Text.Json;
 
 namespace RoslynSkills.Core.Tests;
@@ -465,6 +466,47 @@ public sealed class CommandTests
         finally
         {
             File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task CreateFileCommand_CreatesFileAndReturnsDiagnostics()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-create-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(root, "Demo.cs");
+
+        try
+        {
+            CreateFileCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                content =
+                """
+                public class Demo
+                {
+                    public int Run() => 1;
+                }
+                """,
+                overwrite = false,
+                create_directories = true,
+                include_diagnostics = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"created\":true", json);
+            Assert.Contains("\"wrote_file\":true", json);
+            Assert.Contains("\"diagnostics_after_create\":", json);
+            Assert.True(File.Exists(filePath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
     }
 

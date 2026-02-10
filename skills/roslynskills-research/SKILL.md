@@ -10,13 +10,19 @@ description: Run Roslyn-first coding research workflows for C#/.NET repositories
 Run command inventory first:
 
 ```powershell
-scripts\roscli.cmd list-commands --ids-only
+roscli list-commands --ids-only
 ```
 
 Cross-platform alternative:
 
 ```bash
-./scripts/roscli list-commands --ids-only
+roscli list-commands --ids-only
+```
+
+If `roscli` is not on PATH, in this repository use:
+
+```powershell
+scripts\roscli.cmd list-commands --ids-only
 ```
 
 Prefer Roslyn commands for navigation, context, diagnostics, repair, and structured edits before text-only fallbacks.
@@ -56,6 +62,7 @@ scripts\roscli.cmd diag.get_solution_snapshot src --brief true
 scripts\roscli.cmd diag.get_solution_snapshot src --mode compact --severity-filter Error --severity-filter Warning
 scripts\roscli.cmd nav.find_symbol src/RoslynSkills.Cli/CliApplication.cs TryGetCommandAndInputAsync --brief true --max-results 200
 scripts\roscli.cmd edit.rename_symbol src/RoslynSkills.Core/Commands/RenameSymbolCommand.cs 19 20 ValidateName --apply false
+scripts\roscli.cmd edit.create_file src/RoslynSkills.Core/Commands/NewCommand.cs --content "public sealed class NewCommand { }"
 scripts\roscli.cmd session.open src/RoslynSkills.Cli/CliApplication.cs demo-session
 scripts\roscli.cmd session.get_diagnostics demo-session
 scripts\roscli.cmd session.commit demo-session --keep-session false --require-disk-unchanged true
@@ -72,10 +79,12 @@ Flag syntax supports:
 - repeated flags for arrays (for example `--severity-filter Error --severity-filter Warning`)
 
 Keep JSON input for complex/structured operations (especially `edit.transaction`, `session.apply_text_edits`, `repair.apply_plan`, and advanced `diag.*` payloads).
+When unsure about arguments for any command, run `roscli describe-command <command-id>` first.
 
 Use JSON for `session.set_content` (full source payload) to avoid shell escaping issues.
 Use `session.apply_and_commit` for one-shot structured edits + guarded commit when you do not need a long-lived session.
 For simple read/navigation calls, avoid JSON payload piping and call the shorthand command directly to reduce token and transcript overhead.
+`session.open` supports only `.cs`/`.csx` source files; do not open `.sln`, `.slnx`, or `.csproj`.
 
 ## Input transport (avoid temp files)
 

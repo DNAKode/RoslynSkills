@@ -29,6 +29,7 @@ public static class DefaultRegistryFactory
             new ReplaceMemberBodyCommand(),
             new UpdateUsingsCommand(),
             new ApplyCodeFixCommand(),
+            new CreateFileCommand(),
             new EditTransactionCommand(),
             new ProposeFromDiagnosticsCommand(),
             new ApplyRepairPlanCommand(),

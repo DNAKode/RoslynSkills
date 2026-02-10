@@ -121,7 +121,7 @@ internal static class Program
                             },
                             ["serverInfo"] = new JsonObject
                             {
-                                ["name"] = "roslyn-agent-mcp",
+                                ["name"] = "roslynskills-mcp",
                                 ["version"] = "0.1.0",
                             },
                             ["instructions"] = "Roslyn-backed C# navigation, diagnostics, and edits. Tool names map from command ids via roslyn_<command_id_with_underscores>. Resource template invocation is available via roslyn://command/{commandId}.",
@@ -533,12 +533,7 @@ internal static class Program
         JsonArray tools = new();
         foreach (ToolBinding binding in toolMap.OrderedBindings)
         {
-            JsonObject inputSchema = new()
-            {
-                ["type"] = "object",
-                ["additionalProperties"] = true,
-                ["description"] = $"Arguments for command '{binding.CommandId}'. Schema version: {binding.InputSchemaVersion}.",
-            };
+            JsonObject inputSchema = BuildInputSchema(binding.CommandId, binding.InputSchemaVersion);
 
             JsonObject tool = new()
             {
@@ -555,6 +550,109 @@ internal static class Program
         }
 
         return tools;
+    }
+
+    private static JsonObject BuildInputSchema(string commandId, string schemaVersion)
+    {
+        JsonObject schema = new()
+        {
+            ["type"] = "object",
+            ["additionalProperties"] = true,
+            ["description"] = $"Arguments for command '{commandId}'. Schema version: {schemaVersion}.",
+        };
+
+        JsonObject properties = new();
+        JsonArray required = new();
+
+        AddCommandInputHints(commandId, properties, required);
+
+        if (properties.Count > 0)
+        {
+            schema["properties"] = properties;
+        }
+
+        if (required.Count > 0)
+        {
+            schema["required"] = required;
+        }
+
+        return schema;
+    }
+
+    private static void AddCommandInputHints(string commandId, JsonObject properties, JsonArray required)
+    {
+        static JsonObject StringProperty(string description) => new()
+        {
+            ["type"] = "string",
+            ["description"] = description,
+        };
+
+        static JsonObject IntProperty(string description, int min) => new()
+        {
+            ["type"] = "integer",
+            ["minimum"] = min,
+            ["description"] = description,
+        };
+
+        static JsonObject BoolProperty(string description) => new()
+        {
+            ["type"] = "boolean",
+            ["description"] = description,
+        };
+
+        if (string.Equals(commandId, "session.open", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# source file (.cs/.csx).");
+            properties["session_id"] = StringProperty("Optional session identifier.");
+            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned in snapshot.", 1);
+            required.Add("file_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "edit.create_file", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path of the file to create.");
+            properties["content"] = StringProperty("File content; defaults to empty file.");
+            properties["overwrite"] = BoolProperty("Whether to overwrite an existing file.");
+            properties["create_directories"] = BoolProperty("Create missing parent directories.");
+            properties["apply"] = BoolProperty("When false, run as dry-run.");
+            properties["include_diagnostics"] = BoolProperty("Evaluate C# diagnostics for .cs/.csx content.");
+            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned.", 1);
+            required.Add("file_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "edit.rename_symbol", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# source file.");
+            properties["line"] = IntProperty("1-based line number for rename anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for rename anchor.", 1);
+            properties["new_name"] = StringProperty("New symbol name.");
+            properties["apply"] = BoolProperty("When false, run as dry-run.");
+            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned.", 1);
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            required.Add("new_name");
+            return;
+        }
+
+        if (string.Equals(commandId, "nav.find_symbol", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# source file.");
+            properties["symbol_name"] = StringProperty("Symbol name to search for.");
+            properties["brief"] = BoolProperty("Return compact result payload.");
+            properties["max_results"] = IntProperty("Maximum matches to return.", 1);
+            required.Add("file_path");
+            required.Add("symbol_name");
+            return;
+        }
+
+        if (commandId.StartsWith("session.", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["session_id"] = StringProperty("Session identifier.");
+            required.Add("session_id");
+        }
     }
 
     private static JsonArray BuildResourceList(ToolMap toolMap)

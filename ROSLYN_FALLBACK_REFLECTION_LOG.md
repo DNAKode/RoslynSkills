@@ -93,3 +93,21 @@ Purpose: record every fallback to non-Roslyn `.cs` reading/editing so fallback p
     - token_count: lower (less repeated source extraction for scattered edits).
   - Follow-up issue/test link:
     - TODO: design symbol-anchored single-file multi-region edit transaction contract + regression tests.
+- `2026-02-10`: CLI/session usability hardening required direct `.cs` edits in RoslynSkills command host
+  - Task/Context: add one-shot `edit.create_file`, tighten `session.open` file-type guardrails, and improve command argument discoverability for Claude/Codex flows.
+  - Fallback action:
+    - `edit`
+  - Why Roslyn path was not used:
+    - Updating the RoslynSkills tool implementation itself still requires editing command and CLI source files directly before the updated command surface exists.
+  - Roslyn command attempted (if any):
+    - None for edits; validation used full `dotnet test` gate after changes.
+  - Missing command/option hypothesis:
+    - Missing Roslyn-native self-hosted edit mode for tool-source changes with multi-file semantic anchors and command-surface regeneration support.
+  - Proposed improvement:
+    - Add a repository-scoped `edit.transaction` symbol-anchor mode plus command-descriptor extraction that can emit input-shape hints into CLI/MCP surfaces automatically.
+  - Expected impact:
+    - correctness: higher (fewer hand-maintained usage/schema drifts).
+    - latency: lower (faster tool-surface iteration for command additions).
+    - token_count: lower (less back-and-forth argument guessing by agents).
+  - Follow-up issue/test link:
+    - TODO: prototype descriptor-driven input schema generation for MCP `tools/list` and CLI `describe-command`.

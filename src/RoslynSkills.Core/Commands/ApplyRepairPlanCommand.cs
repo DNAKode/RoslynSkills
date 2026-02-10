@@ -14,6 +14,7 @@ public sealed class ApplyRepairPlanCommand : IAgentCommand
         ["edit.replace_member_body"] = new ReplaceMemberBodyCommand(),
         ["edit.update_usings"] = new UpdateUsingsCommand(),
         ["edit.apply_code_fix"] = new ApplyCodeFixCommand(),
+        ["edit.create_file"] = new CreateFileCommand(),
         ["edit.transaction"] = new EditTransactionCommand(),
         ["diag.get_after_edit"] = new GetAfterEditDiagnosticsCommand(),
         ["diag.get_solution_snapshot"] = new GetSolutionSnapshotCommand(),

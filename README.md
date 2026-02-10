@@ -41,10 +41,11 @@ Command: roscli
 
 Workflow:
 1) Run "roscli list-commands --ids-only" once.
-2) Prefer nav.* / ctx.* / diag.* before text-only fallback.
-3) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
-4) Run build/tests before finalizing changes.
-5) If roscli cannot answer a C# query, state why before falling back.
+2) Run "roscli describe-command <command-id>" before first use of a command.
+3) Prefer nav.* / ctx.* / diag.* before text-only fallback.
+4) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
+5) Run build/tests before finalizing changes.
+6) If roscli cannot answer a C# query, state why before falling back.
 ```
 
 First useful commands:
@@ -53,7 +54,10 @@ First useful commands:
 roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20
 roscli ctx.member_source src/MyProject/File.cs 120 10 body --brief true
 roscli diag.get_file_diagnostics src/MyProject/File.cs
+roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType { }"
 ```
+
+Note: `session.open` is for C# source files (`.cs`/`.csx`) only. Do not use `session.open` on `.sln`, `.slnx`, or `.csproj`.
 
 ## What You Get
 

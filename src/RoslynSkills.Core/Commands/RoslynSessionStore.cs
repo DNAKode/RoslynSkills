@@ -10,7 +10,7 @@ namespace RoslynSkills.Core.Commands;
 
 internal static class RoslynSessionStore
 {
-    private static readonly string StoreDirectory = Path.Combine(Path.GetTempPath(), "roslyn-agent-sessions");
+    private static readonly string StoreDirectory = Path.Combine(Path.GetTempPath(), "roslynskills-sessions");
     private static readonly ConcurrentDictionary<string, RoslynSession> Sessions = new(StringComparer.Ordinal);
 
     public static int Count
