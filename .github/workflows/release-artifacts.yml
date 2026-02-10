@@ -76,6 +76,7 @@ jobs:
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
           name: RoslynSkills ${{ steps.vars.outputs.tag }}
+          prerelease: ${{ contains(steps.vars.outputs.version, '-preview') || contains(steps.vars.outputs.version, '-rc') }}
           generate_release_notes: true
           target_commitish: ${{ github.sha }}
           files: |
