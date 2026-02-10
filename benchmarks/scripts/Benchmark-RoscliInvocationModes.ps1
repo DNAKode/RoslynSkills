@@ -254,19 +254,19 @@ if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $publishDirectory = Join-Path $OutputDirectory "publish"
-$publishDllPath = Join-Path $publishDirectory "RoslynAgent.Cli.dll"
+$publishDllPath = Join-Path $publishDirectory "RoslynSkills.Cli.dll"
 $transportPublishDirectory = Join-Path $OutputDirectory "publish-transport"
-$transportDllPath = Join-Path $transportPublishDirectory "RoslynAgent.TransportServer.dll"
+$transportDllPath = Join-Path $transportPublishDirectory "RoslynSkills.TransportServer.dll"
 
 if (-not $SkipPublish) {
-    & dotnet publish src/RoslynAgent.Cli -c Release -o $publishDirectory | Out-Null
+    & dotnet publish src/RoslynSkills.Cli -c Release -o $publishDirectory | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "dotnet publish failed for RoslynAgent.Cli."
+        throw "dotnet publish failed for RoslynSkills.Cli."
     }
 
-    & dotnet publish src/RoslynAgent.TransportServer -c Release -o $transportPublishDirectory | Out-Null
+    & dotnet publish src/RoslynSkills.TransportServer -c Release -o $transportPublishDirectory | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "dotnet publish failed for RoslynAgent.TransportServer."
+        throw "dotnet publish failed for RoslynSkills.TransportServer."
     }
 }
 
@@ -281,7 +281,7 @@ $modes.Add([pscustomobject]@{
         mode = "dotnet_run_project"
         invocation_type = "process_per_call"
         executable = "dotnet"
-        prefix_args = @("run", "--project", "src/RoslynAgent.Cli", "--")
+        prefix_args = @("run", "--project", "src/RoslynSkills.Cli", "--")
     }) | Out-Null
 
 if (Test-Path $publishDllPath -PathType Leaf) {
@@ -321,12 +321,12 @@ $commands = @(
     },
     [pscustomobject]@{
         id = "diag.get_file_diagnostics.program"
-        args = @("diag.get_file_diagnostics", "src/RoslynAgent.Cli/Program.cs")
+        args = @("diag.get_file_diagnostics", "src/RoslynSkills.Cli/Program.cs")
         request_payload = @{
             method = "tool/call"
             command_id = "diag.get_file_diagnostics"
             input = @{
-                file_path = "src/RoslynAgent.Cli/Program.cs"
+                file_path = "src/RoslynSkills.Cli/Program.cs"
             }
         }
     }
@@ -451,3 +451,4 @@ $md | Set-Content -Path $mdPath
 Write-Host ("OUTPUT_DIR={0}" -f ([System.IO.Path]::GetFullPath($OutputDirectory)))
 Write-Host ("REPORT_JSON={0}" -f (Resolve-Path $jsonPath).Path)
 Write-Host ("REPORT_MD={0}" -f (Resolve-Path $mdPath).Path)
+

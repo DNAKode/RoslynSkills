@@ -217,7 +217,7 @@ goto :use_dotnet_run
 
 :use_published
 set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
-set "CLI_DLL=%CACHE_DIR%\RoslynAgent.Cli.dll"
+set "CLI_DLL=%CACHE_DIR%\RoslynSkills.Cli.dll"
 set "CACHE_STAMP=%CACHE_DIR%\publish.stamp"
 set "REFRESH_PUBLISHED=%ROSCLI_REFRESH_PUBLISHED%"
 set "STALE_CHECK=%ROSCLI_STALE_CHECK%"
@@ -237,7 +237,7 @@ if "%NEED_PUBLISH%"=="0" (
 )
 
 if "%NEED_PUBLISH%"=="1" (
-    dotnet publish "%REPO_ROOT%\src\RoslynAgent.Cli" -c Release -o "%CACHE_DIR%" --nologo
+    dotnet publish "%REPO_ROOT%\src\RoslynSkills.Cli" -c Release -o "%CACHE_DIR%" --nologo
     if errorlevel 1 (
         set "EXIT_CODE=%ERRORLEVEL%"
         goto :done
@@ -250,7 +250,7 @@ set "EXIT_CODE=%ERRORLEVEL%"
 goto :done
 
 :use_dotnet_run
-dotnet run --project "%REPO_ROOT%\src\RoslynAgent.Cli" -- %*
+dotnet run --project "%REPO_ROOT%\src\RoslynSkills.Cli" -- %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 :done
@@ -264,7 +264,7 @@ if not exist "%CHECK_STAMP%" (
     endlocal & exit /b 1
 )
 
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repoRoot='%CHECK_REPO_ROOT%'; $stampPath='%CHECK_STAMP%'; $extensions=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase); @('.cs','.csproj','.props','.targets','.json') | ForEach-Object { [void]$extensions.Add($_) }; $watchPaths=@((Join-Path $repoRoot 'src')); foreach($name in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json','NuGet.config','RoslynSkill.slnx')) { $watchPaths += (Join-Path $repoRoot $name) }; $stampTime=(Get-Item -LiteralPath $stampPath).LastWriteTimeUtc; foreach($watchPath in $watchPaths) { if (-not (Test-Path -LiteralPath $watchPath)) { continue }; $item=Get-Item -LiteralPath $watchPath; if ($item.PSIsContainer) { foreach($file in Get-ChildItem -LiteralPath $watchPath -Recurse -File -ErrorAction SilentlyContinue) { if (-not $extensions.Contains($file.Extension)) { continue }; if ($file.LastWriteTimeUtc -gt $stampTime) { exit 3 } } } elseif ($item.LastWriteTimeUtc -gt $stampTime) { exit 3 } }; exit 0" >nul 2>nul
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repoRoot='%CHECK_REPO_ROOT%'; $stampPath='%CHECK_STAMP%'; $extensions=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase); @('.cs','.csproj','.props','.targets','.json') | ForEach-Object { [void]$extensions.Add($_) }; $watchPaths=@((Join-Path $repoRoot 'src')); foreach($name in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json','NuGet.config','RoslynSkills.slnx')) { $watchPaths += (Join-Path $repoRoot $name) }; $stampTime=(Get-Item -LiteralPath $stampPath).LastWriteTimeUtc; foreach($watchPath in $watchPaths) { if (-not (Test-Path -LiteralPath $watchPath)) { continue }; $item=Get-Item -LiteralPath $watchPath; if ($item.PSIsContainer) { foreach($file in Get-ChildItem -LiteralPath $watchPath -Recurse -File -ErrorAction SilentlyContinue) { if (-not $extensions.Contains($file.Extension)) { continue }; if ($file.LastWriteTimeUtc -gt $stampTime) { exit 3 } } } elseif ($item.LastWriteTimeUtc -gt $stampTime) { exit 3 } }; exit 0" >nul 2>nul
 set "STALE_CHECK_EXIT=%ERRORLEVEL%"
 if "%STALE_CHECK_EXIT%"=="0" (
     endlocal & exit /b 0
@@ -287,7 +287,7 @@ stale_check="${ROSCLI_STALE_CHECK:-0}"
 
 if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" == "yes" || "$use_published" == "on" ]]; then
   cache_dir="$repo_root/artifacts/roscli-cache"
-  cli_dll="$cache_dir/RoslynAgent.Cli.dll"
+  cli_dll="$cache_dir/RoslynSkills.Cli.dll"
   stamp_file="$cache_dir/publish.stamp"
   need_publish=0
   if [[ ! -f "$cli_dll" ]]; then
@@ -303,7 +303,7 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
     elif find "$repo_root/src" -type f \( -name '*.cs' -o -name '*.csproj' -o -name '*.props' -o -name '*.targets' -o -name '*.json' \) -newer "$stamp_file" -print -quit | grep -q .; then
       need_publish=1
     else
-      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkill.slnx"; do
+      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkills.slnx"; do
         if [[ -f "$repo_root/$file" && "$repo_root/$file" -nt "$stamp_file" ]]; then
           need_publish=1
           break
@@ -313,14 +313,14 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
   fi
 
   if [[ "$need_publish" == "1" ]]; then
-    dotnet publish "$repo_root/src/RoslynAgent.Cli" -c Release -o "$cache_dir" --nologo
+    dotnet publish "$repo_root/src/RoslynSkills.Cli" -c Release -o "$cache_dir" --nologo
     mkdir -p "$cache_dir"
     date -u +"%Y-%m-%dT%H:%M:%SZ" > "$stamp_file"
   fi
 
   dotnet "$cli_dll" "$@"
 else
-  dotnet run --project "$repo_root/src/RoslynAgent.Cli" -- "$@"
+  dotnet run --project "$repo_root/src/RoslynSkills.Cli" -- "$@"
 fi
 '@
     Set-Content -Path $shPath -Value $shBody -NoNewline
@@ -1001,7 +1001,7 @@ function Get-RoslynCommandIds {
         [void]$ids.Add("cli.describe_command")
     }
 
-    if ($CommandText -match "RoslynAgent\.Cli") {
+    if ($CommandText -match "RoslynSkills\.Cli") {
         [void]$ids.Add("roslyn-agent.run")
     }
 
@@ -1353,7 +1353,7 @@ Rules:
 - Do NOT invoke Roslyn-specific commands or wrappers.
 - Prohibited examples:
   - scripts/roscli*
-  - dotnet run --project src/RoslynAgent.Cli ...
+  - dotnet run --project src/RoslynSkills.Cli ...
   - nav.*, ctx.*, diag.*, edit.*, repair.*, session.* command invocations
 - Use regular text navigation/editing and shell tools only.
 - Tasks are sequential in one workspace; keep previous task outputs intact.
@@ -1865,7 +1865,7 @@ $gateSkippedReason = $null
 $gateExitCode = 0
 
 if ($hasControlCondition -and $hasTreatmentCondition) {
-    $gateCommand = "dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest `"$realManifestPath`" --runs `"$runsDirectory`" --output `"$gateDirectory`""
+    $gateCommand = "dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-gate --manifest `"$realManifestPath`" --runs `"$runsDirectory`" --output `"$gateDirectory`""
     $gateExitCode = Invoke-LoggedCommand -CommandText $gateCommand -WorkingDirectory $repoRoot -LogPath $gateLogPath
 } else {
     $gateSkippedReason = "Skipped gate: selected conditions must include at least one control and one treatment condition."
@@ -1907,3 +1907,4 @@ if (-not [string]::IsNullOrWhiteSpace($gateSkippedReason)) {
     Write-Host ("GATE_STATUS={0}" -f $gateSkippedReason)
 }
 Assert-HostSessionAnchor -ExpectedCwd $hostStartCwd -ExpectedGitRoot $hostStartGitRoot -Phase "script.end"
+

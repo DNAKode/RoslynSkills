@@ -22,7 +22,7 @@ Set:
 ## 1.5 Run environment preflight
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-preflight --output <artifact-dir>
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-preflight --output <artifact-dir>
 ```
 
 Required checks:
@@ -36,13 +36,13 @@ Optional checks:
 ## 1.7 Validate manifest quality
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-validate-manifest --manifest <manifest.json> --output <artifact-dir>
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-validate-manifest --manifest <manifest.json> --output <artifact-dir>
 ```
 
 ## 2. Generate worklist and pending run templates
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-init-runs --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir>
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-init-runs --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir>
 ```
 
 Outputs:
@@ -63,7 +63,7 @@ When available, capture short transcript fragments (command snippets and failure
 Optional shortcut for quick logging:
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-register-run --manifest <manifest.json> --runs <runs-dir> --task <task-id> --condition <condition-id> --succeeded true --compile-passed true --tests-passed true --duration-seconds 120.5
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-register-run --manifest <manifest.json> --runs <runs-dir> --task <task-id> --condition <condition-id> --succeeded true --compile-passed true --tests-passed true --duration-seconds 120.5
 ```
 
 Use:
@@ -86,7 +86,7 @@ For lightweight real-agent bundles, `Run-LightweightUtilityGameRealRuns.ps1` now
 ## 4. Validate run quality before scoring
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-validate-runs --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> [--fail-on-warnings true]
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-validate-runs --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> [--fail-on-warnings true]
 ```
 
 This check catches:
@@ -101,7 +101,7 @@ This check catches:
 ## 5. Score results
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-score --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir>
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-score --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir>
 ```
 
 Outputs:
@@ -116,13 +116,13 @@ Outputs:
 Optional report export:
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-export-summary --report <agent-eval-report.json> --run-validation <agent-eval-run-validation.json> --output <artifact-dir>
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-export-summary --report <agent-eval-report.json> --run-validation <agent-eval-run-validation.json> --output <artifact-dir>
 ```
 
 Optional single-command gate run (runs validation + scoring + summary export):
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> [--fail-on-warnings true]
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-gate --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> [--fail-on-warnings true]
 ```
 
 With `--fail-on-warnings true`, the gate treats run-validation warnings as hard failures.
@@ -138,7 +138,7 @@ powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.
 Optional MCP treatment arm:
 
 - Add `-IncludeMcpTreatment` to run an additional `treatment-mcp` lane per agent.
-- The harness publishes `RoslynAgent.McpServer` once per bundle and wires MCP in isolated per-run configs only.
+- The harness publishes `RoslynSkills.McpServer` once per bundle and wires MCP in isolated per-run configs only.
 - Control lanes remain MCP-free under the same agent-home/session isolation guarantees.
 - For codex MCP runs, prompt guidance should use resource APIs with explicit server id (`server=roslyn`) and command URIs (for example `roslyn://command/edit.rename_symbol?...`).
 - Use `-RoslynGuidanceProfile` to compare treatment prompt posture:
@@ -208,3 +208,4 @@ Wrapper knobs for high-call local sessions:
 
 - Component diagnostics (for example `rq1`) are supporting evidence only.
 - End-to-end claims require this A/B pipeline.
+

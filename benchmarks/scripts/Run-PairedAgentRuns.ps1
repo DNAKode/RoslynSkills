@@ -208,12 +208,12 @@ function Publish-RoslynCli {
     Write-Host ("Publishing Roslyn CLI once for run bundle: {0}" -f $publishDirectory)
     & dotnet publish $CliProjectPath -c $Configuration -o $publishDirectory --nologo | Out-Host
     if ($LASTEXITCODE -ne 0) {
-        throw "dotnet publish failed for RoslynAgent.Cli."
+        throw "dotnet publish failed for RoslynSkills.Cli."
     }
 
-    $cliDllPath = Join-Path $publishDirectory "RoslynAgent.Cli.dll"
+    $cliDllPath = Join-Path $publishDirectory "RoslynSkills.Cli.dll"
     if (-not (Test-Path $cliDllPath)) {
-        throw "Published RoslynAgent.Cli.dll not found at '$cliDllPath'."
+        throw "Published RoslynSkills.Cli.dll not found at '$cliDllPath'."
     }
 
     return [string](Resolve-Path $cliDllPath).Path
@@ -232,12 +232,12 @@ function Publish-RoslynMcpServer {
     Write-Host ("Publishing Roslyn MCP server once for run bundle: {0}" -f $publishDirectory)
     & dotnet publish $McpProjectPath -c $Configuration -o $publishDirectory --nologo | Out-Host
     if ($LASTEXITCODE -ne 0) {
-        throw "dotnet publish failed for RoslynAgent.McpServer."
+        throw "dotnet publish failed for RoslynSkills.McpServer."
     }
 
-    $mcpDllPath = Join-Path $publishDirectory "RoslynAgent.McpServer.dll"
+    $mcpDllPath = Join-Path $publishDirectory "RoslynSkills.McpServer.dll"
     if (-not (Test-Path $mcpDllPath)) {
-        throw "Published RoslynAgent.McpServer.dll not found at '$mcpDllPath'."
+        throw "Published RoslynSkills.McpServer.dll not found at '$mcpDllPath'."
     }
 
     return [string](Resolve-Path $mcpDllPath).Path
@@ -502,7 +502,7 @@ function Test-IsRoslynCommandText {
         "edit.rename_symbol",
         "diag.get_file_diagnostics",
         "edit.replace_member_body",
-        "RoslynAgent.Cli"
+        "RoslynSkills.Cli"
     )
 
     foreach ($pattern in $patterns) {
@@ -1730,11 +1730,11 @@ Write-Host ("ISOLATION_ROOT={0}" -f $isolationRootDirectory)
 $bundleDirectory = Resolve-OutputDirectory -RepoRoot $repoRoot -OutputRoot $OutputRoot
 New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
 
-$cliProjectPath = (Resolve-Path (Join-Path $repoRoot "src\RoslynAgent.Cli\RoslynAgent.Cli.csproj")).Path
+$cliProjectPath = (Resolve-Path (Join-Path $repoRoot "src\RoslynSkills.Cli\RoslynSkills.Cli.csproj")).Path
 $cliDllPath = Publish-RoslynCli -CliProjectPath $cliProjectPath -BundleDirectory $bundleDirectory -Configuration $CliPublishConfiguration
 $mcpDllPath = $null
 if ($IncludeMcpTreatment) {
-    $mcpProjectPath = (Resolve-Path (Join-Path $repoRoot "src\RoslynAgent.McpServer\RoslynAgent.McpServer.csproj")).Path
+    $mcpProjectPath = (Resolve-Path (Join-Path $repoRoot "src\RoslynSkills.McpServer\RoslynSkills.McpServer.csproj")).Path
     $mcpDllPath = Publish-RoslynMcpServer -McpProjectPath $mcpProjectPath -BundleDirectory $bundleDirectory -Configuration $CliPublishConfiguration
 }
 
@@ -1970,3 +1970,4 @@ $summaryMarkdownPath = Join-Path $bundleDirectory "paired-run-summary.md"
 Write-PairedRunSummaryMarkdown -Runs $runs.ToArray() -MarkdownPath $summaryMarkdownPath
 $summaryMarkdownFullPath = [System.IO.Path]::GetFullPath($summaryMarkdownPath)
 Write-Host ("SUMMARY_MARKDOWN={0}" -f $summaryMarkdownFullPath)
+

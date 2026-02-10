@@ -6,7 +6,7 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 cache_dir="$repo_root/artifacts/roscli-cache"
 stamp_file="$cache_dir/publish.stamp"
 
-dotnet publish "$repo_root/src/RoslynAgent.Cli" -c Release -o "$cache_dir" --nologo
+dotnet publish "$repo_root/src/RoslynSkills.Cli" -c Release -o "$cache_dir" --nologo
 mkdir -p "$cache_dir"
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$stamp_file"
 echo "Roscli cache warmed: $cache_dir"

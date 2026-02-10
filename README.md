@@ -84,7 +84,7 @@ MCP support is available, but current benchmark evidence is mixed and not yet a 
 If your client supports local MCP servers, point it at:
 
 - command: `dotnet`
-- args: `["<unzipped>/mcp/RoslynAgent.McpServer.dll"]`
+- args: `["<unzipped>/mcp/RoslynSkills.McpServer.dll"]`
 
 Example (`claude-mcp.json`):
 
@@ -94,7 +94,7 @@ Example (`claude-mcp.json`):
     "roslyn": {
       "type": "stdio",
       "command": "dotnet",
-      "args": ["<unzipped>/mcp/RoslynAgent.McpServer.dll"],
+      "args": ["<unzipped>/mcp/RoslynSkills.McpServer.dll"],
       "env": {}
     }
   }
@@ -112,8 +112,8 @@ For each release version, the pipeline emits:
 
 - `roslynskills-bundle-<version>.zip`
   - `cli/` published `DNAKode.RoslynSkills.Cli`
-  - `mcp/` published `RoslynAgent.McpServer`
-  - `transport/` published `RoslynAgent.TransportServer`
+  - `mcp/` published `RoslynSkills.McpServer`
+  - `transport/` published `RoslynSkills.TransportServer`
   - `bin/` launchers:
     - `roscli` / `roscli.cmd`
     - `roslyn-mcp` / `roslyn-mcp.cmd`
@@ -148,15 +148,15 @@ Prerequisites:
 Enumerate command surface:
 
 ```powershell
-dotnet run --project src/RoslynAgent.Cli -- list-commands --ids-only
+dotnet run --project src/RoslynSkills.Cli -- list-commands --ids-only
 ```
 
 Convenience wrappers from repo root:
 
 ```powershell
 scripts\roscli.cmd list-commands --ids-only
-scripts\roscli.cmd ctx.file_outline src/RoslynAgent.Core/DefaultRegistryFactory.cs
-scripts\roscli.cmd nav.find_symbol src/RoslynAgent.Cli/CliApplication.cs HandleRunDirectAsync --brief true --max-results 5
+scripts\roscli.cmd ctx.file_outline src/RoslynSkills.Core/DefaultRegistryFactory.cs
+scripts\roscli.cmd nav.find_symbol src/RoslynSkills.Cli/CliApplication.cs HandleRunDirectAsync --brief true --max-results 5
 ```
 
 ## What Is A "Skill" Here?
@@ -257,7 +257,7 @@ Run via `workflow_dispatch` with inputs:
 
 ## Repository Guide
 
-- `src/`: RoslynAgent contracts, core commands, CLI, benchmark tooling.
+- `src/`: RoslynSkills contracts, core commands, CLI, benchmark tooling.
 - `tests/`: command/CLI/benchmark validation suites.
 - `benchmarks/`: manifests, scripts, prompts, scoring, and report artifacts.
 - `skills/roslyn-agent-research/`: installed Roslyn-first operating guidance for coding agents.
@@ -271,7 +271,7 @@ Run via `workflow_dispatch` with inputs:
 Recommended baseline validation:
 
 ```powershell
-dotnet test RoslynSkill.slnx -c Release
+dotnet test RoslynSkills.slnx -c Release
 ```
 
 ## Benchmark Workflow
@@ -279,7 +279,7 @@ dotnet test RoslynSkill.slnx -c Release
 Primary A/B evaluation workflow:
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> --fail-on-warnings true
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-gate --manifest <manifest.json> --runs <runs-dir> --output <artifact-dir> --fail-on-warnings true
 ```
 
 Quick paired-run harness:
@@ -293,4 +293,5 @@ Harness outputs include machine-readable summary JSON and markdown summaries wit
 ## License
 
 MIT (`LICENSE`).
+
 

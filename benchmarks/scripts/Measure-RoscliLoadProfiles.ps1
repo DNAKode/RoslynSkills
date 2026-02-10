@@ -97,7 +97,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $commandProfiles = @(
     @{ id = "system.ping"; args = @("system.ping") }
     @{ id = "cli.list_commands.compact"; args = @("list-commands", "--compact") }
-    @{ id = "nav.find_symbol.cliapp"; args = @("nav.find_symbol", "src/RoslynAgent.Cli/CliApplication.cs", "TryGetCommandAndInputAsync", "--brief", "true", "--max-results", "20") }
+    @{ id = "nav.find_symbol.cliapp"; args = @("nav.find_symbol", "src/RoslynSkills.Cli/CliApplication.cs", "TryGetCommandAndInputAsync", "--brief", "true", "--max-results", "20") }
 )
 
 $profiles = @(
@@ -179,3 +179,4 @@ $md | Set-Content -Path $OutputMarkdownPath
 
 Write-Host ("REPORT_JSON={0}" -f $OutputJsonPath)
 Write-Host ("REPORT_MD={0}" -f $OutputMarkdownPath)
+

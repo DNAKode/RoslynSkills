@@ -48,15 +48,15 @@ jobs:
           fi
 
       - name: Restore
-        run: dotnet restore RoslynSkill.slnx --nologo
+        run: dotnet restore RoslynSkills.slnx --nologo
 
       - name: Test
         if: inputs.run_tests
-        run: dotnet test RoslynSkill.slnx -c Release --nologo
+        run: dotnet test RoslynSkills.slnx -c Release --nologo
 
       - name: Pack DNAKode.RoslynSkills.Cli
         run: |
-          dotnet pack src/RoslynAgent.Cli/RoslynAgent.Cli.csproj \
+          dotnet pack src/RoslynSkills.Cli/RoslynSkills.Cli.csproj \
             -c Release \
             -o artifacts/nuget \
             --nologo \
@@ -83,3 +83,4 @@ jobs:
             --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
+

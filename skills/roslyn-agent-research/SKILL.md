@@ -1,6 +1,6 @@
 ---
 name: roslyn-agent-research
-description: Run Roslyn-first coding research workflows for C#/.NET repositories using RoslynAgent CLI commands. Use when you need semantic navigation, context envelopes, diagnostics triage, non-destructive edit validation, or evidence capture for control vs Roslyn-enabled agent comparisons.
+description: Run Roslyn-first coding research workflows for C#/.NET repositories using RoslynSkills CLI commands. Use when you need semantic navigation, context envelopes, diagnostics triage, non-destructive edit validation, or evidence capture for control vs Roslyn-enabled agent comparisons.
 ---
 
 # Roslyn Agent Research
@@ -47,16 +47,16 @@ Use `ROSCLI_REFRESH_PUBLISHED=1` for one call when binaries need refresh after l
 Use direct command invocation for common workflows and append optional flags directly:
 
 ```powershell
-scripts\roscli.cmd ctx.file_outline src/RoslynAgent.Core/DefaultRegistryFactory.cs
-scripts\roscli.cmd ctx.file_outline src/RoslynAgent.Core/DefaultRegistryFactory.cs --include-members false --max-types 1
-scripts\roscli.cmd ctx.member_source src/RoslynAgent.Cli/CliApplication.cs 236 25 body --brief true
-scripts\roscli.cmd ctx.member_source src/RoslynAgent.Cli/CliApplication.cs 236 25 --mode body --include-source-text true --context-lines-before 2
-scripts\roscli.cmd diag.get_file_diagnostics src/RoslynAgent.Core/DefaultRegistryFactory.cs
+scripts\roscli.cmd ctx.file_outline src/RoslynSkills.Core/DefaultRegistryFactory.cs
+scripts\roscli.cmd ctx.file_outline src/RoslynSkills.Core/DefaultRegistryFactory.cs --include-members false --max-types 1
+scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 25 body --brief true
+scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 25 --mode body --include-source-text true --context-lines-before 2
+scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs
 scripts\roscli.cmd diag.get_solution_snapshot src --brief true
 scripts\roscli.cmd diag.get_solution_snapshot src --mode compact --severity-filter Error --severity-filter Warning
-scripts\roscli.cmd nav.find_symbol src/RoslynAgent.Cli/CliApplication.cs TryGetCommandAndInputAsync --brief true --max-results 200
-scripts\roscli.cmd edit.rename_symbol src/RoslynAgent.Core/Commands/RenameSymbolCommand.cs 19 20 ValidateName --apply false
-scripts\roscli.cmd session.open src/RoslynAgent.Cli/CliApplication.cs demo-session
+scripts\roscli.cmd nav.find_symbol src/RoslynSkills.Cli/CliApplication.cs TryGetCommandAndInputAsync --brief true --max-results 200
+scripts\roscli.cmd edit.rename_symbol src/RoslynSkills.Core/Commands/RenameSymbolCommand.cs 19 20 ValidateName --apply false
+scripts\roscli.cmd session.open src/RoslynSkills.Cli/CliApplication.cs demo-session
 scripts\roscli.cmd session.get_diagnostics demo-session
 scripts\roscli.cmd session.commit demo-session --keep-session false --require-disk-unchanged true
 scripts\roscli.cmd session.diff demo-session
@@ -265,3 +265,4 @@ Use this template in `ROSLYN_FALLBACK_REFLECTION_LOG.md`:
 - Missing command/option hypothesis
 - Proposed improvement
 - Expected impact (correctness, latency, token_count)
+

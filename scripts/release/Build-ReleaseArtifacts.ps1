@@ -89,10 +89,10 @@ foreach ($path in @($bundleRoot, $cliPublishDir, $mcpPublishDir, $transportPubli
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
-$solutionPath = Join-Path $repoRoot "RoslynSkill.slnx"
-$cliProjectPath = Join-Path $repoRoot "src\RoslynAgent.Cli\RoslynAgent.Cli.csproj"
-$mcpProjectPath = Join-Path $repoRoot "src\RoslynAgent.McpServer\RoslynAgent.McpServer.csproj"
-$transportProjectPath = Join-Path $repoRoot "src\RoslynAgent.TransportServer\RoslynAgent.TransportServer.csproj"
+$solutionPath = Join-Path $repoRoot "RoslynSkills.slnx"
+$cliProjectPath = Join-Path $repoRoot "src\RoslynSkills.Cli\RoslynSkills.Cli.csproj"
+$mcpProjectPath = Join-Path $repoRoot "src\RoslynSkills.McpServer\RoslynSkills.McpServer.csproj"
+$transportProjectPath = Join-Path $repoRoot "src\RoslynSkills.TransportServer\RoslynSkills.TransportServer.csproj"
 $toolPackageId = "DNAKode.RoslynSkills.Cli"
 
 Write-Host ("VERSION={0}" -f $normalizedVersion)
@@ -122,7 +122,7 @@ $roscliCmd = @"
 @echo off
 setlocal
 set "SCRIPT_DIR=%~dp0"
-set "CLI_DLL=%SCRIPT_DIR%..\cli\RoslynAgent.Cli.dll"
+set "CLI_DLL=%SCRIPT_DIR%..\cli\RoslynSkills.Cli.dll"
 dotnet "%CLI_DLL%" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 endlocal & exit /b %EXIT_CODE%
@@ -132,14 +132,14 @@ $roscliSh = @'
 #!/usr/bin/env bash
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dotnet "$script_dir/../cli/RoslynAgent.Cli.dll" "$@"
+dotnet "$script_dir/../cli/RoslynSkills.Cli.dll" "$@"
 '@
 
 $mcpCmd = @"
 @echo off
 setlocal
 set "SCRIPT_DIR=%~dp0"
-set "MCP_DLL=%SCRIPT_DIR%..\mcp\RoslynAgent.McpServer.dll"
+set "MCP_DLL=%SCRIPT_DIR%..\mcp\RoslynSkills.McpServer.dll"
 dotnet "%MCP_DLL%"
 set "EXIT_CODE=%ERRORLEVEL%"
 endlocal & exit /b %EXIT_CODE%
@@ -149,14 +149,14 @@ $mcpSh = @'
 #!/usr/bin/env bash
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dotnet "$script_dir/../mcp/RoslynAgent.McpServer.dll"
+dotnet "$script_dir/../mcp/RoslynSkills.McpServer.dll"
 '@
 
 $transportCmd = @"
 @echo off
 setlocal
 set "SCRIPT_DIR=%~dp0"
-set "SERVER_DLL=%SCRIPT_DIR%..\transport\RoslynAgent.TransportServer.dll"
+set "SERVER_DLL=%SCRIPT_DIR%..\transport\RoslynSkills.TransportServer.dll"
 dotnet "%SERVER_DLL%"
 set "EXIT_CODE=%ERRORLEVEL%"
 endlocal & exit /b %EXIT_CODE%
@@ -166,7 +166,7 @@ $transportSh = @'
 #!/usr/bin/env bash
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dotnet "$script_dir/../transport/RoslynAgent.TransportServer.dll"
+dotnet "$script_dir/../transport/RoslynSkills.TransportServer.dll"
 '@
 
 $roscliCmdPath = Join-Path $binDir "roscli.cmd"
@@ -255,3 +255,4 @@ Write-Host ("BUNDLE_ZIP={0}" -f $bundleZipPath)
 Write-Host ("SKILL_ZIP={0}" -f $skillZipPath)
 Write-Host ("MANIFEST={0}" -f $manifestPath)
 Write-Host ("CHECKSUMS={0}" -f $checksumsPath)
+

@@ -10,7 +10,7 @@ stale_check="${ROSCLI_STALE_CHECK:-0}"
 
 if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" == "yes" || "$use_published" == "on" ]]; then
   cache_dir="$repo_root/artifacts/roscli-cache"
-  cli_dll="$cache_dir/RoslynAgent.Cli.dll"
+  cli_dll="$cache_dir/RoslynSkills.Cli.dll"
   stamp_file="$cache_dir/publish.stamp"
   need_publish=0
   if [[ ! -f "$cli_dll" ]]; then
@@ -30,7 +30,7 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
       -print -quit | grep -q .; then
       need_publish=1
     else
-      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkill.slnx"; do
+      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkills.slnx"; do
         if [[ -f "$repo_root/$file" && "$repo_root/$file" -nt "$stamp_file" ]]; then
           need_publish=1
           break
@@ -40,11 +40,11 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
   fi
 
   if [[ "$need_publish" == "1" ]]; then
-    dotnet publish "$repo_root/src/RoslynAgent.Cli" -c Release -o "$cache_dir" --nologo
+    dotnet publish "$repo_root/src/RoslynSkills.Cli" -c Release -o "$cache_dir" --nologo
     mkdir -p "$cache_dir"
     date -u +"%Y-%m-%dT%H:%M:%SZ" > "$stamp_file"
   fi
   dotnet "$cli_dll" "$@"
 else
-  dotnet run --project "$repo_root/src/RoslynAgent.Cli" -- "$@"
+  dotnet run --project "$repo_root/src/RoslynSkills.Cli" -- "$@"
 fi

@@ -59,7 +59,7 @@ function Test-IsRoscliCommandText {
 
     return (
         $CommandText -match "roscli(\.cmd)?\b" -or
-        $CommandText -match "RoslynAgent\.Cli" -or
+        $CommandText -match "RoslynSkills\.Cli" -or
         $CommandText -match "roslyn-list-commands\.ps1" -or
         $CommandText -match "roslyn-find-symbol\.ps1" -or
         $CommandText -match "roslyn-rename-symbol\.ps1" -or
@@ -707,3 +707,4 @@ $markdown | Set-Content -Path $OutputMarkdownPath
 Write-Host ("TRAJECTORIES_ROOT={0}" -f $resolvedTrajectoriesRoot)
 Write-Host ("REPORT_JSON={0}" -f (Resolve-Path $OutputJsonPath).Path)
 Write-Host ("REPORT_MD={0}" -f (Resolve-Path $OutputMarkdownPath).Path)
+

@@ -12,7 +12,7 @@ goto :use_dotnet_run
 
 :use_published
 set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
-set "CLI_DLL=%CACHE_DIR%\RoslynAgent.Cli.dll"
+set "CLI_DLL=%CACHE_DIR%\RoslynSkills.Cli.dll"
 set "CACHE_STAMP=%CACHE_DIR%\publish.stamp"
 set "CACHE_CHECK_MARKER=%CACHE_DIR%\stalecheck.stamp"
 set "REFRESH_PUBLISHED=%ROSCLI_REFRESH_PUBLISHED%"
@@ -42,7 +42,7 @@ if "%NEED_PUBLISH%"=="0" (
 )
 
 if "%NEED_PUBLISH%"=="1" (
-    dotnet publish "%REPO_ROOT%\src\RoslynAgent.Cli" -c Release -o "%CACHE_DIR%" --nologo
+    dotnet publish "%REPO_ROOT%\src\RoslynSkills.Cli" -c Release -o "%CACHE_DIR%" --nologo
     if errorlevel 1 (
         set "EXIT_CODE=%ERRORLEVEL%"
         goto :done
@@ -56,7 +56,7 @@ set "EXIT_CODE=%ERRORLEVEL%"
 goto :done
 
 :use_dotnet_run
-dotnet run --project "%REPO_ROOT%\src\RoslynAgent.Cli" -- %*
+dotnet run --project "%REPO_ROOT%\src\RoslynSkills.Cli" -- %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 :done
@@ -70,7 +70,7 @@ if not exist "%CHECK_STAMP%" (
     endlocal & exit /b 1
 )
 
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repoRoot='%CHECK_REPO_ROOT%'; $stampPath='%CHECK_STAMP%'; $extensions=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase); @('.cs','.csproj','.props','.targets','.json') | ForEach-Object { [void]$extensions.Add($_) }; $watchPaths=@((Join-Path $repoRoot 'src')); foreach($name in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json','NuGet.config','RoslynSkill.slnx')) { $watchPaths += (Join-Path $repoRoot $name) }; $stampTime=(Get-Item -LiteralPath $stampPath).LastWriteTimeUtc; foreach($watchPath in $watchPaths) { if (-not (Test-Path -LiteralPath $watchPath)) { continue }; $item=Get-Item -LiteralPath $watchPath; if ($item.PSIsContainer) { foreach($file in Get-ChildItem -LiteralPath $watchPath -Recurse -File -ErrorAction SilentlyContinue) { if (-not $extensions.Contains($file.Extension)) { continue }; if ($file.LastWriteTimeUtc -gt $stampTime) { exit 3 } } } elseif ($item.LastWriteTimeUtc -gt $stampTime) { exit 3 } }; exit 0" >nul 2>nul
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repoRoot='%CHECK_REPO_ROOT%'; $stampPath='%CHECK_STAMP%'; $extensions=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase); @('.cs','.csproj','.props','.targets','.json') | ForEach-Object { [void]$extensions.Add($_) }; $watchPaths=@((Join-Path $repoRoot 'src')); foreach($name in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json','NuGet.config','RoslynSkills.slnx')) { $watchPaths += (Join-Path $repoRoot $name) }; $stampTime=(Get-Item -LiteralPath $stampPath).LastWriteTimeUtc; foreach($watchPath in $watchPaths) { if (-not (Test-Path -LiteralPath $watchPath)) { continue }; $item=Get-Item -LiteralPath $watchPath; if ($item.PSIsContainer) { foreach($file in Get-ChildItem -LiteralPath $watchPath -Recurse -File -ErrorAction SilentlyContinue) { if (-not $extensions.Contains($file.Extension)) { continue }; if ($file.LastWriteTimeUtc -gt $stampTime) { exit 3 } } } elseif ($item.LastWriteTimeUtc -gt $stampTime) { exit 3 } }; exit 0" >nul 2>nul
 set "STALE_CHECK_EXIT=%ERRORLEVEL%"
 if "%STALE_CHECK_EXIT%"=="0" (
     endlocal & exit /b 0
@@ -99,3 +99,4 @@ setlocal
 set "CHECK_MARKER=%~1"
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "(Get-Date).ToUniversalTime().ToString('o') | Set-Content -LiteralPath '%CHECK_MARKER%' -NoNewline" >nul 2>nul
 endlocal & exit /b 0
+

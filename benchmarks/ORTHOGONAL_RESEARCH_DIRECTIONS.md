@@ -7,8 +7,8 @@ Status: active backlog for next benchmark waves
 
 Completed this cycle:
 
-- Implemented a persistent transport prototype (`src/RoslynAgent.TransportServer/Program.cs`) exposing the same tool registry over long-lived stdio requests.
-- Implemented a real MCP server contract (`src/RoslynAgent.McpServer/Program.cs`) with codex-compatible stdio JSON-RPC (`initialize`, `tools/list`, `tools/call`, `resources/*`, `ping`).
+- Implemented a persistent transport prototype (`src/RoslynSkills.TransportServer/Program.cs`) exposing the same tool registry over long-lived stdio requests.
+- Implemented a real MCP server contract (`src/RoslynSkills.McpServer/Program.cs`) with codex-compatible stdio JSON-RPC (`initialize`, `tools/list`, `tools/call`, `resources/*`, `ping`).
 - Extended invocation benchmark script to compare:
   - `roscli_script` (process-per-call),
   - `dotnet_run_project` (process-per-call),
@@ -191,3 +191,4 @@ Current signal from latest creative run:
 2. Run one replicate bundle with three Roslyn treatment variants (`cli-process`, `cli-published`, `transport-persistent`) on the same tasks/prompts.
 3. Track cold vs warm latency explicitly (first-call vs steady-state) and include both in reports.
 4. Run `Analyze-TrajectoryRoslynUsage.ps1` on the same bundles to correlate latency changes with tool-choice behavior (`brief` usage and round-trip counts).
+

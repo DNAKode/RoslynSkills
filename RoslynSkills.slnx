@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RoslynSkills.Benchmark/RoslynSkills.Benchmark.csproj" />
+    <Project Path="src/RoslynSkills.Cli/RoslynSkills.Cli.csproj" />
+    <Project Path="src/RoslynSkills.Contracts/RoslynSkills.Contracts.csproj" />
+    <Project Path="src/RoslynSkills.Core/RoslynSkills.Core.csproj" />
+    <Project Path="src/RoslynSkills.McpServer/RoslynSkills.McpServer.csproj" />
+    <Project Path="src/RoslynSkills.TransportServer/RoslynSkills.TransportServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RoslynSkills.Benchmark.Tests/RoslynSkills.Benchmark.Tests.csproj" />
+    <Project Path="tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj" />
+    <Project Path="tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj" />
+  </Folder>
+</Solution>
+
