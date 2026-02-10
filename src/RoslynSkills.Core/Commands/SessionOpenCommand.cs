@@ -37,7 +37,7 @@ public sealed class SessionOpenCommand : IAgentCommand
             {
                 errors.Add(new CommandError(
                     "unsupported_file_type",
-                    $"Input file '{filePath}' is not a supported C# source file. session.open only supports .cs/.csx files."));
+                    $"Input file '{filePath}' is not a supported C# source file. session.open only supports .cs/.csx files. Use nav/diag commands for .sln/.slnx/.csproj context."));
             }
         }
 

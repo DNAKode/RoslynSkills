@@ -502,6 +502,64 @@ Decision:
 - Keep stale-check disabled by default in published mode.
 - Require replicate bundles (not single-run reads) before promoting wrapper-mode claims to report-level conclusions.
 
+### F-2026-02-10-17: Shell-specific skill-introduction guidance materially reduced onboarding failure overhead, but schema-first remains a high-cost default
+
+Evidence:
+
+- Baseline guidance-profile bundle:
+  - `artifacts/skill-intro-ablation/20260210-v2/skill-intro-ablation-report.json`
+- Updated guidance-profile bundle:
+  - `artifacts/skill-intro-ablation/20260210-v3b-guidance-fix/skill-intro-ablation-report.json`
+- Prompt/guidance updates:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`Get-CliRoslynGuidanceBlock`, shell-specific `schema-first`/`surgical` instructions)
+
+Result (treatment vs control deltas, v2 -> v3b):
+
+- `schema-first`:
+  - Codex: duration `+189.601s -> +42.478s` (`-147.123s`), token delta `+403,442 -> +102,293` (`-301,149`), round-trips `+26 -> +10`.
+  - Claude: duration `+83.289s -> +44.147s` (`-39.142s`), token delta `+2,948 -> +877` (`-2,071`), round-trips `+16 -> +10`.
+- `surgical`:
+  - Codex: duration `-1.171s -> -3.205s`, token delta `-18,246 -> -18,269`, round-trips stayed `-1`.
+  - Claude: duration `+27.57s -> +19.634s` (`-7.936s`), token delta `+438 -> -53`, round-trips `+3 -> +1`.
+
+Interpretation:
+
+- Inference from bundle comparison: shell-matched examples and safer input transport reduce failure-retry loops substantially.
+- `schema-first` shifted from catastrophic overhead to manageable but still expensive overhead; it remains better suited to contract/debug scenarios than default execution.
+- `surgical` remains the strongest low-friction default posture for small, tightly-scoped edits, especially for Codex.
+
+Decision:
+
+- Keep `standard` and `surgical` as default onboarding profiles for most runs.
+- Keep `schema-first` as an explicit optional arm for contract-validation experiments, not as baseline treatment guidance.
+- Continue shell-specific prompt examples (PowerShell vs Bash) as a required harness guideline.
+
+### F-2026-02-10-18: PowerShell `@file.json` parsing requires quoted `--input` values in schema-first Codex guidance
+
+Evidence:
+
+- Transitional run showing splatting parse failure and recovery:
+  - `artifacts/skill-intro-ablation/20260210-v3b-guidance-fix/paired-schema-first`
+- Follow-up smoke after quoting fix:
+  - `artifacts/skill-intro-ablation/20260210-v3c-schema-smoke-codex/paired-run-summary.json`
+- Prompt fix:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`--input \"@*.json\"` in PowerShell schema-first examples)
+
+Result:
+
+- Unquoted `--input @nav.find_symbol.json` can be interpreted by PowerShell as splatting in some command contexts.
+- Quoted forms (`--input \"@nav.find_symbol.json\"`) removed that failure mode in follow-up smoke runs.
+
+Interpretation:
+
+- Small shell-grammar details in guidance text can dominate trajectory quality.
+- Profile prompts should be treated as executable interfaces and regression-tested like code.
+
+Decision:
+
+- Keep quoted `@file` syntax in PowerShell profile guidance.
+- Add this as a standing prompt-quality check in profile experimentation.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

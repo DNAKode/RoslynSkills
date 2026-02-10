@@ -509,6 +509,105 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_SessionOpen_AcceptsSolutionAliasForFilePath()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-{Guid.NewGuid():N}.cs");
+        string sessionId = $"opt-{Guid.NewGuid():N}";
+        await File.WriteAllTextAsync(filePath, "public class Demo { }");
+
+        try
+        {
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "session.open", "--solution", filePath, "--session-id", sessionId },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"session.open\"", stdout.ToString());
+
+            StringWriter closeStdout = new();
+            StringWriter closeStderr = new();
+            int closeExitCode = await app.RunAsync(
+                new[] { "session.close", sessionId },
+                closeStdout,
+                closeStderr,
+                CancellationToken.None);
+            Assert.Equal(0, closeExitCode);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_SessionOpen_AcceptsGitBashStyleWindowsPath()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-{Guid.NewGuid():N}.cs");
+        string sessionId = $"bash-{Guid.NewGuid():N}";
+        await File.WriteAllTextAsync(filePath, "public class Demo { }");
+
+        try
+        {
+            string bashPath = "/" + char.ToLowerInvariant(filePath[0]) + filePath[2..].Replace('\\', '/');
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "session.open", bashPath, sessionId },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"session.open\"", stdout.ToString());
+
+            StringWriter closeStdout = new();
+            StringWriter closeStderr = new();
+            int closeExitCode = await app.RunAsync(
+                new[] { "session.close", sessionId },
+                closeStdout,
+                closeStderr,
+                CancellationToken.None);
+            Assert.Equal(0, closeExitCode);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_SessionOpen_InvalidArgs_IncludeDescribeCommandHint()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "session.open", "--solution" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(1, exitCode);
+        Assert.Contains("describe-command session.open", output);
+    }
+
+    [Fact]
     public async Task DirectCommand_SessionApplyTextEdits_AcceptsStructuredInputViaStdin()
     {
         string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-session-edit-{Guid.NewGuid():N}.cs");

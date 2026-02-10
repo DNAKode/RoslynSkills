@@ -76,7 +76,7 @@ For lightweight real-agent bundles, `Run-LightweightUtilityGameRealRuns.ps1` now
 
 - `-ConditionIds` for explicit condition selection from manifest.
   - PowerShell example: `-ConditionIds @('control-text-only','treatment-roslyn-optional')`.
-- `-RoslynGuidanceProfile <standard|brief-first|verbose-first>` for treatment prompt posture experiments.
+- `-RoslynGuidanceProfile <standard|brief-first|surgical|skill-minimal|schema-first>` for treatment prompt posture experiments.
 - Condition-level environment overrides via manifest `conditions[*].environment` plus optional agent-scoped `conditions[*].agent_environment.<agent>`.
 - Per-task agent-home isolation (`CODEX_HOME` / `CLAUDE_CONFIG_DIR` + profile/appdata overrides) to reduce cross-run/session leakage.
 - Control-workspace Roslyn wrapper disablement (`scripts/roscli*` exits non-zero in control condition) to harden contamination prevention.
@@ -132,7 +132,7 @@ With `--fail-on-warnings true`, the gate treats run-validation warnings as hard 
 For fast paired control/treatment smoke runs with transcript + token attribution artifacts:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 -OutputRoot <artifact-dir> [-IsolationRoot <temp-dir>] [-KeepIsolatedWorkspaces] [-RoslynGuidanceProfile <standard|brief-first|surgical>]
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 -OutputRoot <artifact-dir> [-IsolationRoot <temp-dir>] [-KeepIsolatedWorkspaces] [-RoslynGuidanceProfile <standard|brief-first|surgical|skill-minimal|schema-first>]
 ```
 
 Optional MCP treatment arm:
@@ -145,6 +145,14 @@ Optional MCP treatment arm:
   - `standard`: broad helper guidance (discovery + edit paths).
   - `brief-first`: compact-first guidance (skip catalog unless blocked).
   - `surgical`: minimum-call path (rename/verify first, fallback only on failure).
+  - `skill-minimal`: realistic skill-style onboarding (discover commands, infer usage).
+  - `schema-first`: contract-first onboarding (`describe-command`/`validate-input` before mutation).
+
+Current guidance from skill-intro ablations (`artifacts/skill-intro-ablation/20260210-v2` and `artifacts/skill-intro-ablation/20260210-v3b-guidance-fix`):
+
+- Default to `standard` or `surgical` for simple scoped tasks.
+- Treat `schema-first` as a debugging/contract-validation lane, not a default execution lane.
+- Keep prompt examples shell-specific (PowerShell vs Bash) and avoid inline JSON quoting in profile guidance.
 
 Isolation and integrity defaults:
 

@@ -297,7 +297,7 @@ public sealed class CliApplication
         await WriteEnvelopeAsync(stdout, ErrorEnvelope(
             commandId: "cli",
             code: "unknown_verb",
-            message: $"Unknown command '{verb}'. Use '--help' to view available commands.")).ConfigureAwait(false);
+            message: $"Unknown command '{verb}'. Use '--help' or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
         await stderr.WriteLineAsync($"Unknown command '{verb}'.").ConfigureAwait(false);
         return 1;
     }
@@ -459,6 +459,21 @@ public sealed class CliApplication
             return false;
         }
 
+        if (string.Equals(commandId, "session.open", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "file", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "path", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "solution", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "session_id", ref positionalArgs, 1);
+        }
+
+        if (string.Equals(commandId, "nav.find_symbol", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "symbol_name", ref positionalArgs, 1);
+        }
+
         Dictionary<string, object?> input = new(StringComparer.OrdinalIgnoreCase);
 
         switch (commandId)
@@ -471,11 +486,11 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: $"Usage: {commandId} <file-path> [--option value ...]");
+                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = positionalArgs[0];
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
             case "diag.get_solution_snapshot":
@@ -484,13 +499,13 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: "Usage: diag.get_solution_snapshot [directory-path] [--option value ...]");
+                        message: BuildUsageMessage(commandId, "diag.get_solution_snapshot [directory-path] [--option value ...]"));
                     return false;
                 }
 
                 if (positionalArgs.Length == 1)
                 {
-                    input["directory_path"] = positionalArgs[0];
+                    input["directory_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 }
                 break;
 
@@ -504,11 +519,11 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: "Usage: ctx.member_source <file-path> <line> <column> [member|body] [--option value ...]");
+                        message: BuildUsageMessage(commandId, "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = positionalArgs[0];
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 input["line"] = line;
                 input["column"] = column;
                 if (positionalArgs.Length == 4)
@@ -525,11 +540,11 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: "Usage: nav.find_symbol <file-path> <symbol-name> [--option value ...]");
+                        message: BuildUsageMessage(commandId, "nav.find_symbol <file-path> <symbol-name> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = positionalArgs[0];
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 input["symbol_name"] = positionalArgs[1];
                 break;
 
@@ -543,11 +558,11 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: "Usage: edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...]");
+                        message: BuildUsageMessage(commandId, "edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = positionalArgs[0];
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 input["line"] = renameLine;
                 input["column"] = renameColumn;
                 input["new_name"] = positionalArgs[3];
@@ -559,11 +574,11 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: "Usage: edit.create_file <file-path> [--content <text>] [--option value ...]");
+                        message: BuildUsageMessage(commandId, "edit.create_file <file-path> [--content <text>] [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = positionalArgs[0];
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
             case "session.open":
@@ -574,11 +589,14 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: "Usage: session.open <file-path> [session-id] [--option value ...]");
+                        message: BuildUsageMessage(
+                            commandId,
+                            "session.open <file-path> [session-id] [--option value ...]",
+                            "session.open supports only .cs/.csx files."));
                     return false;
                 }
 
-                input["file_path"] = positionalArgs[0];
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 if (positionalArgs.Length == 2)
                 {
                     input["session_id"] = positionalArgs[1];
@@ -595,7 +613,7 @@ public sealed class CliApplication
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: $"Usage: {commandId} <session-id> [--option value ...]");
+                        message: BuildUsageMessage(commandId, $"{commandId} <session-id> [--option value ...]"));
                     return false;
                 }
 
@@ -612,7 +630,14 @@ public sealed class CliApplication
 
         foreach ((string key, object? value) in options)
         {
-            input[key] = value;
+            if (value is string pathValue && IsPathLikeOptionName(key))
+            {
+                input[key] = NormalizeCliPathValue(pathValue);
+            }
+            else
+            {
+                input[key] = value;
+            }
         }
 
         error = null;
@@ -780,6 +805,100 @@ public sealed class CliApplication
 
     private static string NormalizeOptionName(string optionName)
         => optionName.Trim().Replace("-", "_", StringComparison.Ordinal);
+
+    private static string BuildUsageMessage(string commandId, string usage, string? note = null)
+    {
+        string message = $"Usage: {usage} Tip: run 'describe-command {commandId}' for argument schema.";
+        if (!string.IsNullOrWhiteSpace(note))
+        {
+            message += $" {note}";
+        }
+
+        return message;
+    }
+
+    private static bool IsPathLikeOptionName(string optionName)
+        => optionName.EndsWith("_path", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(optionName, "directory_path", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeCliPathValue(string value)
+    {
+        string trimmed = value.Trim();
+        if (!OperatingSystem.IsWindows() || trimmed.Length < 3 || trimmed[0] != '/')
+        {
+            return trimmed;
+        }
+
+        char driveLetter = trimmed[1];
+        char separator = trimmed[2];
+        if (!char.IsLetter(driveLetter) || (separator != '/' && separator != '\\'))
+        {
+            return trimmed;
+        }
+
+        string remainder = trimmed[2..].Replace('/', '\\');
+        return $"{char.ToUpperInvariant(driveLetter)}:{remainder}";
+    }
+
+    private static void TryPromoteOptionToPositional(
+        Dictionary<string, object?> options,
+        string optionName,
+        ref string[] positionalArgs,
+        int targetIndex)
+    {
+        if (targetIndex < 0)
+        {
+            return;
+        }
+
+        if (positionalArgs.Length > targetIndex && !string.IsNullOrWhiteSpace(positionalArgs[targetIndex]))
+        {
+            return;
+        }
+
+        string normalizedOptionName = NormalizeOptionName(optionName);
+        if (!options.TryGetValue(normalizedOptionName, out object? rawOptionValue) ||
+            !TryConvertOptionToSingleString(rawOptionValue, out string optionValue) ||
+            string.IsNullOrWhiteSpace(optionValue))
+        {
+            return;
+        }
+
+        options.Remove(normalizedOptionName);
+
+        if (positionalArgs.Length <= targetIndex)
+        {
+            Array.Resize(ref positionalArgs, targetIndex + 1);
+        }
+
+        positionalArgs[targetIndex] = optionValue;
+    }
+
+    private static bool TryConvertOptionToSingleString(object? optionValue, out string value)
+    {
+        switch (optionValue)
+        {
+            case string stringValue when !string.IsNullOrWhiteSpace(stringValue):
+                value = stringValue;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.String:
+                value = element.GetString() ?? string.Empty;
+                return !string.IsNullOrWhiteSpace(value);
+            case List<object?> list:
+                foreach (object? candidate in list)
+                {
+                    if (TryConvertOptionToSingleString(candidate, out value))
+                    {
+                        return true;
+                    }
+                }
+
+                break;
+        }
+
+        value = string.Empty;
+        return false;
+    }
 
     private static object? AppendOptionValue(object? existing, object? incoming)
     {
@@ -1045,7 +1164,12 @@ public sealed class CliApplication
             return text;
         }
 
-        return text[..(maxLength - 1)] + "…";
+        if (maxLength <= 3)
+        {
+            return text[..maxLength];
+        }
+
+        return text[..(maxLength - 3)] + "...";
     }
 
     private static object BuildCommandUsageHints(string commandId)

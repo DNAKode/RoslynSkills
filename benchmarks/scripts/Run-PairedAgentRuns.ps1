@@ -3,7 +3,7 @@ param(
     [string]$IsolationRoot = "",
     [string]$CodexModel = "",
     [string]$ClaudeModel = "",
-    [ValidateSet("standard", "brief-first", "surgical")][string]$RoslynGuidanceProfile = "standard",
+    [ValidateSet("standard", "brief-first", "surgical", "skill-minimal", "schema-first")][string]$RoslynGuidanceProfile = "standard",
     [string]$CliPublishConfiguration = "Release",
     [switch]$IncludeMcpTreatment,
     [bool]$FailOnControlContamination = $true,
@@ -328,10 +328,10 @@ dotnet "$cliDllForCmd" %*
 "@
     Set-Content -Path $localRoscliCmdPath -Value $roscliCmd -NoNewline
 
-    $roscliBash = @"
+$roscliBash = @"
 #!/usr/bin/env bash
 set -euo pipefail
-dotnet "$cliDllForBash" "\$@"
+dotnet "$cliDllForBash" "$@"
 "@
     Set-Content -Path $localRoscliBashPath -Value $roscliBash -NoNewline
 
@@ -1761,7 +1761,7 @@ public class Overloads
 function Get-CliRoslynGuidanceBlock {
     param(
         [Parameter(Mandatory = $true)][ValidateSet("codex", "claude")][string]$Agent,
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical", "skill-minimal", "schema-first")][string]$Profile
     )
 
     switch ($Profile) {
@@ -1832,7 +1832,8 @@ For PowerShell environments, you may run:
 "@
         }
         "surgical" {
-            return @"
+            if ($Agent -eq "codex") {
+                return @"
 Roslyn helper scripts are available in this directory and recommended.
 Use the minimum Roslyn sequence:
 1) Run exactly one semantic rename+verify command first:
@@ -1842,13 +1843,104 @@ Use the minimum Roslyn sequence:
 - scripts\roscli.cmd edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
 - scripts\roscli.cmd diag.get_file_diagnostics Target.cs
 "@
+            }
+
+            return @"
+Roslyn helper scripts are available in this directory and recommended.
+Use the minimum Roslyn sequence for Bash:
+1) Run semantic rename directly:
+- bash scripts/roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
+2) Verify diagnostics:
+- bash scripts/roscli diag.get_file_diagnostics Target.cs
+3) Do not call list-commands unless these fail.
+"@
+        }
+        "skill-minimal" {
+            if ($Agent -eq "codex") {
+                return @"
+Roslyn tooling is available as `scripts\roscli.cmd`.
+Treat this as a skill-assisted run:
+1) Discover available operations:
+- scripts\roscli.cmd list-commands --ids-only
+2) Before invoking a command, inspect its contract:
+- scripts\roscli.cmd describe-command nav.find_symbol
+- scripts\roscli.cmd describe-command edit.rename_symbol
+3) Execute a compact Roslyn-first flow to complete the task and verify:
+- scripts\roscli.cmd nav.find_symbol Target.cs Process --brief true --max-results 50
+- scripts\roscli.cmd edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50
+- scripts\roscli.cmd diag.get_file_diagnostics Target.cs
+Guardrail:
+- Do not use `session.open` on non-C# files (.sln/.slnx/.csproj).
+"@
+            }
+
+            return @"
+Roslyn tooling is available as `scripts/roscli` (Bash) or `scripts\roscli.cmd` (PowerShell).
+Treat this as a skill-assisted run:
+1) Discover available operations:
+- bash scripts/roscli list-commands --ids-only
+2) Before invoking a command, inspect its contract:
+- bash scripts/roscli describe-command nav.find_symbol
+- bash scripts/roscli describe-command edit.rename_symbol
+3) Execute a compact Roslyn-first flow to complete the task and verify:
+- bash scripts/roscli nav.find_symbol Target.cs Process --brief true --max-results 50
+- bash scripts/roscli edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50
+- bash scripts/roscli diag.get_file_diagnostics Target.cs
+Guardrail:
+- Do not use `session.open` on non-C# files (.sln/.slnx/.csproj).
+"@
+        }
+        "schema-first" {
+            if ($Agent -eq "codex") {
+                return @"
+Roslyn tooling is available and should be used contract-first.
+Required sequence:
+1) Read command contracts:
+- scripts\roscli.cmd describe-command nav.find_symbol
+- scripts\roscli.cmd describe-command edit.rename_symbol
+- scripts\roscli.cmd describe-command diag.get_file_diagnostics
+2) Create payload files (avoid inline JSON quoting):
+- Set-Content nav.find_symbol.json '{"file_path":"Target.cs","symbol_name":"Process","brief":true,"max_results":50}'
+- Set-Content edit.rename_symbol.json '{"file_path":"Target.cs","line":3,"column":17,"new_name":"Handle","apply":true,"max_diagnostics":50}'
+- Set-Content diag.file.json '{"file_path":"Target.cs"}'
+3) Validate payloads:
+- scripts\roscli.cmd validate-input nav.find_symbol --input "@nav.find_symbol.json"
+- scripts\roscli.cmd validate-input edit.rename_symbol --input "@edit.rename_symbol.json"
+4) Execute:
+- scripts\roscli.cmd run nav.find_symbol --input "@nav.find_symbol.json"
+- scripts\roscli.cmd run edit.rename_symbol --input "@edit.rename_symbol.json"
+- scripts\roscli.cmd run diag.get_file_diagnostics --input "@diag.file.json"
+If validation fails, fix payload shape before continuing.
+"@
+            }
+
+            return @"
+Roslyn tooling is available and should be used contract-first (Bash lane).
+Required sequence:
+1) Read command contracts:
+- bash scripts/roscli describe-command nav.find_symbol
+- bash scripts/roscli describe-command edit.rename_symbol
+- bash scripts/roscli describe-command diag.get_file_diagnostics
+2) Create payload files (avoid inline JSON quoting):
+- printf '{"file_path":"Target.cs","symbol_name":"Process","brief":true,"max_results":50}\n' > nav.find_symbol.json
+- printf '{"file_path":"Target.cs","line":3,"column":17,"new_name":"Handle","apply":true,"max_diagnostics":50}\n' > edit.rename_symbol.json
+- printf '{"file_path":"Target.cs"}\n' > diag.file.json
+3) Validate payloads:
+- bash scripts/roscli validate-input nav.find_symbol --input @nav.find_symbol.json
+- bash scripts/roscli validate-input edit.rename_symbol --input @edit.rename_symbol.json
+4) Execute:
+- bash scripts/roscli run nav.find_symbol --input @nav.find_symbol.json
+- bash scripts/roscli run edit.rename_symbol --input @edit.rename_symbol.json
+- bash scripts/roscli run diag.get_file_diagnostics --input @diag.file.json
+If validation fails, fix payload shape before continuing.
+"@
         }
     }
 }
 
 function Get-McpRoslynGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical", "skill-minimal", "schema-first")][string]$Profile
     )
 
     switch ($Profile) {
@@ -1882,6 +1974,29 @@ Use the minimum MCP sequence:
 1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
 2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
 Only call discovery/catalog resources if these fail.
+"@
+        }
+        "skill-minimal" {
+            return @"
+Roslyn MCP resources are available and should be used as skill guidance.
+Use this sequence:
+1) read_mcp_resource server=roslyn uri=roslyn://commands
+2) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
+3) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
+4) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+"@
+        }
+        "schema-first" {
+            return @"
+Roslyn MCP resources are available and should be used contract-first.
+1) Read command metadata contracts:
+- read_mcp_resource server=roslyn uri=roslyn://command-meta/nav.find_symbol
+- read_mcp_resource server=roslyn uri=roslyn://command-meta/edit.rename_symbol
+- read_mcp_resource server=roslyn uri=roslyn://command-meta/diag.get_file_diagnostics
+2) Invoke commands using explicit query arguments:
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
+- read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
+- read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
 "@
         }
     }
