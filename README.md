@@ -27,6 +27,18 @@ Install `roscli` from NuGet preview:
 dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
 ```
 
+If your machine has extra/private NuGet feeds configured, prefer:
+
+```powershell
+dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
+```
+
+If a fresh publish is still indexing on NuGet, install by explicit version from the release page:
+
+```powershell
+dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
+```
+
 Optional companion tool for external package/API intelligence:
 
 ```powershell

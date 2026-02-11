@@ -8,6 +8,18 @@
 dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
 ```
 
+If your machine has extra/private feeds configured:
+
+```bash
+dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
+```
+
+If a fresh preview is still indexing, install by explicit version:
+
+```bash
+dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
+```
+
 ## Command name
 
 ```bash
