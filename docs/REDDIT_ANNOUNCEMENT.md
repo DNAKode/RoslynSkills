@@ -1,14 +1,12 @@
-﻿# Reddit Announcement Draft
+﻿# Reddit Announcement Draft (No Images)
 
-## Title
+## Title Options
 
-`RoslynSkills tool -- semantic C# workflows for coding agents`
+1. `RoslynSkills tool -- semantic C# workflows for coding agents`
+2. `RoslynSkills tool -- Roslyn-native C# workflows for coding agents`
+3. `RoslynSkills tool -- testing semantic C# agent workflows (WIP)`
 
-Alternative (even shorter):
-
-`RoslynSkills tool -- Roslyn-native C# workflows for coding agents`
-
-## Post
+## Paste-Ready Post (No Images)
 
 I'm building **RoslynSkills** as an open experiment in C#/.NET agent tooling:
 
@@ -23,12 +21,12 @@ So this project is explicitly work-in-progress, focused on evidence rather than 
 
 RoslynSkills gives coding agents explicit Roslyn command paths for:
 
-- symbol navigation,
-- structured edits,
-- diagnostics/repair loops,
-- file-scoped in-memory edit sessions.
+- semantic navigation (`nav.*`, `ctx.*`)
+- structured edits (`edit.*`)
+- diagnostics and repair loops (`diag.*`, `repair.*`)
+- file-scoped in-memory sessions (`session.*`, for `.cs`/`.csx` files)
 
-I'm also comparing this against LSP-based approaches (including C# LSP) in repeatable runs.  
+I am also comparing against LSP-based approaches (including C# LSP) in repeatable runs.
 LSP is strong for editor-style interaction. RoslynSkills may be stronger in agent trajectories where explicit command contracts and deterministic edit/diagnostic loops matter.
 
 No big conclusion yet. Mixed outcomes are useful at this stage.
@@ -42,36 +40,48 @@ If you want to engage:
 
 Negative results are especially welcome.
 
-Attribution: **Codex agent on behalf of u/gvrt**.
+---
 
-## Verified roscli Fragments (from run artifacts)
+### Quick Roscli Shape
 
-Source transcript:
+```text
+roscli --version
+roscli list-commands --ids-only
+roscli quickstart
+roscli describe-command session.open
+```
+
+Typical loop:
+
+```text
+roscli nav.find_symbol src/MyFile.cs Process --brief true --max-results 20
+roscli edit.rename_symbol src/MyFile.cs 42 17 Handle --apply true
+roscli diag.get_file_diagnostics src/MyFile.cs
+```
+
+---
+
+### Real Run Fragments (from artifacts)
+
+Source:
 
 - `artifacts/skill-intro-ablation/20260210-v1/paired-schema-first/codex-treatment/transcript.jsonl:68`
 - `artifacts/skill-intro-ablation/20260210-v1/paired-schema-first/codex-treatment/transcript.jsonl:71`
 - `artifacts/skill-intro-ablation/20260210-v1/paired-schema-first/codex-treatment/transcript.jsonl:74`
 
-Fragment 1:
-
 ```json
 {
   "Ok": true,
   "CommandId": "nav.find_symbol",
-  "Preview": "nav.find_symbol ok: matches=4",
-  "Summary": "nav.find_symbol ok: matches=4"
+  "Preview": "nav.find_symbol ok: matches=4"
 }
 ```
-
-Fragment 2:
 
 ```json
 {
   "Ok": true,
   "CommandId": "edit.rename_symbol",
   "Data": {
-    "old_name": "Process",
-    "new_name": "Handle",
     "replacement_count": 2,
     "diagnostics_after_edit": {
       "total": 0
@@ -79,8 +89,6 @@ Fragment 2:
   }
 }
 ```
-
-Fragment 3:
 
 ```json
 {
@@ -90,25 +98,18 @@ Fragment 3:
 }
 ```
 
-## Suggested Image Asset
+Attribution: **Codex agent on behalf of u/gvrt**.
 
-Use this generated overview panel:
+## Reddit Formatting Notes (What Works)
 
-- `docs/images/reddit-overview.svg`
+Based on Reddit Help docs:
 
-## Image Pack (Order + Titles)
+- Use desktop **Rich Text** editor for straightforward formatting controls.
+- Markdown is also supported for posts/comments.
+- Code blocks are supported; fenced blocks (triple backticks) are fine in modern Reddit.
+- For widest compatibility (including old clients), 4-space-indented code blocks are the safe fallback.
 
-Use these PNG files for Reddit upload order:
+References:
 
-1. `docs/images/reddit/01-roscli-overview.png`
-: Suggested title: **What roscli gives an agent in 30 seconds**
-2. `docs/images/reddit/02-roscli-vs-lsp.png`
-: Suggested title: **Text-first vs LSP vs RoslynSkills (why compare all three)**
-3. `docs/images/reddit/03-roscli-real-fragment.png`
-: Suggested title: **Real roscli fragment from a benchmark run**
-
-Notes:
-
-- Card 1 includes concrete command examples (`nav.find_symbol`, `edit.rename_symbol`, `diag.get_file_diagnostics`).
-- Card 3 includes transcript-derived fragments to show this is from actual runs, not mock output.
-- Card 3 is shown with user-facing `roscli` commands; raw artifact traces may show `scripts\\roscli.cmd` because those runs use repo-local wrappers.
+- https://support.reddithelp.com/hc/en-us/articles/205191185-How-do-I-format-my-comment-or-post-
+- https://support.reddithelp.com/hc/en-us/articles/360043033952-Formatting-Guide
