@@ -1,10 +1,8 @@
 ﻿# Reddit Announcement Draft (No Images)
 
-## Title Options
+## Title
 
-1. `RoslynSkills tool -- semantic C# workflows for coding agents`
-2. `RoslynSkills tool -- Roslyn-native C# workflows for coding agents`
-3. `RoslynSkills tool -- testing semantic C# agent workflows (WIP)`
+`RoslynSkills tool -- Roslyn-native C# workflows for coding agents`
 
 ## Paste-Ready Post (No Images)
 
@@ -64,13 +62,11 @@ roscli diag.get_file_diagnostics src/MyFile.cs
 
 ---
 
-### Real Run Fragments (from artifacts)
+### Real Roscli Fragment (command + response)
 
-Source:
-
-- `artifacts/skill-intro-ablation/20260210-v1/paired-schema-first/codex-treatment/transcript.jsonl:68`
-- `artifacts/skill-intro-ablation/20260210-v1/paired-schema-first/codex-treatment/transcript.jsonl:71`
-- `artifacts/skill-intro-ablation/20260210-v1/paired-schema-first/codex-treatment/transcript.jsonl:74`
+```text
+roscli run nav.find_symbol --input '{"file_path":"Target.cs","symbol_name":"Process","brief":true,"max_results":50}'
+```
 
 ```json
 {
@@ -78,6 +74,10 @@ Source:
   "CommandId": "nav.find_symbol",
   "Preview": "nav.find_symbol ok: matches=4"
 }
+```
+
+```text
+roscli run edit.rename_symbol --input '{"file_path":"Target.cs","line":3,"column":17,"new_name":"Handle","apply":true,"max_diagnostics":50}'
 ```
 
 ```json
@@ -91,6 +91,10 @@ Source:
     }
   }
 }
+```
+
+```text
+roscli run diag.get_file_diagnostics --input '{"file_path":"Target.cs"}'
 ```
 
 ```json
