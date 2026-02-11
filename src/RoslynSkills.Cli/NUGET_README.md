@@ -23,6 +23,7 @@ dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-
 ## Command name
 
 ```bash
+roscli --version
 roscli list-commands --ids-only
 roscli quickstart
 roscli describe-command session.open

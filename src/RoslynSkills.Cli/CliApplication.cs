@@ -1,5 +1,6 @@
 using RoslynSkills.Contracts;
 using RoslynSkills.Core;
+using System.Reflection;
 using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -36,11 +37,17 @@ public sealed class CliApplication
             return 0;
         }
 
+        if (IsVersion(args[0]))
+        {
+            return await HandleVersionAsync(stdout).ConfigureAwait(false);
+        }
+
         string verb = args[0];
         string[] remainder = args.Skip(1).ToArray();
 
         return verb switch
         {
+            "version" => await HandleVersionAsync(stdout).ConfigureAwait(false),
             "list-commands" => await HandleListCommandsAsync(remainder, stdout).ConfigureAwait(false),
             "describe-command" => await HandleDescribeCommandAsync(remainder, stdout).ConfigureAwait(false),
             "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
@@ -122,6 +129,24 @@ public sealed class CliApplication
                 CommandId: "cli.list_commands",
                 Version: EnvelopeVersion,
                 Data: data,
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+        return 0;
+    }
+
+    private async Task<int> HandleVersionAsync(TextWriter stdout)
+    {
+        string version = GetCliVersion();
+        await WriteEnvelopeAsync(
+            stdout,
+            new CommandEnvelope(
+                Ok: true,
+                CommandId: "cli.version",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    cli_version = version,
+                },
                 Errors: Array.Empty<CommandError>(),
                 TraceId: null)).ConfigureAwait(false);
         return 0;
@@ -550,6 +575,24 @@ Workflow:
         => string.Equals(value, "--help", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(value, "-h", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(value, "help", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsVersion(string value)
+        => string.Equals(value, "--version", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(value, "-v", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetCliVersion()
+    {
+        Assembly assembly = typeof(CliApplication).Assembly;
+        string? informational = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informational))
+        {
+            return informational;
+        }
+
+        return assembly.GetName().Version?.ToString() ?? "unknown";
+    }
 
     private static bool TryBuildDirectShorthandInput(
         string commandId,
@@ -1394,6 +1437,7 @@ Workflow:
             roscli CLI
 
             Commands:
+              version
               list-commands [--compact] [--ids-only]
               describe-command <command-id>
               quickstart
@@ -1402,6 +1446,7 @@ Workflow:
               <command-id> [simple positional args]
 
             Notes:
+              - Use --version (or version) to print the installed roscli version.
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
               - Recommended first minute:
                 roscli list-commands --ids-only

@@ -460,8 +460,47 @@ public sealed class CliApplicationTests
 
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
+        Assert.Contains("version", output);
         Assert.Contains("quickstart", output);
         Assert.Contains("pit-of-success", output);
+    }
+
+    [Fact]
+    public async Task VersionFlag_ReturnsVersionEnvelope()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "--version" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"CommandId\": \"cli.version\"", output);
+        Assert.Contains("\"cli_version\":", output);
+    }
+
+    [Fact]
+    public async Task VersionVerb_ReturnsVersionEnvelope()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "version" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"CommandId\": \"cli.version\"", output);
+        Assert.Contains("\"cli_version\":", output);
     }
 
     [Fact]

@@ -48,6 +48,7 @@ dotnet tool install --global dotnet-inspect
 Verify install:
 
 ```powershell
+roscli --version
 roscli list-commands --ids-only
 roscli quickstart
 ```
