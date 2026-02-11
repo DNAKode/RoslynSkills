@@ -1,0 +1,50 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f2529"/>
+      <stop offset="100%" stop-color="#2d353b"/>
+    </linearGradient>
+    <linearGradient id="accent1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2f9c8d"/>
+      <stop offset="100%" stop-color="#3ba7c9"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 56px 'Segoe UI', Arial, sans-serif; fill: #f5f8f8; }
+      .subtitle { font: 400 26px 'Segoe UI', Arial, sans-serif; fill: #d7e3e0; }
+      .h { font: 700 28px 'Segoe UI', Arial, sans-serif; fill: #eef6f5; }
+      .p { font: 400 23px 'Segoe UI', Arial, sans-serif; fill: #d1ddda; }
+      .code { font: 400 21px Consolas, 'Courier New', monospace; fill: #dff8f4; }
+      .chip { font: 600 19px 'Segoe UI', Arial, sans-serif; fill: #10191a; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="900" fill="url(#bg1)"/>
+
+  <rect x="60" y="48" rx="18" ry="18" width="1480" height="120" fill="#11181b" opacity="0.82"/>
+  <text x="100" y="121" class="title">RoslynSkills: what roscli gives an agent</text>
+
+  <rect x="60" y="210" rx="18" ry="18" width="700" height="292" fill="#131b1f" opacity="0.92"/>
+  <text x="98" y="262" class="h">Core surface</text>
+  <text x="98" y="305" class="p">- nav.* and ctx.* for semantic navigation/context</text>
+  <text x="98" y="343" class="p">- edit.* for structured changes</text>
+  <text x="98" y="381" class="p">- diag.* and repair.* for feedback loops</text>
+  <text x="98" y="419" class="p">- session.* for file-scoped in-memory edit flow</text>
+  <rect x="98" y="452" rx="10" ry="10" width="360" height="38" fill="url(#accent1)"/>
+  <text x="120" y="478" class="chip">session.open is .cs/.csx only</text>
+
+  <rect x="840" y="210" rx="18" ry="18" width="700" height="292" fill="#131b1f" opacity="0.92"/>
+  <text x="878" y="262" class="h">First 30 seconds</text>
+  <text x="878" y="306" class="code">roscli --version</text>
+  <text x="878" y="344" class="code">roscli list-commands --ids-only</text>
+  <text x="878" y="382" class="code">roscli quickstart</text>
+  <text x="878" y="420" class="code">roscli describe-command session.open</text>
+  <text x="878" y="458" class="subtitle">pit-of-success path for agents</text>
+
+  <rect x="60" y="540" rx="18" ry="18" width="1480" height="300" fill="#11181b" opacity="0.9"/>
+  <text x="98" y="592" class="h">Concrete examples</text>
+  <text x="98" y="638" class="code">roscli nav.find_symbol src/MyFile.cs Process --brief true --max-results 20</text>
+  <text x="98" y="675" class="code">roscli edit.rename_symbol src/MyFile.cs 42 17 Handle --apply true</text>
+  <text x="98" y="712" class="code">roscli diag.get_file_diagnostics src/MyFile.cs</text>
+  <text x="98" y="770" class="subtitle">Goal: lower ambiguity and keep compile/diagnostic feedback inside the same tool loop.</text>
+</svg>
+

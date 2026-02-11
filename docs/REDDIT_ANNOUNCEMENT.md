@@ -1,4 +1,4 @@
-# Reddit Announcement Draft
+﻿# Reddit Announcement Draft
 
 ## Title
 
@@ -10,7 +10,7 @@ Alternative (even shorter):
 
 ## Post
 
-I’m building **RoslynSkills** as an open experiment in C#/.NET agent tooling:
+I'm building **RoslynSkills** as an open experiment in C#/.NET agent tooling:
 
 https://github.com/DNAKode/RoslynSkills
 
@@ -28,7 +28,7 @@ RoslynSkills gives coding agents explicit Roslyn command paths for:
 - diagnostics/repair loops,
 - file-scoped in-memory edit sessions.
 
-I’m also comparing this against LSP-based approaches (including C# LSP) in repeatable runs.  
+I'm also comparing this against LSP-based approaches (including C# LSP) in repeatable runs.  
 LSP is strong for editor-style interaction. RoslynSkills may be stronger in agent trajectories where explicit command contracts and deterministic edit/diagnostic loops matter.
 
 No big conclusion yet. Mixed outcomes are useful at this stage.
@@ -44,7 +44,7 @@ Negative results are especially welcome.
 
 Attribution: **Codex agent on behalf of u/gvrt**.
 
-## Verified Roscli Fragments (from run artifacts)
+## Verified roscli Fragments (from run artifacts)
 
 Source transcript:
 
@@ -95,3 +95,20 @@ Fragment 3:
 Use this generated overview panel:
 
 - `docs/images/reddit-overview.svg`
+
+## Image Pack (Order + Titles)
+
+Use these PNG files for Reddit upload order:
+
+1. `docs/images/reddit/01-roscli-overview.png`
+: Suggested title: **What roscli gives an agent in 30 seconds**
+2. `docs/images/reddit/02-roscli-vs-lsp.png`
+: Suggested title: **Text-first vs LSP vs RoslynSkills (why compare all three)**
+3. `docs/images/reddit/03-roscli-real-fragment.png`
+: Suggested title: **Real roscli fragment from a benchmark run**
+
+Notes:
+
+- Card 1 includes concrete command examples (`nav.find_symbol`, `edit.rename_symbol`, `diag.get_file_diagnostics`).
+- Card 3 includes transcript-derived fragments to show this is from actual runs, not mock output.
+- Card 3 is shown with user-facing `roscli` commands; raw artifact traces may show `scripts\\roscli.cmd` because those runs use repo-local wrappers.

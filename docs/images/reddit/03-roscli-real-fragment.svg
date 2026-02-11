@@ -1,0 +1,37 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f2529"/>
+      <stop offset="100%" stop-color="#313941"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 52px 'Segoe UI', Arial, sans-serif; fill: #f5f8f8; }
+      .small { font: 400 18px 'Segoe UI', Arial, sans-serif; fill: #b8c8c5; }
+      .code { font: 400 20px Consolas, 'Courier New', monospace; fill: #dff8f4; }
+      .h { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #eef6f5; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="900" fill="url(#bg3)"/>
+  <rect x="60" y="48" rx="18" ry="18" width="1480" height="100" fill="#11181b" opacity="0.82"/>
+  <text x="100" y="112" class="title">Roscli in a real run (fragment)</text>
+
+  <rect x="60" y="188" rx="16" ry="16" width="1480" height="640" fill="#0f1619" opacity="0.93"/>
+  <text x="95" y="235" class="h">Source artifact:</text>
+  <text x="260" y="235" class="small">artifacts/skill-intro-ablation/20260210-v1/paired-schema-first/codex-treatment/transcript.jsonl</text>
+
+  <text x="95" y="288" class="code">&gt; roscli run nav.find_symbol ...</text>
+  <text x="95" y="322" class="code">{ "Ok": true, "CommandId": "nav.find_symbol", "Preview": "nav.find_symbol ok: matches=4" }</text>
+
+  <text x="95" y="386" class="code">&gt; roscli run edit.rename_symbol ...</text>
+  <text x="95" y="420" class="code">{ "Ok": true, "CommandId": "edit.rename_symbol", "Data": { "replacement_count": 2 } }</text>
+  <text x="95" y="454" class="code">{ "Data": { "diagnostics_after_edit": { "total": 0, "errors": 0, "warnings": 0 } } }</text>
+
+  <text x="95" y="518" class="code">&gt; roscli run diag.get_file_diagnostics ...</text>
+  <text x="95" y="552" class="code">{ "Ok": true, "CommandId": "diag.get_file_diagnostics", "Preview": "diag.get_file_diagnostics ok: total=0" }</text>
+
+  <text x="95" y="630" class="small">This is the pattern we want to make boringly reliable:</text>
+  <text x="95" y="660" class="small">discover target semantically - apply structured edit - verify diagnostics immediately.</text>
+
+  <text x="95" y="744" class="small">Note: raw artifact logs may show scripts\roscli.cmd (repo wrapper); user-facing command is roscli.</text>
+</svg>
