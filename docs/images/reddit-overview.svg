@@ -1,0 +1,52 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f2529"/>
+      <stop offset="100%" stop-color="#2d353b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2f9c8d"/>
+      <stop offset="100%" stop-color="#3ba7c9"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 64px 'Segoe UI', Arial, sans-serif; fill: #f5f8f8; }
+      .subtitle { font: 400 28px 'Segoe UI', Arial, sans-serif; fill: #d7e3e0; }
+      .h { font: 700 26px 'Segoe UI', Arial, sans-serif; fill: #f0f6f5; }
+      .p { font: 400 22px 'Segoe UI', Arial, sans-serif; fill: #d2dedc; }
+      .code { font: 400 20px Consolas, 'Courier New', monospace; fill: #dff8f4; }
+      .chip { font: 600 20px 'Segoe UI', Arial, sans-serif; fill: #0f1718; }
+      .small { font: 400 18px 'Segoe UI', Arial, sans-serif; fill: #b9c9c6; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="900" fill="url(#bg)"/>
+
+  <rect x="70" y="66" rx="18" ry="18" width="1460" height="100" fill="#11181b" opacity="0.76"/>
+  <text x="110" y="130" class="title">RoslynSkills</text>
+  <text x="550" y="130" class="subtitle">Roslyn-native command surface for C#/.NET coding agents</text>
+
+  <rect x="70" y="200" rx="18" ry="18" width="700" height="300" fill="#131b1f" opacity="0.92"/>
+  <text x="110" y="250" class="h">What It Offers</text>
+  <text x="110" y="294" class="p">- Semantic navigation (nav.*, ctx.*)</text>
+  <text x="110" y="334" class="p">- Structured edits (edit.*)</text>
+  <text x="110" y="374" class="p">- Diagnostics and repair loops (diag.*, repair.*)</text>
+  <text x="110" y="414" class="p">- In-memory file session loop (session.* for .cs/.csx)</text>
+  <rect x="110" y="440" rx="10" ry="10" width="330" height="38" fill="url(#accent)"/>
+  <text x="132" y="466" class="chip">Pit of success: quickstart first</text>
+
+  <rect x="830" y="200" rx="18" ry="18" width="700" height="300" fill="#131b1f" opacity="0.92"/>
+  <text x="870" y="250" class="h">First Minute</text>
+  <text x="870" y="294" class="code">roscli --version</text>
+  <text x="870" y="332" class="code">roscli list-commands --ids-only</text>
+  <text x="870" y="370" class="code">roscli quickstart</text>
+  <text x="870" y="408" class="code">roscli describe-command session.open</text>
+  <text x="870" y="458" class="small">Use session.open on .cs/.csx files only.</text>
+
+  <rect x="70" y="540" rx="18" ry="18" width="1460" height="290" fill="#11181b" opacity="0.88"/>
+  <text x="110" y="590" class="h">Representative Trajectory Snippet (from run artifact)</text>
+  <text x="110" y="632" class="code">{ "CommandId": "nav.find_symbol", "Preview": "nav.find_symbol ok: matches=4" }</text>
+  <text x="110" y="668" class="code">{ "CommandId": "edit.rename_symbol", "Data": { "replacement_count": 2, "diagnostics_after_edit": { "total": 0 } } }</text>
+  <text x="110" y="704" class="code">{ "CommandId": "diag.get_file_diagnostics", "Preview": "diag.get_file_diagnostics ok: total=0" }</text>
+  <text x="110" y="760" class="small">Work in progress: actively comparing RoslynSkills vs text-first and LSP-based flows.</text>
+</svg>
+
