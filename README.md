@@ -131,9 +131,11 @@ roscli diag.get_file_diagnostics src/MyProject/File.cs
 
 ## Optional: Release Bundle (CLI + MCP + Transport + Skill)
 
-If you want prebuilt binaries and wrappers, use the latest release bundle:
+If you want prebuilt binaries and wrappers, use the releases page:
 
-- https://github.com/DNAKode/RoslynSkills/releases/latest
+- https://github.com/DNAKode/RoslynSkills/releases
+
+Pick the newest `RoslynSkills v*` entry (including preview releases) and download:
 
 Main artifacts:
 
