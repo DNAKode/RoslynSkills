@@ -6,8 +6,11 @@ param(
     [switch]$SkipCodex,
     [switch]$SkipClaude,
     [switch]$IncludeMcpTreatment,
+    [switch]$IncludeClaudeLspTreatment,
     [string]$CliPublishConfiguration = "Release",
     [bool]$FailOnControlContamination = $true,
+    [bool]$FailOnLspRoslynContamination = $true,
+    [bool]$FailOnMissingLspTools = $false,
     [switch]$ReuseExistingBundles
 )
 
@@ -17,7 +20,7 @@ Set-StrictMode -Version Latest
 function Resolve-OutputDirectory {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
-        [Parameter(Mandatory = $true)][string]$OutputRoot
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$OutputRoot
     )
 
     if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
@@ -48,21 +51,29 @@ function Get-RunByMode {
 }
 
 function Safe-Delta {
-    param([AllowNull()][double]$Treatment, [AllowNull()][double]$Control)
+    param([AllowNull()][object]$Treatment, [AllowNull()][object]$Control)
     if ($null -eq $Treatment -or $null -eq $Control) {
         return $null
     }
 
-    return [Math]::Round(($Treatment - $Control), 3)
+    $treatmentValue = [double]$Treatment
+    $controlValue = [double]$Control
+    return [Math]::Round(($treatmentValue - $controlValue), 3)
 }
 
 function Safe-Ratio {
-    param([AllowNull()][double]$Treatment, [AllowNull()][double]$Control)
-    if ($null -eq $Treatment -or $null -eq $Control -or $Control -eq 0) {
+    param([AllowNull()][object]$Treatment, [AllowNull()][object]$Control)
+    if ($null -eq $Treatment -or $null -eq $Control) {
         return $null
     }
 
-    return [Math]::Round(($Treatment / $Control), 4)
+    $treatmentValue = [double]$Treatment
+    $controlValue = [double]$Control
+    if ($controlValue -eq 0) {
+        return $null
+    }
+
+    return [Math]::Round(($treatmentValue / $controlValue), 4)
 }
 
 function To-NumberOrNull {
@@ -130,11 +141,17 @@ foreach ($profile in $profileList) {
             "-File", $pairedScriptPath,
             "-OutputRoot", $bundleDirectory,
             "-RoslynGuidanceProfile", $profile,
-            "-CliPublishConfiguration", $CliPublishConfiguration
+            "-CliPublishConfiguration", $CliPublishConfiguration,
+            "-FailOnControlContamination", $FailOnControlContamination,
+            "-FailOnLspRoslynContamination", $FailOnLspRoslynContamination,
+            "-FailOnMissingLspTools", $FailOnMissingLspTools
         )
 
         if ($IncludeMcpTreatment) {
             $runArgs += "-IncludeMcpTreatment"
+        }
+        if ($IncludeClaudeLspTreatment) {
+            $runArgs += "-IncludeClaudeLspTreatment"
         }
         if ($SkipCodex) {
             $runArgs += "-SkipCodex"
@@ -158,20 +175,34 @@ foreach ($profile in $profileList) {
         throw "Expected paired summary not found for profile '$profile': $summaryPath"
     }
 
-    $runs = @((Get-Content -Path $summaryPath -Raw | ConvertFrom-Json))
+    $runsRaw = (Get-Content -Path $summaryPath -Raw | ConvertFrom-Json)
+    $runsList = New-Object System.Collections.Generic.List[object]
+    if ($runsRaw -is [System.Array]) {
+        foreach ($run in $runsRaw) {
+            if ($null -ne $run) {
+                $runsList.Add($run) | Out-Null
+            }
+        }
+    } elseif ($null -ne $runsRaw) {
+        $runsList.Add($runsRaw) | Out-Null
+    }
 
-    $agents = @($runs.agent | Select-Object -Unique)
+    $runs = $runsList.ToArray()
+    $agents = if ($runsList.Count -eq 0) { @() } else { @($runs | Select-Object -ExpandProperty agent -Unique) }
     foreach ($agent in $agents) {
         $control = Get-RunByMode -Runs $runs -Agent $agent -Mode "control"
         $treatment = Get-RunByMode -Runs $runs -Agent $agent -Mode "treatment"
         $treatmentMcp = Get-RunByMode -Runs $runs -Agent $agent -Mode "treatment-mcp"
+        $treatmentLsp = Get-RunByMode -Runs $runs -Agent $agent -Mode "treatment-lsp"
 
         $controlDuration = if ($null -eq $control) { $null } else { To-NumberOrNull $control.duration_seconds }
         $treatmentDuration = if ($null -eq $treatment) { $null } else { To-NumberOrNull $treatment.duration_seconds }
         $treatmentMcpDuration = if ($null -eq $treatmentMcp) { $null } else { To-NumberOrNull $treatmentMcp.duration_seconds }
+        $treatmentLspDuration = if ($null -eq $treatmentLsp) { $null } else { To-NumberOrNull $treatmentLsp.duration_seconds }
         $controlTokens = if ($null -eq $control) { $null } else { To-NumberOrNull $control.total_tokens }
         $treatmentTokens = if ($null -eq $treatment) { $null } else { To-NumberOrNull $treatment.total_tokens }
         $treatmentMcpTokens = if ($null -eq $treatmentMcp) { $null } else { To-NumberOrNull $treatmentMcp.total_tokens }
+        $treatmentLspTokens = if ($null -eq $treatmentLsp) { $null } else { To-NumberOrNull $treatmentLsp.total_tokens }
         $controlRoundTrips = if ($null -eq $control) { $null } else { To-NumberOrNull $control.command_round_trips }
         $treatmentRoundTrips = if ($null -eq $treatment) { $null } else { To-NumberOrNull $treatment.command_round_trips }
 
@@ -182,19 +213,27 @@ foreach ($profile in $profileList) {
             control_run_passed = if ($null -eq $control) { $null } else { To-BoolOrFalse $control.run_passed }
             treatment_run_passed = if ($null -eq $treatment) { $null } else { To-BoolOrFalse $treatment.run_passed }
             treatment_mcp_run_passed = if ($null -eq $treatmentMcp) { $null } else { To-BoolOrFalse $treatmentMcp.run_passed }
+            treatment_lsp_run_passed = if ($null -eq $treatmentLsp) { $null } else { To-BoolOrFalse $treatmentLsp.run_passed }
             control_roslyn_successful_calls = if ($null -eq $control) { $null } else { [int]$control.roslyn_successful_calls }
             treatment_roslyn_successful_calls = if ($null -eq $treatment) { $null } else { [int]$treatment.roslyn_successful_calls }
             treatment_mcp_roslyn_successful_calls = if ($null -eq $treatmentMcp) { $null } else { [int]$treatmentMcp.roslyn_successful_calls }
+            treatment_lsp_successful_calls = if ($null -eq $treatmentLsp) { $null } else { [int]$treatmentLsp.lsp_successful_calls }
             control_duration_seconds = $controlDuration
             treatment_duration_seconds = $treatmentDuration
             treatment_mcp_duration_seconds = $treatmentMcpDuration
+            treatment_lsp_duration_seconds = $treatmentLspDuration
             treatment_vs_control_duration_delta = Safe-Delta -Treatment $treatmentDuration -Control $controlDuration
             treatment_vs_control_duration_ratio = Safe-Ratio -Treatment $treatmentDuration -Control $controlDuration
+            treatment_lsp_vs_control_duration_delta = Safe-Delta -Treatment $treatmentLspDuration -Control $controlDuration
+            treatment_lsp_vs_control_duration_ratio = Safe-Ratio -Treatment $treatmentLspDuration -Control $controlDuration
             control_total_tokens = $controlTokens
             treatment_total_tokens = $treatmentTokens
             treatment_mcp_total_tokens = $treatmentMcpTokens
+            treatment_lsp_total_tokens = $treatmentLspTokens
             treatment_vs_control_token_delta = Safe-Delta -Treatment $treatmentTokens -Control $controlTokens
             treatment_vs_control_token_ratio = Safe-Ratio -Treatment $treatmentTokens -Control $controlTokens
+            treatment_lsp_vs_control_token_delta = Safe-Delta -Treatment $treatmentLspTokens -Control $controlTokens
+            treatment_lsp_vs_control_token_ratio = Safe-Ratio -Treatment $treatmentLspTokens -Control $controlTokens
             control_round_trips = $controlRoundTrips
             treatment_round_trips = $treatmentRoundTrips
             treatment_vs_control_round_trip_delta = Safe-Delta -Treatment $treatmentRoundTrips -Control $controlRoundTrips
@@ -217,6 +256,10 @@ $report = [ordered]@{
     output_root = $outputDirectory
     profiles = @($profileList)
     include_mcp_treatment = [bool]$IncludeMcpTreatment
+    include_claude_lsp_treatment = [bool]$IncludeClaudeLspTreatment
+    fail_on_control_contamination = [bool]$FailOnControlContamination
+    fail_on_lsp_roslyn_contamination = [bool]$FailOnLspRoslynContamination
+    fail_on_missing_lsp_tools = [bool]$FailOnMissingLspTools
     skip_codex = [bool]$SkipCodex
     skip_claude = [bool]$SkipClaude
     bundle_runs = @($bundleRows | Sort-Object profile)
@@ -233,6 +276,10 @@ $lines.Add("- Generated (UTC): $($report.generated_utc)")
 $lines.Add("- Output root: $($report.output_root)")
 $lines.Add("- Profiles: $([string]::Join(', ', $report.profiles))")
 $lines.Add("- Include MCP treatment: $($report.include_mcp_treatment)")
+$lines.Add("- Include Claude LSP treatment: $($report.include_claude_lsp_treatment)")
+$lines.Add("- Fail on control contamination: $($report.fail_on_control_contamination)")
+$lines.Add("- Fail on LSP Roslyn contamination: $($report.fail_on_lsp_roslyn_contamination)")
+$lines.Add("- Fail on missing LSP tools: $($report.fail_on_missing_lsp_tools)")
 $lines.Add("- Skip codex: $($report.skip_codex)")
 $lines.Add("- Skip claude: $($report.skip_claude)")
 $lines.Add("")
@@ -246,10 +293,10 @@ foreach ($bundle in ($report.bundle_runs | Sort-Object profile)) {
 $lines.Add("")
 $lines.Add("## Per-Agent Outcome")
 $lines.Add("")
-$lines.Add("| Agent | Profile | control pass | treatment pass | treatment roslyn calls | duration delta (s) | token delta | round-trip delta |")
-$lines.Add("| --- | --- | --- | --- | ---: | ---: | ---: | ---: |")
+$lines.Add("| Agent | Profile | control pass | treatment pass | treatment-lsp pass | treatment roslyn calls | treatment-lsp calls | duration delta (s) | lsp duration delta (s) | token delta | lsp token delta | round-trip delta |")
+$lines.Add("| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
 foreach ($row in $recordsArray) {
-    $lines.Add("| $($row.agent) | $($row.profile) | $($row.control_run_passed) | $($row.treatment_run_passed) | $($row.treatment_roslyn_successful_calls) | $($row.treatment_vs_control_duration_delta) | $($row.treatment_vs_control_token_delta) | $($row.treatment_vs_control_round_trip_delta) |")
+    $lines.Add("| $($row.agent) | $($row.profile) | $($row.control_run_passed) | $($row.treatment_run_passed) | $($row.treatment_lsp_run_passed) | $($row.treatment_roslyn_successful_calls) | $($row.treatment_lsp_successful_calls) | $($row.treatment_vs_control_duration_delta) | $($row.treatment_lsp_vs_control_duration_delta) | $($row.treatment_vs_control_token_delta) | $($row.treatment_lsp_vs_control_token_delta) | $($row.treatment_vs_control_round_trip_delta) |")
 }
 $lines.Add("")
 $lines.Add("## Interpretation Prompt")

@@ -103,7 +103,8 @@ Deliverables:
 
 - skill wrapper over CLI commands,
 - MCP adapter over stable CLI subset,
-- comparative interface experiments.
+- comparative interface experiments,
+- external C# LSP comparator lane experiments (for example Claude `csharp-lsp`).
 
 Tasks:
 
@@ -188,13 +189,15 @@ Implement machine-readable scenario files with:
 1. Baseline mock runner (for harness validation)
 2. Codex CLI runner
 3. Claude Code runner
-4. Optional additional runners
+4. Claude C# LSP comparator condition wiring
+5. Optional additional runners
 
 Runner logging requirements:
 
 - log tools offered per run,
 - log tools called per run,
 - classify Roslyn tool usage events,
+- classify external C# LSP usage events,
 - capture short structured post-run self-report block.
 
 ## 4.3 Metrics pipeline
@@ -245,7 +248,7 @@ Test response:
 Risk: interface divergence  
 Test response:
 
-- CLI vs skill vs MCP conformance test matrix.
+- CLI vs skill vs MCP conformance test matrix, plus external C# LSP comparator condition checks.
 
 Risk: synthetic benchmark overclaims  
 Test response:

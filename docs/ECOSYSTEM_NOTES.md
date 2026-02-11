@@ -7,6 +7,8 @@ Date: 2026-02-11
 - `https://github.com/richlander/dotnet-inspect`
 - `https://github.com/richlander/dotnet-skills`
 - `https://www.reddit.com/r/dotnet/comments/1qvef17/dotnetinspect_tool_inspect_net_resource_llm/`
+- `https://github.com/anthropics/claude-plugins-official/tree/main/plugins/csharp-lsp`
+- `https://github.com/razzmatazz/csharp-language-server`
 
 ## What They Do
 
@@ -108,4 +110,25 @@ Suggested combined agent workflow:
 2. perform local symbol-targeted changes with `roscli`.
 3. verify with local diagnostics/build/tests.
 
+Copy-paste hint for agent sessions:
+
+```text
+Use dotnet-inspect for external package/framework API intelligence.
+Use roscli for local workspace semantic edits/diagnostics.
+For migration tasks: inspect first, then edit with roscli.
+```
+
 This aligns with community feedback in the referenced thread: package/assembly analysis and Roslyn workspace operations are adjacent but distinct concerns.
+
+## LSP Comparator Implication
+
+- External C# LSP tooling is now an explicit comparator condition in RoslynSkills benchmarks, not a background assumption.
+- For Claude-specific runs, treat `csharp-lsp` as a first-class alternative lane and record usage/adoption separately from Roslyn usage.
+
+## Planned Close Comparator: dotnet-inspect / dotnet-skills
+
+- Add explicit benchmark conditions where `dotnet-inspect` is tested:
+  - instead of RoslynSkills,
+  - and in conjunction with RoslynSkills.
+- Scope these comparisons to tasks where package/API intelligence is actually decision-relevant (for example version migration and external API usage), not only local symbol edits.
+- Keep condition isolation strict to avoid mixed-tool contamination in control lanes.

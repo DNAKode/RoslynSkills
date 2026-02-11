@@ -23,6 +23,12 @@ Install `roscli` from NuGet preview:
 dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
 ```
 
+Optional companion tool for external package/API intelligence:
+
+```powershell
+dotnet tool install --global dotnet-inspect
+```
+
 Verify install:
 
 ```powershell
@@ -44,9 +50,10 @@ Workflow:
 2) If command arguments are unclear, run "roscli describe-command <command-id>".
 3) Prefer direct command shorthand for common calls; use "run ... --input" for complex JSON payloads.
 4) Prefer nav.* / ctx.* / diag.* before text-only fallback.
-5) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
-6) Run build/tests before finalizing changes.
-7) If roscli cannot answer a C# query, state why before falling back.
+5) For external package/API questions, use "dnx dotnet-inspect -y -- ..." before editing local code.
+6) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
+7) Run build/tests before finalizing changes.
+8) If roscli cannot answer a C# query, state why before falling back.
 ```
 
 First useful commands:
@@ -60,10 +67,16 @@ roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType
 
 Note: `session.open` is for C# source files (`.cs`/`.csx`) only. Do not use `session.open` on `.sln`, `.slnx`, or `.csproj`.
 Tip: for simple rename/fix tasks, start with a minimal flow (`edit.rename_symbol` then `diag.get_file_diagnostics`) before broader exploration.
+If command arguments are unclear in-session, run:
+
+```powershell
+roscli describe-command session.open
+roscli describe-command edit.create_file
+```
 
 ## What You Get
 
-`roscli` currently exposes 32 commands across:
+`roscli` currently exposes 33 commands across:
 
 - `nav.*`: semantic symbol/references/implementations/overrides
 - `ctx.*`: file/member/call-chain/dependency context
@@ -83,6 +96,27 @@ Practical split of responsibilities:
 
 1. Use `dotnet-inspect` for package/assembly intelligence (external APIs, overload discovery, version diffs, vulnerability metadata).
 2. Use `roscli` for workspace-native Roslyn operations (symbol navigation, structured edits, diagnostics, repair) in your current repo.
+
+Quick "which tool" hints:
+
+- "What overloads/members does package X expose?" -> `dotnet-inspect`
+- "What changed from package version A to B?" -> `dotnet-inspect`
+- "Where is symbol Y used in this repo?" -> `roscli`
+- "Rename/update code safely across this workspace" -> `roscli`
+
+Agent session hint block (combined mode):
+
+```text
+Use both tools in this session:
+- dotnet-inspect for external package/library API intelligence.
+- roscli for local workspace semantic navigation, edits, and diagnostics.
+
+Rule of thumb:
+1) If the question is about a NuGet/package/framework API, start with:
+   dnx dotnet-inspect -y -- <command>
+2) If the task is editing/diagnosing this repo, use roscli commands.
+3) For migration/refactor tasks, do both: inspect external API first, then edit locally with roscli.
+```
 
 Example combined workflow:
 
@@ -161,6 +195,17 @@ Local validation baseline:
 ```powershell
 dotnet test RoslynSkills.slnx -c Release
 ```
+
+LSP comparator research lane (Claude `csharp-lsp` vs RoslynSkills):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 `
+  -IncludeMcpTreatment `
+  -IncludeClaudeLspTreatment `
+  -RoslynGuidanceProfile standard
+```
+
+Design notes: `benchmarks/LSP_COMPARATOR_PLAN.md`.
 
 ## For Contributors (Developing RoslynSkills)
 

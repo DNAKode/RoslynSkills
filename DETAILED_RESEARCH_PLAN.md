@@ -83,7 +83,7 @@ Outputs:
 
 - command schemas (JSON-first),
 - validation grammar and error semantics,
-- compatibility mapping across CLI/skill/MCP.
+- compatibility mapping across CLI/skill/MCP plus external C# LSP comparator conditions.
 
 Dependencies:
 
@@ -109,7 +109,7 @@ Requirements:
 
 Outputs:
 
-- `roslyn-agent` CLI skeleton and core subcommands,
+- `roscli` CLI skeleton and core subcommands,
 - command contract tests,
 - compatibility docs for Codex CLI and Claude Code workflows.
 
@@ -131,7 +131,8 @@ Outputs:
 
 - skill wrapper package for guided workflows,
 - MCP adapter that exposes selected CLI capability safely,
-- adapter conformance tests against CLI contract.
+- adapter conformance tests against CLI contract,
+- comparator guidance pack for external C# LSP runs (for example Claude `csharp-lsp`) with condition-isolation checks.
 
 Dependencies:
 
@@ -172,7 +173,7 @@ Detailed requirements:
 
 - scenario registry with parameterized task definitions,
 - run orchestration with seeded reproducibility,
-- baseline support (B0-B3),
+- baseline support (B0-B4),
 - telemetry collection (tool calls, timings, token usage, diagnostics),
 - explicit tool availability and tool usage logging per run,
 - structured post-run agent self-report capture,
@@ -325,7 +326,7 @@ Evaluation criteria:
 - model usability,
 - determinism,
 - safety under malformed or partial inputs,
-- compatibility with CLI/skill/MCP channels.
+- compatibility with CLI/skill/MCP channels and external C# LSP comparator lanes.
 
 ## 7. CLI Requirements for Agentic Use
 
@@ -341,7 +342,8 @@ Context policy experiment (new high-priority branch):
 - Compare treatment conditions with:
   - `brief-first` Roslyn guidance (compact by default, escalate on demand),
   - `verbose-first` Roslyn guidance (rich by default, compress when needed),
-  - baseline `standard` guidance.
+  - baseline `standard` guidance,
+  - external C# LSP guidance profiles (for example `csharp-lsp` standard vs brief-first) under Roslyn-hidden conditions.
 - Required metrics per condition:
   - task success/acceptance rate,
   - elapsed duration,

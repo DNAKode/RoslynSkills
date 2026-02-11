@@ -39,6 +39,24 @@ dnx dotnet-inspect -y -- api JsonSerializer --package System.Text.Json
 
 Use `dotnet-inspect` for dependency/package discovery, then use `roscli` for workspace-local semantic edits and diagnostics.
 
+Selection hints:
+
+- external package API shape / overloads / version diffs: `dotnet-inspect`
+- in-repo symbol targeting / edits / diagnostics: `roscli`
+- dependency-driven local changes: use both (inspect first, edit second)
+
+Fast combined pattern:
+
+```powershell
+# 1) Inspect external API
+dnx dotnet-inspect -y -- api JsonSerializer --package System.Text.Json
+
+# 2) Make local semantic change
+roscli nav.find_symbol src/MyProject/File.cs JsonSerializer --brief true --max-results 20
+roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true
+roscli diag.get_file_diagnostics src/MyProject/File.cs
+```
+
 ## Roscli performance mode (high call volume)
 
 For longer agent loops with many Roslyn calls, prefer cached published execution:

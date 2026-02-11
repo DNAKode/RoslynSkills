@@ -23,7 +23,7 @@ Research stance:
 - Language and ecosystem: C#/.NET only.
 - Corpora: public OSS repositories only.
 - Baseline agent environments: Codex CLI and Claude Code first; extensible to others.
-- Interface channels under test: plain CLI first, then skill wrappers, then MCP adapters.
+- Interface channels under test: plain CLI first, then skill wrappers, then MCP adapters, with an explicit external C# LSP comparator lane.
 
 ### 2.2 Non-goals (for this phase)
 
@@ -116,7 +116,7 @@ Competing feedback formats:
 - structured repair hints (candidate code actions or operation suggestions),
 - hybrid "brief summary + expandable detail".
 
-### RQ4: Interface layer effectiveness (CLI vs skill vs MCP)
+### RQ4: Interface layer effectiveness (CLI vs skill vs MCP vs external C# LSP)
 
 Question: for coding augmentation, what interface stack provides best latency, reliability, debuggability, and adoption?
 
@@ -124,7 +124,8 @@ Planned priority:
 
 - plain CLI primitives,
 - skill wrappers over CLI primitives,
-- MCP adapter for broader interoperability.
+- MCP adapter for broader interoperability,
+- external C# LSP lane (for example Claude `csharp-lsp`) as a benchmark comparator.
 
 ### RQ5: Operation language design
 
@@ -216,7 +217,7 @@ Generate a comprehensive scenario matrix across:
 - code health baseline (clean, warning-heavy, failing tests),
 - performance constraints (fast-path vs correctness-max mode),
 - feedback policy (immediate, batched, adaptive),
-- interface channel (CLI, skill wrapper, MCP).
+- interface channel (CLI, skill wrapper, MCP, external C# LSP).
 
 Deliverable:
 
@@ -234,6 +235,8 @@ Deliverable:
    - workflow orchestration and prompt guidance over CLI primitives.
 3. **MCP adapter third**
    - interoperability layer after CLI contracts stabilize.
+4. **External C# LSP comparator lane (parallel)**
+   - benchmark against an established LSP path (for example Claude `csharp-lsp`) using matched prompts and acceptance gates.
 
 ### 8.2 Distribution and dogfooding
 
@@ -268,6 +271,7 @@ Benchmark design inspiration:
 - **B1**: H1 semantic retrieval + text writes.
 - **B2**: H2 structured edit engine.
 - **B3**: H3/H4 orchestration and transactional gating.
+- **B4**: external C# LSP-assisted flow (no RoslynSkills commands available).
 
 ### 9.2 Model policy
 
@@ -310,6 +314,8 @@ For each task and model configuration, run at least:
 
 - **Condition A (control)**: no Roslyn tools exposed.
 - **Condition B (treatment)**: Roslyn tools exposed, optional usage.
+- **Condition C (LSP comparator)**: external C# LSP tools exposed, Roslyn tools hidden.
+- **Condition D (optional mixed lane)**: Roslyn + external C# LSP both exposed.
 
 Both conditions must keep:
 
@@ -375,7 +381,7 @@ This captures practical utility and adoption, not only raw correctness.
 - Structured-edit complexity overhead:
   - maintain text fallback and incremental rollout.
 - Interface fragmentation:
-  - stabilize CLI contract first, then layer skills/MCP adapters.
+  - stabilize CLI contract first, then layer skills/MCP adapters and keep external LSP comparisons isolated by condition.
 
 ## 13. Immediate Next Steps
 
@@ -431,3 +437,7 @@ Meta-study inputs on agentic coding practice:
 25. SWE-bench repository: https://github.com/princeton-nlp/SWE-bench
 26. Agentless repository: https://github.com/OpenAutoCoder/Agentless
 27. OpenHands R2E2 benchmark write-up: https://www.all-hands.dev/blog/r2e2-realistic-repo-level-benchmark-for-ai-coding-agents
+28. csharp-ls repository: https://github.com/razzmatazz/csharp-language-server
+29. Claude official C# LSP plugin: https://github.com/anthropics/claude-plugins-official/tree/main/plugins/csharp-lsp
+30. dotnet-inspect repository: https://github.com/richlander/dotnet-inspect
+31. dotnet-skills repository: https://github.com/richlander/dotnet-skills

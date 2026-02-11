@@ -600,6 +600,154 @@ Decision:
 - Keep investing in low-friction onboarding surfaces (command discoverability, shell-safe examples, and skill packaging paths).
 - Track marketplace/plugin packaging as a candidate distribution lane alongside NuGet and release bundles.
 
+### F-2026-02-11-20: External C# LSP is now an explicit benchmark lane with harness telemetry support
+
+Evidence:
+
+- Harness updates:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`-IncludeClaudeLspTreatment`, `treatment-lsp` mode, LSP usage telemetry fields)
+- Scope/plan updates:
+  - `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md` (RQ4 and trial conditions now include external C# LSP)
+  - `DETAILED_RESEARCH_PLAN.md`
+  - `IMPLEMENTATION_AND_TEST_PLAN.md`
+  - `benchmarks/LSP_COMPARATOR_PLAN.md`
+
+Result:
+
+- Comparative research scope now includes three primary interface families:
+  - RoslynSkills CLI/MCP,
+  - external C# LSP comparator (Claude `csharp-lsp` lane),
+  - text-only control.
+- Paired-run metadata now captures:
+  - `lsp_used`,
+  - `lsp_attempted_calls`,
+  - `lsp_successful_calls`,
+  - `lsp_command_round_trips`.
+
+Interpretation:
+
+- We can now evaluate "does LSP make RoslynSkills obsolete?" as a repeatable condition-level question rather than anecdotal transcript interpretation.
+- This reduces risk of over-claiming Roslyn value (or under-claiming LSP value) from mixed, uncontrolled sessions.
+
+Decision:
+
+- Treat external LSP as mandatory comparator lane in future interface-effectiveness claims.
+- Require replicate-backed control vs Roslyn vs LSP bundles before architecture-level conclusions.
+
+### F-2026-02-11-21: dotnet-inspect is complementary by architecture, and should be compared as both substitute and combined lane
+
+Evidence:
+
+- `https://github.com/richlander/dotnet-inspect/blob/main/README.md`
+- `https://github.com/richlander/dotnet-inspect/blob/main/docs/llm-design.md`
+- `https://github.com/richlander/dotnet-inspect/blob/main/src/dotnet-inspect/dotnet-inspect.csproj`
+- `https://github.com/richlander/dotnet-skills/blob/main/README.md`
+- `https://github.com/richlander/dotnet-skills/blob/main/skills/dotnet-inspect/SKILL.md`
+
+Result:
+
+- `dotnet-inspect` emphasizes package/library/assembly/API inspection, diffing, and provenance/vulnerability audit with LLM-oriented output and guidance.
+- `dotnet-skills` emphasizes distribution/marketplace onboarding for that workflow.
+- No Roslyn workspace command surface is exposed; this is not a direct substitute for workspace-semantic local edit operations.
+
+Interpretation:
+
+- Overlap with RoslynSkills exists at "help agent pick the right symbol/API" level.
+- Core strengths differ:
+  - `dotnet-inspect`: external dependency/API intelligence,
+  - RoslynSkills: in-repo semantic navigation/edit/diagnostics.
+- Best performance may come from combined usage on dependency-driven tasks.
+
+Decision:
+
+- Add explicit benchmark matrix for `inspect-only`, `roslyn-only`, and `combined` conditions on package/API-sensitive tasks.
+
+### F-2026-02-11-22: In completed profile ablations, `brief-first` remained the lowest-friction Roslyn guidance posture while preserving correctness
+
+Evidence:
+
+- `artifacts/skill-intro-ablation/20260211-cycle1/skill-intro-ablation-report.json`
+- `artifacts/skill-intro-ablation/20260211-cycle1/paired-brief-first/paired-run-summary.json`
+- `artifacts/skill-intro-ablation/20260211-cycle1/paired-skill-minimal/paired-run-summary.json`
+- `artifacts/skill-intro-ablation/20260211-cycle1/paired-standard/paired-run-summary.json`
+
+Result:
+
+- Codex treatment vs control:
+  - `brief-first`: duration `+6.878s`, tokens `-6,970`, round-trips `+0`.
+  - `skill-minimal`: duration `+29.033s`, tokens `+37,189`, round-trips `+5`.
+- Claude treatment vs control:
+  - `brief-first`: duration `+22.516s`, tokens `+215`, round-trips `+2`.
+  - `skill-minimal`: duration `+34.968s`, tokens `+515`, round-trips `+5`.
+- Completed-profile runs remained correctness-clean (`run_passed=true`) with successful Roslyn usage in treatment lanes.
+
+Interpretation:
+
+- Inference from `20260211-cycle1` completed profiles: concise posture (`brief-first`) reduces trajectory churn versus `skill-minimal` without sacrificing task success.
+- `skill-minimal` remains useful as a stress/diagnostic posture but is too expensive as default guidance.
+
+Decision:
+
+- Keep `brief-first` as the default profile for mixed-agent research runs.
+- Keep `skill-minimal` as an explicit diagnostic arm only.
+
+### F-2026-02-11-23: LSP-lane integrity telemetry now cleanly distinguishes missing LSP setup from Roslyn contamination
+
+Evidence:
+
+- `artifacts/real-agent-runs/20260211-lsp-guard-final/paired-run-summary.json`
+- `artifacts/real-agent-runs/20260211-lsp-guard-final/paired-run-summary.md`
+- `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`lsp_tools_available`, `lsp_tools_unavailable_detected`, `lsp_lane_roslyn_contamination_detected`)
+
+Result:
+
+- Claude `treatment-lsp` run reported:
+  - `run_passed=true`,
+  - `roslyn_used=false`,
+  - `lsp_used=false`,
+  - `lsp_tools_available=false`,
+  - `lsp_tools_unavailable_detected=true`,
+  - `lsp_lane_roslyn_contamination_detected=false`.
+- Control and Roslyn treatment lanes in the same bundle remained uncontaminated and passed constraints.
+
+Interpretation:
+
+- We can now separate three failure/neutral cases:
+  - LSP not available in environment,
+  - LSP available but not adopted,
+  - Roslyn contamination in LSP-only lane.
+- This removes a major ambiguity that previously made LSP comparisons hard to trust.
+
+Decision:
+
+- Require `lsp_tools_available=true` before interpreting LSP-lane performance as capability evidence.
+- Keep `FailOnMissingLspTools` default permissive for data collection, but enable it for strict promotion bundles.
+
+### F-2026-02-11-24: Ablation rollups now preserve nulls for missing comparator lanes instead of coercing to synthetic deltas
+
+Evidence:
+
+- `benchmarks/scripts/Run-SkillIntroductionAblation.ps1` (`Safe-Delta`, `Safe-Ratio` null handling)
+- regenerated report:
+  - `artifacts/skill-intro-ablation/20260211-cycle1/skill-intro-ablation-report.json`
+
+Result:
+
+- For agents/conditions without `treatment-lsp` runs (for example Codex rows in this bundle), fields such as:
+  - `treatment_lsp_vs_control_duration_delta`,
+  - `treatment_lsp_vs_control_token_delta`
+  now remain `null` rather than showing misleading negative values derived from implicit zero treatment values.
+
+Interpretation:
+
+- Prior rollups could accidentally imply LSP wins/losses where the lane was never executed.
+- Null-preserving aggregation is required for trustworthy cross-condition dashboards.
+
+Decision:
+
+- Treat absent-lane metrics as null by construction.
+- Require explicit lane presence before including comparator deltas in summaries or decisions.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:
