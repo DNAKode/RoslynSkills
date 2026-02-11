@@ -65,11 +65,13 @@ This loop is intentionally minimal:
 
 ### Example roscli Fragment (command + response)
 
+Sample responses below are trimmed for brevity.
+
 ```text
 roscli nav.find_symbol Target.cs Process --brief true --max-results 50
 ```
 
-```json
+```text
 {
   "Ok": true,
   "CommandId": "nav.find_symbol",
@@ -84,9 +86,12 @@ roscli nav.find_symbol Target.cs Process --brief true --max-results 50
         "column": 17,
         "symbol_kind": "Method",
         "symbol_display": "Overloads.Process(int)"
+        ...
       }
     ]
+    ...
   }
+  ...
 }
 ```
 
@@ -94,7 +99,7 @@ roscli nav.find_symbol Target.cs Process --brief true --max-results 50
 roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
 ```
 
-```json
+```text
 {
   "Ok": true,
   "CommandId": "edit.rename_symbol",
@@ -102,8 +107,11 @@ roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 5
     "replacement_count": 2,
     "diagnostics_after_edit": {
       "total": 0
+      ...
     }
+    ...
   }
+  ...
 }
 ```
 
@@ -111,11 +119,12 @@ roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 5
 roscli diag.get_file_diagnostics Target.cs
 ```
 
-```json
+```text
 {
   "Ok": true,
   "CommandId": "diag.get_file_diagnostics",
   "Preview": "diag.get_file_diagnostics ok: total=0"
+  ...
 }
 ```
 
