@@ -19,7 +19,7 @@ This experiment is a first lightweight, end-to-end dry run of the real agent-eva
 ## Re-run Commands
 
 ```powershell
-dotnet run --project src/RoslynAgent.Benchmark -- agent-eval-gate `
+dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-gate `
   --manifest benchmarks/experiments/lightweight-utility-game-v1/manifest.json `
   --runs benchmarks/experiments/lightweight-utility-game-v1/runs `
   --output benchmarks/experiments/lightweight-utility-game-v1/artifacts `

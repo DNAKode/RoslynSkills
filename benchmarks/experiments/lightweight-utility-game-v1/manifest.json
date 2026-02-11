@@ -45,46 +45,46 @@
     {
       "id": "task-001-initial-build",
       "title": "Build SprintQuest CLI utility-game",
-      "repo": "DNAKode/RoslynSkill",
-      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "repo": "DNAKode/RoslynSkills",
+      "repo_url": "https://github.com/DNAKode/RoslynSkills",
       "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
       "task_prompt_file": "prompts/task-001-sprint-quest.md",
       "setup_commands": [
         "dotnet restore"
       ],
       "acceptance_checks": [
-        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
-        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+        "dotnet test tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj",
+        "dotnet test tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj"
       ]
     },
     {
       "id": "task-002-refactor-improvements",
       "title": "Refactor for reliability and add quick analytics",
-      "repo": "DNAKode/RoslynSkill",
-      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "repo": "DNAKode/RoslynSkills",
+      "repo_url": "https://github.com/DNAKode/RoslynSkills",
       "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
       "task_prompt_file": "prompts/task-002-analytics-refactor.md",
       "setup_commands": [
         "dotnet restore"
       ],
       "acceptance_checks": [
-        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
-        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+        "dotnet test tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj",
+        "dotnet test tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj"
       ]
     },
     {
       "id": "task-003-direction-change",
       "title": "Pivot design to a dungeon-run mechanic with rollback support",
-      "repo": "DNAKode/RoslynSkill",
-      "repo_url": "https://github.com/DNAKode/RoslynSkill",
+      "repo": "DNAKode/RoslynSkills",
+      "repo_url": "https://github.com/DNAKode/RoslynSkills",
       "commit": "d49a9d13a598e3b17e86c5dde5e42c59d3e86dad",
       "task_prompt_file": "prompts/task-003-direction-pivot.md",
       "setup_commands": [
         "dotnet restore"
       ],
       "acceptance_checks": [
-        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
-        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
+        "dotnet test tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj",
+        "dotnet test tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj"
       ]
     }
   ]
