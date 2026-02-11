@@ -12,6 +12,9 @@ I'm building **RoslynSkills** as an open experiment in C#/.NET agent tooling:
 
 https://github.com/DNAKode/RoslynSkills
 
+Initial focus is a CLI-first path: **`roscli`** as the main way to invoke Roslyn-powered operations in agent loops.
+Alternate entry points (for example MCP) are also available, but CLI ergonomics and reliability are the first target.
+
 The question is simple:
 
 - semantic tooling should help,
