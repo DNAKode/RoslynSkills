@@ -13,6 +13,7 @@ internal sealed class CommandFileAnalysis
     public SourceText SourceText { get; }
     public CSharpCompilation Compilation { get; }
     public SemanticModel SemanticModel { get; }
+    public WorkspaceContextInfo WorkspaceContext { get; }
 
     private CommandFileAnalysis(
         string filePath,
@@ -21,7 +22,8 @@ internal sealed class CommandFileAnalysis
         SyntaxNode root,
         SourceText sourceText,
         CSharpCompilation compilation,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel,
+        WorkspaceContextInfo workspaceContext)
     {
         FilePath = filePath;
         Source = source;
@@ -30,25 +32,28 @@ internal sealed class CommandFileAnalysis
         SourceText = sourceText;
         Compilation = compilation;
         SemanticModel = semanticModel;
+        WorkspaceContext = workspaceContext;
     }
 
-    public static async Task<CommandFileAnalysis> LoadAsync(string filePath, CancellationToken cancellationToken)
+    public static async Task<CommandFileAnalysis> LoadAsync(
+        string filePath,
+        CancellationToken cancellationToken,
+        string? workspacePath = null)
     {
-        string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-        SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
-        SyntaxNode root = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-        SourceText sourceText = syntaxTree.GetText(cancellationToken);
-        CSharpCompilation compilation = CreateCompilation("RoslynSkills.Command", new[] { syntaxTree });
-        SemanticModel semanticModel = compilation.GetSemanticModel(syntaxTree);
+        WorkspaceSemanticLoadResult result = await WorkspaceSemanticLoader.LoadForFileAsync(
+            filePath,
+            workspacePath,
+            cancellationToken).ConfigureAwait(false);
 
         return new CommandFileAnalysis(
-            filePath,
-            source,
-            syntaxTree,
-            root,
-            sourceText,
-            compilation,
-            semanticModel);
+            result.file_path,
+            result.source,
+            result.syntax_tree,
+            result.root,
+            result.source_text,
+            result.compilation,
+            result.semantic_model,
+            result.workspace_context);
     }
 
     public static CSharpCompilation CreateCompilation(string assemblyName, IReadOnlyList<SyntaxTree> syntaxTrees)

@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -21,6 +20,8 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         {
             return errors;
         }
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
 
         if (!File.Exists(filePath))
         {
@@ -50,15 +51,19 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
                 });
         }
 
-        string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-        SyntaxTree tree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
+            filePath,
+            cancellationToken,
+            workspacePath).ConfigureAwait(false);
 
-        IReadOnlyList<Diagnostic> diagnostics = CompilationDiagnostics.GetDiagnostics(new[] { tree }, cancellationToken);
+        IReadOnlyList<Diagnostic> diagnostics = GetDiagnosticsForFile(analysis, cancellationToken);
         NormalizedDiagnostic[] payload = CompilationDiagnostics.Normalize(diagnostics);
 
         object data = new
         {
-            file_path = filePath,
+            file_path = analysis.FilePath,
+            workspace_context = BuildWorkspaceContextPayload(analysis.WorkspaceContext),
             total = payload.Length,
             errors = payload.Count(d => string.Equals(d.severity, "Error", StringComparison.OrdinalIgnoreCase)),
             warnings = payload.Count(d => string.Equals(d.severity, "Warning", StringComparison.OrdinalIgnoreCase)),
@@ -66,6 +71,63 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static IReadOnlyList<Diagnostic> GetDiagnosticsForFile(CommandFileAnalysis analysis, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(analysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            return analysis.Compilation.GetDiagnostics(cancellationToken);
+        }
+
+        string filePath = Path.GetFullPath(analysis.FilePath);
+        return analysis.Compilation
+            .GetDiagnostics(cancellationToken)
+            .Where(diagnostic => IsDiagnosticForFile(diagnostic, filePath))
+            .ToArray();
+    }
+
+    private static bool IsDiagnosticForFile(Diagnostic diagnostic, string filePath)
+    {
+        if (diagnostic.Location == Location.None || !diagnostic.Location.IsInSource)
+        {
+            return false;
+        }
+
+        FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
+        string candidatePath = string.IsNullOrWhiteSpace(span.Path)
+            ? diagnostic.Location.SourceTree?.FilePath ?? string.Empty
+            : span.Path;
+
+        if (string.IsNullOrWhiteSpace(candidatePath))
+        {
+            return false;
+        }
+
+        return PathsEqual(filePath, candidatePath);
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), comparison);
+    }
+
+    private static object BuildWorkspaceContextPayload(WorkspaceContextInfo context)
+    {
+        return new
+        {
+            mode = context.mode,
+            resolution_source = context.resolution_source,
+            requested_workspace_path = context.requested_workspace_path,
+            resolved_workspace_path = context.resolved_workspace_path,
+            project_path = context.project_path,
+            fallback_reason = context.fallback_reason,
+            attempted_workspace_paths = context.attempted_workspace_paths,
+            workspace_diagnostics = context.workspace_diagnostics,
+        };
     }
 }
 

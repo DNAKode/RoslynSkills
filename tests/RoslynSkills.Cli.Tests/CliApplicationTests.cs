@@ -425,6 +425,25 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DescribeCommand_FindSymbol_IncludesWorkspaceHints()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "nav.find_symbol" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"workspace_path\"", output);
+        Assert.Contains("workspace_context.mode", output);
+    }
+
+    [Fact]
     public async Task Quickstart_ReturnsPitOfSuccessGuidance()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());
@@ -442,6 +461,7 @@ public sealed class CliApplicationTests
         Assert.Contains("\"CommandId\": \"cli.quickstart\"", output);
         Assert.Contains("pit_of_success", output);
         Assert.Contains("session.open only supports .cs/.csx files", output);
+        Assert.Contains("workspace_context.mode", output);
         Assert.Contains("src/MyProject/Program.cs", output);
     }
 

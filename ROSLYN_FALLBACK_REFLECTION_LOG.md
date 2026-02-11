@@ -111,3 +111,21 @@ Purpose: record every fallback to non-Roslyn `.cs` reading/editing so fallback p
     - token_count: lower (less back-and-forth argument guessing by agents).
   - Follow-up issue/test link:
     - TODO: prototype descriptor-driven input schema generation for MCP `tools/list` and CLI `describe-command`.
+- `2026-02-11`: Workspace-binding reliability pass required direct `.cs` reads/edits in command host and loader internals
+  - Task/Context: make `nav.find_symbol` and `diag.get_file_diagnostics` workspace-aware by default, expose `workspace_context` metadata, and align CLI/MCP guidance surfaces.
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - Implementing RoslynSkills internals still requires non-Roslyn file reads/edits while introducing new command-surface behavior and runtime dependencies.
+  - Roslyn command attempted (if any):
+    - Validation and empirical checks were run through `roscli` (`list-commands`, `nav.find_symbol`, `diag.get_file_diagnostics`) after implementation.
+  - Missing command/option hypothesis:
+    - Missing self-hosted "edit RoslynSkills source semantically" operation for multi-file command-surface/tooling refactors.
+  - Proposed improvement:
+    - Add a dedicated repository-maintainer mode over `edit.transaction` with symbol-id targeting across files plus auto-regenerated command usage/schema hint updates.
+  - Expected impact:
+    - correctness: higher (fewer hand-wired contract/help drift regressions).
+    - latency: lower (faster command-surface evolution loops).
+    - token_count: lower (less manual source inspection and patch iteration).
+  - Follow-up issue/test link:
+    - Added regression coverage in `tests/RoslynSkills.Core.Tests/CommandTests.cs` and `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`.

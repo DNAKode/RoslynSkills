@@ -41,10 +41,12 @@ Recommended first minute:
 ```bash
 roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20
 roscli diag.get_file_diagnostics src/MyProject/File.cs
+roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path src/MyProject/MyProject.csproj
 roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType { }"
 ```
 
 `session.open` is for `.cs`/`.csx` files only.
+For project-backed files, `nav.find_symbol` and `diag.get_file_diagnostics` should report `workspace_context.mode=workspace`; rerun with `--workspace-path` if mode is `ad_hoc`.
 
 ## Repository
 

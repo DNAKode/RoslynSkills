@@ -131,6 +131,122 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public async Task GetFileDiagnosticsCommand_UsesWorkspaceContextForProjectFile()
+    {
+        string repoRoot = FindRepositoryRoot();
+        string filePath = Path.Combine(repoRoot, "src", "RoslynSkills.Core", "DefaultRegistryFactory.cs");
+
+        GetFileDiagnosticsCommand command = new();
+        JsonElement input = ToJsonElement(new
+        {
+            file_path = filePath,
+        });
+
+        CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+        Assert.True(result.Ok);
+        using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+        JsonElement root = doc.RootElement;
+        JsonElement workspace = root.GetProperty("workspace_context");
+        Assert.Equal("workspace", workspace.GetProperty("mode").GetString());
+        Assert.Equal("auto", workspace.GetProperty("resolution_source").GetString());
+        Assert.True(workspace.TryGetProperty("resolved_workspace_path", out JsonElement resolvedWorkspacePath));
+        Assert.False(string.IsNullOrWhiteSpace(resolvedWorkspacePath.GetString()));
+    }
+
+    [Fact]
+    public async Task GetFileDiagnosticsCommand_ReportsAdhocModeWhenWorkspaceCannotBeResolved()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Standalone
+            {
+                public int Value => 42;
+            }
+            """);
+
+        try
+        {
+            GetFileDiagnosticsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement workspace = doc.RootElement.GetProperty("workspace_context");
+            Assert.Equal("ad_hoc", workspace.GetProperty("mode").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(workspace.GetProperty("fallback_reason").GetString()));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task FindSymbolCommand_UsesWorkspaceContextAndResolvesSymbols()
+    {
+        string repoRoot = FindRepositoryRoot();
+        string filePath = Path.Combine(repoRoot, "src", "RoslynSkills.Core", "DefaultRegistryFactory.cs");
+
+        FindSymbolCommand command = new();
+        JsonElement input = ToJsonElement(new
+        {
+            file_path = filePath,
+            symbol_name = "Create",
+            brief = true,
+            max_results = 20,
+        });
+
+        CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+        Assert.True(result.Ok);
+
+        using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+        JsonElement root = doc.RootElement;
+        JsonElement query = root.GetProperty("query");
+        JsonElement workspace = query.GetProperty("workspace_context");
+        Assert.Equal("workspace", workspace.GetProperty("mode").GetString());
+        Assert.True(root.GetProperty("total_matches").GetInt32() > 0);
+
+        bool hasResolvedMatch = root.GetProperty("matches")
+            .EnumerateArray()
+            .Any(match =>
+                match.TryGetProperty("is_resolved", out JsonElement resolvedProperty) &&
+                resolvedProperty.ValueKind == JsonValueKind.True);
+        Assert.True(hasResolvedMatch);
+    }
+
+    [Fact]
+    public async Task FindSymbolCommand_AcceptsExplicitWorkspacePath()
+    {
+        string repoRoot = FindRepositoryRoot();
+        string filePath = Path.Combine(repoRoot, "src", "RoslynSkills.Core", "DefaultRegistryFactory.cs");
+        string projectPath = Path.Combine(repoRoot, "src", "RoslynSkills.Core", "RoslynSkills.Core.csproj");
+
+        FindSymbolCommand command = new();
+        JsonElement input = ToJsonElement(new
+        {
+            file_path = filePath,
+            symbol_name = "Create",
+            brief = true,
+            workspace_path = projectPath,
+        });
+
+        CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+        Assert.True(result.Ok);
+
+        using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+        JsonElement workspace = doc.RootElement.GetProperty("query").GetProperty("workspace_context");
+        Assert.Equal("workspace", workspace.GetProperty("mode").GetString());
+        Assert.Equal("explicit", workspace.GetProperty("resolution_source").GetString());
+        Assert.Equal(Path.GetFullPath(projectPath), Path.GetFullPath(workspace.GetProperty("requested_workspace_path").GetString()!));
+    }
+
+    [Fact]
     public async Task GetSolutionSnapshotCommand_DefaultsToCompactAndSkipsGeneratedFiles()
     {
         string root = Path.Combine(Path.GetTempPath(), $"roslyn-agent-snapshot-{Guid.NewGuid():N}");
@@ -522,6 +638,23 @@ public sealed class CommandTests
         string json = JsonSerializer.Serialize(value);
         using JsonDocument doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? cursor = new(AppContext.BaseDirectory);
+        while (cursor is not null)
+        {
+            string candidate = Path.Combine(cursor.FullName, "RoslynSkills.slnx");
+            if (File.Exists(candidate))
+            {
+                return cursor.FullName;
+            }
+
+            cursor = cursor.Parent;
+        }
+
+        throw new InvalidOperationException("Unable to locate repository root containing RoslynSkills.slnx.");
     }
 }
 

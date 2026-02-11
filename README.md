@@ -56,8 +56,9 @@ Workflow:
 5) Prefer nav.* / ctx.* / diag.* before text-only fallback.
 6) For external package/API questions, use "dnx dotnet-inspect -y -- ..." before editing local code.
 7) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
-8) Run build/tests before finalizing changes.
-9) If roscli cannot answer a C# query, state why before falling back.
+8) For nav/diag file commands, check response "workspace_context.mode". If it is "ad_hoc" for project code, rerun with "--workspace-path <.csproj|.sln|.slnx|dir>".
+9) Run build/tests before finalizing changes.
+10) If roscli cannot answer a C# query, state why before falling back.
 ```
 
 First useful commands:
@@ -66,10 +67,12 @@ First useful commands:
 roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20
 roscli ctx.member_source src/MyProject/File.cs 120 10 body --brief true
 roscli diag.get_file_diagnostics src/MyProject/File.cs
+roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path src/MyProject/MyProject.csproj
 roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType { }"
 ```
 
 Note: `session.open` is for C# source files (`.cs`/`.csx`) only. Do not use `session.open` on `.sln`, `.slnx`, or `.csproj`.
+Note: `nav.find_symbol` and `diag.get_file_diagnostics` now return `workspace_context` metadata; treat `mode=workspace` as the expected state for project-backed files.
 Tip: for simple rename/fix tasks, start with a minimal flow (`edit.rename_symbol` then `diag.get_file_diagnostics`) before broader exploration.
 If command arguments are unclear in-session, run:
 

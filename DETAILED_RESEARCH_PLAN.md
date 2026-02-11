@@ -338,6 +338,7 @@ Functional:
 - deterministic command outputs,
 - stable schemas with version tags,
 - discoverable command inventory (`help`, `list-commands`, `describe-command`, `quickstart`),
+- explicit workspace-binding visibility for file-scoped semantic/diagnostic commands (`workspace_context.mode` + optional `workspace_path` override),
 - context-size aware output modes (`brief`, `standard`, `verbose`).
 
 Context policy experiment (new high-priority branch):
@@ -368,6 +369,7 @@ Quality:
 - snapshot tests for output schemas,
 - regression tests for exit code semantics,
 - onboarding-path tests for pit-of-success guidance continuity.
+- project-backed smoke checks that fail if high-traffic file commands regress to ad-hoc context silently.
 
 ## 8. Tool Distribution Requirements
 

@@ -164,6 +164,7 @@ Exit criteria:
 `Core.Workspace` and transaction pipeline:
 
 - integration tests for in-memory apply/reject/persist behavior.
+- workspace-binding tests for file-scoped nav/diag commands (auto-detect + explicit `workspace_path` override + fallback metadata).
 
 `Benchmark.Harness`:
 
@@ -175,6 +176,7 @@ Exit criteria:
 - unit tests pass,
 - command contract snapshots unchanged or explicitly versioned,
 - pit-of-success docs/skill/release references remain consistent,
+- project-backed nav/diag smoke checks show `workspace_context.mode=workspace` (or explicit documented waiver),
 - no unexplained analyzer regression.
 
 ## 4. Benchmark Implementation Plan

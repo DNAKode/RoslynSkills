@@ -153,6 +153,7 @@ Current guidance from skill-intro ablations (`artifacts/skill-intro-ablation/202
 - Default to `standard` or `surgical` for simple scoped tasks.
 - Treat `schema-first` as a debugging/contract-validation lane, not a default execution lane.
 - Keep prompt examples shell-specific (PowerShell vs Bash) and avoid inline JSON quoting in profile guidance.
+- For `nav.find_symbol` and `diag.get_file_diagnostics`, require `workspace_context.mode=workspace` on project-backed tasks; if mode is `ad_hoc`, rerun with explicit workspace path (`--workspace-path TargetHarness.csproj` or `workspace_path=TargetHarness.csproj` in MCP query).
 
 Isolation and integrity defaults:
 

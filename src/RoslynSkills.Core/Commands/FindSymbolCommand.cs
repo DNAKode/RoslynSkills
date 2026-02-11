@@ -25,6 +25,7 @@ public sealed class FindSymbolCommand : IAgentCommand
         }
 
         InputParsing.TryGetRequiredString(input, "symbol_name", errors, out _);
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
 
         if (!File.Exists(filePath))
         {
@@ -57,6 +58,7 @@ public sealed class FindSymbolCommand : IAgentCommand
 
         int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 50, minValue: 1, maxValue: 1_000);
         bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         int contextLines = InputParsing.GetOptionalInt(
             input,
             "context_lines",
@@ -64,27 +66,21 @@ public sealed class FindSymbolCommand : IAgentCommand
             minValue: 0,
             maxValue: 20);
 
-        string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-        SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
-        SyntaxNode root = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-        CSharpCompilation compilation = CSharpCompilation.Create(
-            assemblyName: "RoslynSkills.FindSymbol",
-            syntaxTrees: new[] { syntaxTree },
-            references: CompilationReferenceBuilder.BuildMetadataReferences(),
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        SemanticModel semanticModel = compilation.GetSemanticModel(syntaxTree);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
+            filePath,
+            cancellationToken,
+            workspacePath).ConfigureAwait(false);
 
-        IEnumerable<SyntaxToken> matches = root
+        IEnumerable<SyntaxToken> matches = analysis.Root
             .DescendantTokens(descendIntoTrivia: false)
             .Where(t => t.IsKind(SyntaxKind.IdentifierToken) && string.Equals(t.ValueText, symbolName, StringComparison.Ordinal))
             .Take(maxResults);
 
-        SourceText sourceText = syntaxTree.GetText(cancellationToken);
         List<SymbolMatch> resultMatches = new();
         foreach (SyntaxToken match in matches)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            resultMatches.Add(CreateMatch(match, sourceText, contextLines, semanticModel, cancellationToken));
+            resultMatches.Add(CreateMatch(match, analysis.SourceText, contextLines, analysis.SemanticModel, cancellationToken));
         }
 
         object matchesPayload = brief
@@ -106,12 +102,13 @@ public sealed class FindSymbolCommand : IAgentCommand
         {
             query = new
             {
-                file_path = filePath,
+                file_path = analysis.FilePath,
                 symbol_name = symbolName,
                 max_results = maxResults,
                 context_lines = contextLines,
                 brief,
                 semantic_enrichment = true,
+                workspace_context = BuildWorkspaceContextPayload(analysis.WorkspaceContext),
             },
             total_matches = resultMatches.Count,
             matches = matchesPayload,
@@ -231,6 +228,21 @@ public sealed class FindSymbolCommand : IAgentCommand
             symbol_display: symbol.ToDisplayString(),
             symbol_id: symbolId,
             containing_symbol: symbol.ContainingSymbol?.ToDisplayString());
+    }
+
+    private static object BuildWorkspaceContextPayload(WorkspaceContextInfo context)
+    {
+        return new
+        {
+            mode = context.mode,
+            resolution_source = context.resolution_source,
+            requested_workspace_path = context.requested_workspace_path,
+            resolved_workspace_path = context.resolved_workspace_path,
+            project_path = context.project_path,
+            fallback_reason = context.fallback_reason,
+            attempted_workspace_paths = context.attempted_workspace_paths,
+            workspace_diagnostics = context.workspace_diagnostics,
+        };
     }
 
     private sealed record SymbolMatch(

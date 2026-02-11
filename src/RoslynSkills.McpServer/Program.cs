@@ -643,8 +643,17 @@ internal static class Program
             properties["symbol_name"] = StringProperty("Symbol name to search for.");
             properties["brief"] = BoolProperty("Return compact result payload.");
             properties["max_results"] = IntProperty("Maximum matches to return.", 1);
+            properties["workspace_path"] = StringProperty("Optional .csproj/.sln/.slnx/or directory path used to force workspace context.");
             required.Add("file_path");
             required.Add("symbol_name");
+            return;
+        }
+
+        if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# source file.");
+            properties["workspace_path"] = StringProperty("Optional .csproj/.sln/.slnx/or directory path used to force workspace context.");
+            required.Add("file_path");
             return;
         }
 

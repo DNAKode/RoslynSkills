@@ -856,6 +856,44 @@ Decision:
 - Keep `FailOnClaudeAuthUnavailable=true` as default.
 - Treat zero-token Claude treatment lanes as invalid data for comparative interpretation.
 
+### F-2026-02-11-29: File-scoped Roslyn commands now expose workspace-binding state and default to project semantic context when available
+
+Evidence:
+
+- Implementation:
+  - `src/RoslynSkills.Core/Commands/WorkspaceSemanticLoader.cs`
+  - `src/RoslynSkills.Core/Commands/CommandFileAnalysis.cs`
+  - `src/RoslynSkills.Core/Commands/FindSymbolCommand.cs`
+  - `src/RoslynSkills.Core/Commands/GetFileDiagnosticsCommand.cs`
+  - `src/RoslynSkills.Cli/CliApplication.cs`
+  - `src/RoslynSkills.McpServer/Program.cs`
+- Tests:
+  - `tests/RoslynSkills.Core.Tests/CommandTests.cs`
+  - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+- Smoke notes:
+  - `docs/WORKSPACE_CONTEXT_SMOKE.md`
+
+Result:
+
+- `nav.find_symbol` and `diag.get_file_diagnostics` now include `workspace_context` payloads with:
+  - `mode` (`workspace` or `ad_hoc`),
+  - resolution source (`auto` or explicit `workspace_path`),
+  - resolved workspace/project paths when available,
+  - fallback reason and attempted paths when fallback occurs.
+- Project-backed smoke calls report `workspace_context.mode=workspace`.
+- Loose-file smoke calls report `workspace_context.mode=ad_hoc` with explicit fallback reason.
+- CLI preview/summary hints now include workspace mode for both commands.
+
+Interpretation:
+
+- Agents can now detect when a file-level command is operating outside real project context instead of silently trusting ad-hoc diagnostics.
+- This directly addresses disconnected-invocation failure mode (file looks broken because project context was not loaded).
+
+Decision:
+
+- Treat `workspace_context.mode=workspace` as the expected state for project-backed `nav.find_symbol` and `diag.get_file_diagnostics` calls.
+- Update pit-of-success and paired-run guidance to rerun with explicit workspace binding (`workspace_path`) when mode is `ad_hoc`.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

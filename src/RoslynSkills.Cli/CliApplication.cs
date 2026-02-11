@@ -211,6 +211,8 @@ public sealed class CliApplication
                         "If you need agent-facing defaults quickly: copy the prompt block below.",
                         "Use nav.* / ctx.* / diag.* before text fallback.",
                         "Keep payloads brief-first (for example --brief true) before expanding detail.",
+                        "For file diagnostics/symbol queries, confirm workspace_context.mode is 'workspace'.",
+                        "If workspace_context.mode is 'ad_hoc', rerun with --workspace-path <.csproj|.sln|.slnx|dir>.",
                         "Validate with diagnostics and build/tests before finalizing.",
                     },
                     first_minute_sequence = new[]
@@ -276,6 +278,8 @@ Workflow:
                     {
                         "session.open only supports .cs/.csx files.",
                         "Do not use session.open on .sln/.slnx/.csproj files.",
+                        "diag/nav file commands auto-resolve nearest workspace; check workspace_context.mode in responses.",
+                        "If workspace_context.mode is ad_hoc for a project file, pass --workspace-path explicitly.",
                         "For complex JSON payloads, prefer --input-stdin over shell-escaped inline JSON.",
                         "If roscli cannot answer a C# query, state why before fallback.",
                     },
@@ -1174,9 +1178,12 @@ Workflow:
         if (string.Equals(commandId, "nav.find_symbol", StringComparison.OrdinalIgnoreCase))
         {
             int totalMatches = TryGetInt(element, "total_matches", out int matches) ? matches : -1;
+            string workspaceMode = ResolveWorkspaceMode(element);
             if (totalMatches >= 0)
             {
-                return $"matches={totalMatches}";
+                return string.IsNullOrWhiteSpace(workspaceMode)
+                    ? $"matches={totalMatches}"
+                    : $"matches={totalMatches}, workspace={workspaceMode}";
             }
         }
 
@@ -1189,6 +1196,21 @@ Workflow:
             bool created = TryGetBool(element, "created", out bool createdFile) && createdFile;
             string action = wrote ? "written" : "dry-run";
             return created ? $"{file}, created, {action}" : $"{file}, updated, {action}";
+        }
+
+        if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
+        {
+            int total = TryGetInt(element, "total", out int totalDiagnostics) ? totalDiagnostics : -1;
+            int errors = TryGetInt(element, "errors", out int errorCount) ? errorCount : -1;
+            int warnings = TryGetInt(element, "warnings", out int warningCount) ? warningCount : -1;
+            string workspaceMode = ResolveWorkspaceMode(element);
+            if (total >= 0)
+            {
+                string summary = $"total={total}, errors={Math.Max(errors, 0)}, warnings={Math.Max(warnings, 0)}";
+                return string.IsNullOrWhiteSpace(workspaceMode)
+                    ? summary
+                    : $"{summary}, workspace={workspaceMode}";
+            }
         }
 
         if (string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.OrdinalIgnoreCase))
@@ -1241,6 +1263,26 @@ Workflow:
         }
 
         return null;
+    }
+
+    private static string ResolveWorkspaceMode(JsonElement element)
+    {
+        if (TryGetObject(element, "workspace_context", out JsonElement workspaceContext) &&
+            TryGetString(workspaceContext, "mode", out string mode) &&
+            !string.IsNullOrWhiteSpace(mode))
+        {
+            return mode;
+        }
+
+        if (TryGetObject(element, "query", out JsonElement query) &&
+            TryGetObject(query, "workspace_context", out JsonElement queryWorkspaceContext) &&
+            TryGetString(queryWorkspaceContext, "mode", out string queryMode) &&
+            !string.IsNullOrWhiteSpace(queryMode))
+        {
+            return queryMode;
+        }
+
+        return string.Empty;
     }
 
     private static bool TryGetObject(JsonElement element, string propertyName, out JsonElement value)
@@ -1397,7 +1439,28 @@ Workflow:
                 direct = "nav.find_symbol <file-path> <symbol-name> [--option value ...]",
                 run = "run nav.find_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"symbol_name\":\"Run\",\"brief\":true}'",
                 required_properties = new[] { "file_path", "symbol_name" },
-                optional_properties = new[] { "brief", "max_results", "context_lines" },
+                optional_properties = new[] { "brief", "max_results", "context_lines", "workspace_path" },
+                notes = new[]
+                {
+                    "By default, roscli auto-resolves nearest .csproj/.sln/.slnx from file path.",
+                    "If workspace_context.mode is 'ad_hoc', pass workspace_path explicitly.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "diag.get_file_diagnostics <file-path> [--workspace-path <path>] [--option value ...]",
+                run = "run diag.get_file_diagnostics --input '{\"file_path\":\"src/MyFile.cs\",\"workspace_path\":\"src/MyProject/MyProject.csproj\"}'",
+                required_properties = new[] { "file_path" },
+                optional_properties = new[] { "workspace_path" },
+                notes = new[]
+                {
+                    "By default, roscli auto-resolves nearest .csproj/.sln/.slnx from file path.",
+                    "Response includes workspace_context.mode = workspace|ad_hoc.",
+                },
             };
         }
 
@@ -1427,6 +1490,8 @@ Workflow:
             guardrails = new[]
             {
                 "session.open supports only .cs/.csx files.",
+                "Check workspace_context.mode on nav/diag file commands.",
+                "Use --workspace-path when auto workspace resolution falls back to ad_hoc.",
                 "Prefer --input-stdin for complex JSON payloads.",
             },
         };
@@ -1485,8 +1550,11 @@ Workflow:
                 session.close <session-id>
               - Direct shorthand also accepts command options:
                 ctx.file_outline <file-path> --include-members false --max-members 50
+                diag.get_file_diagnostics <file-path> --workspace-path src/MyProject/MyProject.csproj
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
+              - For nav/diag file commands, check response workspace_context.mode.
+                If mode=ad_hoc and project context exists, rerun with --workspace-path.
               - list-commands supports compact response modes:
                 list-commands --compact
                 list-commands --ids-only

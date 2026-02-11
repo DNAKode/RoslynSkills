@@ -35,6 +35,7 @@ This gives command discovery, guardrails, and two high-traffic argument schemas 
 roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20
 roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true
 roscli diag.get_file_diagnostics src/MyProject/Program.cs
+roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path src/MyProject/MyProject.csproj
 ```
 
 ### 2) Create new file in one shot
@@ -57,6 +58,8 @@ roscli session.commit demo-session --keep-session false --require-disk-unchanged
 
 - `session.open` supports only `.cs` and `.csx`.
 - Do not open `.sln`, `.slnx`, or `.csproj` with `session.open`.
+- Check `workspace_context.mode` on `nav.find_symbol` and `diag.get_file_diagnostics`.
+- If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.csproj|.sln|.slnx|dir>`.
 - For complex payloads, prefer `--input-stdin` over shell-escaped JSON.
 - If RoslynSkills cannot answer a C# query, agent must state why before fallback.
 
@@ -80,7 +83,8 @@ Workflow:
 2) run "roscli quickstart" and follow its recipes.
 3) if argument shape is unclear, run "roscli describe-command <command-id>".
 4) prefer nav.* / ctx.* / diag.* before text-only fallback.
-5) run diagnostics/build/tests before finalizing.
+5) verify `workspace_context.mode` for nav/diag file commands and force `--workspace-path` when needed.
+6) run diagnostics/build/tests before finalizing.
 ```
 
 ## Anti-Patterns

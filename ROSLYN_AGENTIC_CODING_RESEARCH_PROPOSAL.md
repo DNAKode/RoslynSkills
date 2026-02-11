@@ -245,6 +245,7 @@ Every interface lane must provide:
 
 - a short startup path that minimizes argument guessing,
 - explicit guardrails for common failure modes (for example file-type misuse),
+- explicit visibility into workspace binding for file-scoped commands (`workspace_context.mode`) plus an override path (`workspace_path`) when calls are launched from disconnected contexts,
 - copy-paste-safe examples for both simple and structured payloads,
 - release artifacts that place guidance near runnable launchers.
 

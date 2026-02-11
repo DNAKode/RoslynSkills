@@ -2780,6 +2780,15 @@ Constraints:
 - Do NOT change string literal "Process".
 "@
 
+$roslynWorkspaceGuardrail = @"
+Workspace-context guardrail for Roslyn runs:
+- For `nav.find_symbol` and `diag.get_file_diagnostics`, inspect `workspace_context.mode`.
+- For project-backed runs (when `TargetHarness.csproj` exists), expected mode is `workspace`.
+- If mode is `ad_hoc`, rerun with explicit workspace binding:
+  - CLI: add `--workspace-path TargetHarness.csproj`
+  - MCP: add `workspace_path=TargetHarness.csproj` to the command URI query.
+"@
+
 $controlPrompt = @"
 $taskPromptCore
 Baseline condition:
@@ -2792,24 +2801,28 @@ After editing, briefly summarize what changed.
 $treatmentPromptCodex = @"
 $taskPromptCore
 $(Get-CliRoslynGuidanceBlock -Agent "codex" -Profile $RoslynGuidanceProfile)
+$roslynWorkspaceGuardrail
 After editing, say explicitly whether Roslyn helpers were invoked successfully.
 "@
 
 $treatmentPromptClaude = @"
 $taskPromptCore
 $(Get-CliRoslynGuidanceBlock -Agent "claude" -Profile $RoslynGuidanceProfile)
+$roslynWorkspaceGuardrail
 After editing, say explicitly whether Roslyn helpers were invoked successfully.
 "@
 
 $treatmentPromptCodexMcp = @"
 $taskPromptCore
 $(Get-McpRoslynGuidanceBlock -Profile $RoslynGuidanceProfile)
+$roslynWorkspaceGuardrail
 After editing, say explicitly whether Roslyn MCP tools were invoked successfully.
 "@
 
 $treatmentPromptClaudeMcp = @"
 $taskPromptCore
 $(Get-McpRoslynGuidanceBlock -Profile $RoslynGuidanceProfile)
+$roslynWorkspaceGuardrail
 After editing, say explicitly whether Roslyn MCP tools were invoked successfully.
 "@
 
