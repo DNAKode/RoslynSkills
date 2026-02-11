@@ -6,19 +6,14 @@
 
 ## Paste-Ready Post (No Images)
 
-I'm building **RoslynSkills** as an open experiment in C#/.NET agent tooling:
+I'm working on **RoslynSkills**, an open C#/.NET project for agent-oriented Roslyn tooling:
 
 https://github.com/DNAKode/RoslynSkills
 
 Initial focus is a CLI-first path: **`roscli`** as the main way to invoke Roslyn-powered operations in agent loops.
 Alternate entry points (for example MCP) are also available, but CLI ergonomics and reliability are the first target.
 
-The question is simple:
-
-- semantic tooling should help,
-- but text-first editing is often visibly effective in real sessions.
-
-So this project is explicitly work-in-progress, focused on evidence rather than claims.
+The motivation is a tension I keep seeing in practice: semantic tooling feels like it should give agents a major advantage, but text-first workflows are often surprisingly effective in real coding sessions. This project is an attempt to make that tradeoff measurable instead of rhetorical.
 
 RoslynSkills gives coding agents explicit Roslyn command paths for:
 
@@ -30,7 +25,7 @@ RoslynSkills gives coding agents explicit Roslyn command paths for:
 I am also comparing against LSP-based approaches (including C# LSP) in repeatable runs.
 LSP is strong for editor-style interaction. RoslynSkills may be stronger in agent trajectories where explicit command contracts and deterministic edit/diagnostic loops matter.
 
-No big conclusion yet. Mixed outcomes are useful at this stage.
+No strong conclusion yet. Mixed outcomes are useful at this stage.
 
 If you want to engage:
 
@@ -39,7 +34,7 @@ If you want to engage:
 - compare RoslynSkills vs your LSP-first setup,
 - suggest missing commands or better onboarding prompts for agents.
 
-Negative results are especially welcome.
+If you try it, even a short note about where it fails or adds friction is very useful.
 
 ---
 
@@ -60,24 +55,43 @@ roscli edit.rename_symbol src/MyFile.cs 42 17 Handle --apply true
 roscli diag.get_file_diagnostics src/MyFile.cs
 ```
 
+This loop is intentionally minimal:
+
+- find the exact symbol with semantic context,
+- apply a scoped rename at a specific anchor,
+- immediately check diagnostics before moving on.
+
 ---
 
-### Real Roscli Fragment (command + response)
+### Example roscli Fragment (command + response)
 
 ```text
-roscli run nav.find_symbol --input '{"file_path":"Target.cs","symbol_name":"Process","brief":true,"max_results":50}'
+roscli nav.find_symbol Target.cs Process --brief true --max-results 50
 ```
 
 ```json
 {
   "Ok": true,
   "CommandId": "nav.find_symbol",
-  "Preview": "nav.find_symbol ok: matches=4"
+  "Preview": "nav.find_symbol ok: matches=4",
+  "Data": {
+    "total_matches": 4,
+    "matches": [
+      {
+        "text": "Process",
+        "is_declaration": true,
+        "line": 3,
+        "column": 17,
+        "symbol_kind": "Method",
+        "symbol_display": "Overloads.Process(int)"
+      }
+    ]
+  }
 }
 ```
 
 ```text
-roscli run edit.rename_symbol --input '{"file_path":"Target.cs","line":3,"column":17,"new_name":"Handle","apply":true,"max_diagnostics":50}'
+roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
 ```
 
 ```json
@@ -94,7 +108,7 @@ roscli run edit.rename_symbol --input '{"file_path":"Target.cs","line":3,"column
 ```
 
 ```text
-roscli run diag.get_file_diagnostics --input '{"file_path":"Target.cs"}'
+roscli diag.get_file_diagnostics Target.cs
 ```
 
 ```json
