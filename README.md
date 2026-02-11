@@ -217,6 +217,20 @@ Release/build pipelines:
 - `.github/workflows/publish-nuget-preview.yml`
 - `scripts/release/Build-ReleaseArtifacts.ps1`
 
+Regular preview release process:
+
+1. Run `Publish NuGet Preview` (`.github/workflows/publish-nuget-preview.yml`).
+2. Set:
+   - `version`: e.g. `0.1.6-preview.6`
+   - `run_tests`: `true` (recommended)
+   - `publish`: `true` (pushes NuGet package)
+   - `publish_release`: `true` (refreshes GitHub Release assets for the same version)
+3. The workflow now builds one artifact set and reuses it for both NuGet publish and GitHub Release assets.
+
+Tag-driven release process:
+
+- Pushing a `v*` tag triggers `Release Artifacts` (`.github/workflows/release-artifacts.yml`), which rebuilds and publishes GitHub release assets.
+
 Required secret for NuGet publish workflow:
 
 - `NUGET_API_KEY` (NuGet.org API key with push permission for `DNAKode.RoslynSkills.Cli`)

@@ -10,9 +10,11 @@ param(
     [bool]$FailOnControlContamination = $true,
     [bool]$FailOnLspRoslynContamination = $true,
     [bool]$FailOnMissingLspTools = $false,
+    [bool]$FailOnClaudeAuthUnavailable = $true,
     [switch]$KeepIsolatedWorkspaces,
     [switch]$SkipCodex,
-    [switch]$SkipClaude
+    [switch]$SkipClaude,
+    [ValidateSet("single-file", "project")][string]$TaskShape = "single-file"
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,6 +134,8 @@ function Copy-RunArtifactFiles {
     foreach ($fileName in @(
             "Target.cs",
             "Target.original.cs",
+            "Program.cs",
+            "TargetHarness.csproj",
             "prompt.txt",
             "transcript.jsonl",
             "diff.patch",
@@ -158,6 +162,101 @@ function Copy-RunArtifactFiles {
         if (Test-Path $helperSource) {
             Copy-Item -Path $helperSource -Destination (Join-Path $ArtifactDirectory $helperFile) -Force
         }
+    }
+}
+
+function Write-TaskWorkspaceFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [Parameter(Mandatory = $true)][string]$TargetContent,
+        [Parameter(Mandatory = $true)][ValidateSet("single-file", "project")][string]$TaskShape
+    )
+
+    $targetPath = Join-Path $RunDirectory "Target.cs"
+    $targetOriginalPath = Join-Path $RunDirectory "Target.original.cs"
+    Set-Content -Path $targetPath -Value $TargetContent -NoNewline
+    Copy-Item -Path $targetPath -Destination $targetOriginalPath -Force
+
+    if ($TaskShape -eq "project") {
+        $programContent = @"
+public static class Program
+{
+    public static void Main()
+    {
+        var overloads = new Overloads();
+        overloads.Execute();
+    }
+}
+"@
+
+        $projectContent = @"
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+"@
+
+        Set-Content -Path (Join-Path $RunDirectory "Program.cs") -Value $programContent -NoNewline
+        Set-Content -Path (Join-Path $RunDirectory "TargetHarness.csproj") -Value $projectContent -NoNewline
+    }
+}
+
+function Test-ClaudeAuthentication {
+    param()
+
+    $probePrompt = "Reply with OK only."
+    $stdOutText = ""
+    $stdErrText = ""
+    $exitCode = 1
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "cmd.exe"
+    $psi.Arguments = "/d /c claude -p -"
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+
+    try {
+        [void]$process.Start()
+        $process.StandardInput.WriteLine($probePrompt)
+        $process.StandardInput.Close()
+        $stdOutText = $process.StandardOutput.ReadToEnd()
+        $stdErrText = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+    } catch {
+        $stdErrText = "$stdErrText`n$($_.Exception.Message)"
+        $exitCode = 1
+    } finally {
+        if ($process -and -not $process.HasExited) {
+            try {
+                $process.Kill()
+            } catch {
+            }
+        }
+        if ($process) {
+            $process.Dispose()
+        }
+    }
+
+    $combined = ($stdOutText + "`n" + $stdErrText).Trim()
+    $authRevoked = ($combined -match "OAuth token revoked" -or $combined -match "Please run /login")
+    $ok = ($exitCode -eq 0 -and -not $authRevoked)
+
+    return [ordered]@{
+        ok = $ok
+        exit_code = $exitCode
+        auth_revoked = $authRevoked
+        output_preview = if ([string]::IsNullOrWhiteSpace($combined)) { "" } elseif ($combined.Length -le 200) { $combined } else { $combined.Substring(0, 200) }
     }
 }
 
@@ -842,6 +941,7 @@ function Get-ClaudeRoslynUsage {
     $roslynToolUsesById = @{}
     $invocations = New-Object System.Collections.Generic.List[string]
     $successful = 0
+    $attemptedToolUseIds = New-Object System.Collections.Generic.HashSet[string]
 
     foreach ($line in (Get-Content -Path $TranscriptPath -ErrorAction SilentlyContinue)) {
         if ([string]::IsNullOrWhiteSpace($line)) {
@@ -884,6 +984,9 @@ function Get-ClaudeRoslynUsage {
 
                 if (-not [string]::IsNullOrWhiteSpace($invocationText)) {
                     $roslynToolUsesById[$toolUseId] = $invocationText
+                    if ($attemptedToolUseIds.Add($toolUseId)) {
+                        $invocations.Add($invocationText)
+                    }
                 }
             }
             continue
@@ -902,9 +1005,6 @@ function Get-ClaudeRoslynUsage {
             if ([string]::IsNullOrWhiteSpace($toolUseId) -or -not $roslynToolUsesById.ContainsKey($toolUseId)) {
                 continue
             }
-
-            $invocationText = [string]$roslynToolUsesById[$toolUseId]
-            $invocations.Add($invocationText)
 
             $resultText = ""
             if ($content.content -is [System.Array]) {
@@ -943,6 +1043,7 @@ function Get-ClaudeLspUsage {
     $lspToolUsesById = @{}
     $invocations = New-Object System.Collections.Generic.List[string]
     $successful = 0
+    $attemptedToolUseIds = New-Object System.Collections.Generic.HashSet[string]
 
     foreach ($line in (Get-Content -Path $TranscriptPath -ErrorAction SilentlyContinue)) {
         if ([string]::IsNullOrWhiteSpace($line)) {
@@ -985,6 +1086,9 @@ function Get-ClaudeLspUsage {
 
                 if (-not [string]::IsNullOrWhiteSpace($invocationText)) {
                     $lspToolUsesById[$toolUseId] = $invocationText
+                    if ($attemptedToolUseIds.Add($toolUseId)) {
+                        $invocations.Add($invocationText)
+                    }
                 }
             }
             continue
@@ -1003,9 +1107,6 @@ function Get-ClaudeLspUsage {
             if ([string]::IsNullOrWhiteSpace($toolUseId) -or -not $lspToolUsesById.ContainsKey($toolUseId)) {
                 continue
             }
-
-            $invocationText = [string]$lspToolUsesById[$toolUseId]
-            $invocations.Add($invocationText)
 
             $resultText = ""
             if ($content.content -is [System.Array]) {
@@ -1072,6 +1173,18 @@ function Get-LspAvailability {
                     $serverName = [string]$server.name
                     if (Test-IsLspToolName -ToolName $serverName -or Test-IsLspCommandText -Text $serverName) {
                         $indicators.Add(("mcp_server:{0}" -f $serverName)) | Out-Null
+                    }
+                }
+            }
+
+            if ($null -ne $event.plugins -and $event.plugins -is [System.Array]) {
+                foreach ($plugin in $event.plugins) {
+                    $pluginName = [string]$plugin.name
+                    $pluginPath = [string]$plugin.path
+                    if (Test-IsLspToolName -ToolName $pluginName -or Test-IsLspCommandText -Text $pluginName) {
+                        $indicators.Add(("plugin:{0}" -f $pluginName)) | Out-Null
+                    } elseif (Test-IsLspCommandText -Text $pluginPath) {
+                        $indicators.Add(("plugin_path:{0}" -f $pluginPath)) | Out-Null
                     }
                 }
             }
@@ -1379,7 +1492,8 @@ function Invoke-AgentProcess {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$PromptText,
         [Parameter(Mandatory = $true)][string]$TranscriptPath,
-        [Parameter(Mandatory = $false)][hashtable]$EnvironmentOverrides = @{}
+        [Parameter(Mandatory = $false)][hashtable]$EnvironmentOverrides = @{},
+        [Parameter(Mandatory = $false)][int]$TimeoutSeconds = 180
     )
 
     $previousErrorActionPreference = $ErrorActionPreference
@@ -1393,6 +1507,12 @@ function Invoke-AgentProcess {
     $exitCode = 1
     $appliedEnvironmentKeys = New-Object System.Collections.Generic.List[string]
     $previousEnvironmentValues = @{}
+    $tempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "roslynskills-agent-process"
+    New-Item -ItemType Directory -Force -Path $tempDirectory | Out-Null
+    $runId = [Guid]::NewGuid().ToString("n")
+    $stdinPath = Join-Path $tempDirectory ("stdin-{0}.txt" -f $runId)
+    $stdoutPath = Join-Path $tempDirectory ("stdout-{0}.txt" -f $runId)
+    $stderrPath = Join-Path $tempDirectory ("stderr-{0}.txt" -f $runId)
     try {
         foreach ($key in $EnvironmentOverrides.Keys) {
             $keyName = [string]$key
@@ -1400,10 +1520,63 @@ function Invoke-AgentProcess {
             [System.Environment]::SetEnvironmentVariable($keyName, [string]$EnvironmentOverrides[$keyName], "Process")
             $appliedEnvironmentKeys.Add($keyName)
         }
+        Set-Content -Path $stdinPath -Value $PromptText -NoNewline
 
-        $PromptText | & $Executable @Arguments 2>&1 | Tee-Object -FilePath $TranscriptPath | Out-Host
-        if ($null -ne $LASTEXITCODE) {
-            $exitCode = [int]$LASTEXITCODE
+        $process = Start-Process `
+            -FilePath $Executable `
+            -ArgumentList $Arguments `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardInput $stdinPath `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        $timedOut = $false
+        $timeoutMessage = $null
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $timedOut = $true
+            try {
+                $process.Kill()
+            } catch {
+                # Best-effort termination.
+            }
+
+            $process.WaitForExit()
+            $timeoutMessage = ("Agent process timed out after {0} second(s) and was terminated." -f $TimeoutSeconds)
+            $exitCode = 124
+        } else {
+            $exitCode = [int]$process.ExitCode
+        }
+
+        $outputChunks = New-Object System.Collections.Generic.List[string]
+        if (Test-Path $stdoutPath -PathType Leaf) {
+            $stdoutText = Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
+                $outputChunks.Add($stdoutText) | Out-Null
+            }
+        }
+
+        if (Test-Path $stderrPath -PathType Leaf) {
+            $stderrText = Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+                $outputChunks.Add($stderrText) | Out-Null
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($timeoutMessage)) {
+            $outputChunks.Add($timeoutMessage) | Out-Null
+        }
+
+        $combinedOutput = if ($outputChunks.Count -eq 0) {
+            ""
+        } else {
+            [string]::Join([Environment]::NewLine, $outputChunks)
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($combinedOutput)) {
+            $combinedOutput | Tee-Object -FilePath $TranscriptPath | Out-Host
+        } else {
+            Set-Content -Path $TranscriptPath -Value "" -NoNewline
         }
     } catch {
         $_ | Out-String | Tee-Object -FilePath $TranscriptPath -Append | Out-Host
@@ -1419,9 +1592,35 @@ function Invoke-AgentProcess {
         foreach ($keyName in $appliedEnvironmentKeys) {
             [System.Environment]::SetEnvironmentVariable($keyName, $previousEnvironmentValues[$keyName], "Process")
         }
+
+        foreach ($path in @($stdinPath, $stdoutPath, $stderrPath)) {
+            if (Test-Path $path -PathType Leaf) {
+                Remove-Item -Path $path -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     return $exitCode
+}
+
+function Get-CsharpLsLauncherPath {
+    $candidatePaths = @(
+        (Join-Path $env:USERPROFILE ".dotnet\tools\csharp-ls.exe"),
+        (Join-Path $env:USERPROFILE ".dotnet\tools\csharp-ls")
+    )
+
+    foreach ($candidate in $candidatePaths) {
+        if (Test-Path $candidate -PathType Leaf) {
+            return [string](Resolve-Path $candidate).Path
+        }
+    }
+
+    $command = Get-Command "csharp-ls" -ErrorAction SilentlyContinue
+    if ($null -ne $command -and -not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
+        return [string](Resolve-Path $command.Source).Path
+    }
+
+    return $null
 }
 
 function New-AgentEnvironmentOverrides {
@@ -1504,7 +1703,13 @@ function New-AgentEnvironmentOverrides {
         }
 
         if (Test-Path $existingClaudeConfig -PathType Container) {
-            foreach ($fileName in @(".credentials.json", "settings.json")) {
+            foreach ($fileName in @(
+                    ".credentials.json",
+                    "settings.json",
+                    "plugins\installed_plugins.json",
+                    "plugins\config.json",
+                    "plugins\known_marketplaces.json"
+                )) {
                 Copy-FileIfExists `
                     -SourcePath (Join-Path $existingClaudeConfig $fileName) `
                     -DestinationPath (Join-Path $claudeConfigRoot $fileName)
@@ -1516,6 +1721,20 @@ function New-AgentEnvironmentOverrides {
     }
 
     if ($Mode -eq "treatment-lsp") {
+        $lspShimDirectory = Join-Path $RunDirectory ".lsp-tools"
+        New-Item -ItemType Directory -Force -Path $lspShimDirectory | Out-Null
+
+        $csharpLsPath = Get-CsharpLsLauncherPath
+        if (-not [string]::IsNullOrWhiteSpace($csharpLsPath)) {
+            $csharpLsShimCmdPath = Join-Path $lspShimDirectory "csharp-ls.cmd"
+            $csharpLsShimCmd = @"
+@echo off
+"$csharpLsPath" %*
+"@
+            Set-Content -Path $csharpLsShimCmdPath -Value $csharpLsShimCmd -NoNewline
+            $overrides["ROSLYNSKILLS_CSHARP_LSP_PATH"] = $csharpLsPath
+        }
+
         $existingPath = [System.Environment]::GetEnvironmentVariable("PATH", "Process")
         if (-not [string]::IsNullOrWhiteSpace($existingPath)) {
             $filteredPathEntries = New-Object System.Collections.Generic.List[string]
@@ -1534,7 +1753,10 @@ function New-AgentEnvironmentOverrides {
             }
 
             if ($filteredPathEntries.Count -gt 0) {
-                $overrides["PATH"] = [string]::Join(";", $filteredPathEntries)
+                $filteredPath = [string]::Join(";", $filteredPathEntries)
+                $overrides["PATH"] = "{0};{1}" -f $lspShimDirectory, $filteredPath
+            } else {
+                $overrides["PATH"] = $lspShimDirectory
             }
         }
     }
@@ -1940,7 +2162,8 @@ function Invoke-AgentRun {
         [Parameter(Mandatory = $false)][bool]$FailOnLspRoslynContamination = $true,
         [Parameter(Mandatory = $false)][bool]$FailOnMissingLspTools = $false,
         [Parameter(Mandatory = $false)][bool]$KeepIsolatedWorkspace = $false,
-        [Parameter(Mandatory = $false)][string]$Model = ""
+        [Parameter(Mandatory = $false)][string]$Model = "",
+        [Parameter(Mandatory = $false)][ValidateSet("single-file", "project")][string]$TaskShape = "single-file"
     )
 
     $runId = "$Agent-$Mode"
@@ -1956,8 +2179,7 @@ function Invoke-AgentRun {
     $transcriptPath = Join-Path $workspaceDirectory "transcript.jsonl"
 
     try {
-        Set-Content -Path $targetPath -Value $TargetContent -NoNewline
-        Copy-Item -Path $targetPath -Destination $targetOriginalPath -Force
+        Write-TaskWorkspaceFiles -RunDirectory $workspaceDirectory -TargetContent $TargetContent -TaskShape $TaskShape
         Set-Content -Path $promptPath -Value $PromptText -NoNewline
         Set-Content -Path $transcriptPath -Value "" -NoNewline
 
@@ -2101,6 +2323,7 @@ function Invoke-AgentRun {
             agent = $Agent
             mode = $Mode
             roslyn_guidance_profile = $RoslynGuidanceProfile
+            task_shape = $TaskShape
             timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
             exit_code = $exitCode
             workspace_path = $workspaceDirectory
@@ -2477,20 +2700,28 @@ function Get-ClaudeLspGuidanceBlock {
             return @"
 Use the Claude `csharp-lsp` plugin/tools for C# semantic operations before direct text edits.
 Suggested flow:
-1) Find the `Process(int value)` declaration and call site via LSP definition/references.
-2) Apply rename through LSP rename or text edits guided by LSP locations.
+1) Use one cheap LSP lookup first (prefer `goToDefinition` from `Process(1)` call site), then optionally `findReferences` if needed.
+2) Apply edit with regular file edits (current Claude LSP toolset is navigation-first; no direct rename operation).
 3) Re-check diagnostics via LSP diagnostics (or dotnet build if diagnostics tool is unavailable).
+Execution rules:
+- Run LSP operations strictly sequentially (one LSP tool call per assistant turn).
+- Do not issue parallel/concurrent LSP requests in a single message.
 Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
+If one LSP request hangs or fails, stop LSP retries and continue with minimal plain text edits.
 If LSP tools are missing, state that clearly and continue best effort with plain text edits only.
 "@
         }
         "brief-first" {
             return @"
 Prefer a minimal LSP-first sequence:
-1) Use one lookup (definition/references) to locate `Process(int value)`.
+1) Use exactly one LSP lookup (prefer `goToDefinition` from `Process(1)`).
 2) Rename and verify quickly.
 3) Avoid broad workspace scans.
+Execution rules:
+- Run LSP operations sequentially only.
+- Do not issue more than one LSP call in a single assistant response.
 Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
+If one LSP request hangs or fails, stop LSP retries and continue with minimal plain text edits.
 If LSP tools are missing, continue with plain text edits only.
 "@
         }
@@ -2500,6 +2731,8 @@ Use the narrowest possible LSP sequence:
 1) locate symbol,
 2) rename target and matching int call site,
 3) verify no collateral edits.
+Execution rules:
+- One LSP call at a time, then wait for result.
 Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
 If LSP tools are missing, continue with plain text edits only.
 "@
@@ -2508,6 +2741,8 @@ If LSP tools are missing, continue with plain text edits only.
             return @"
 Treat csharp-lsp as the primary capability for this run.
 Start by discovering available LSP operations, then perform one targeted rename flow.
+Execution rules:
+- Use sequential LSP calls only (no concurrent tool calls).
 Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
 If LSP tools are missing, continue with plain text edits only.
 "@
@@ -2517,7 +2752,9 @@ If LSP tools are missing, continue with plain text edits only.
 Use csharp-lsp tools contract-first:
 1) inspect available tool schemas/signatures,
 2) run definition/references,
-3) run rename and verify diagnostics.
+3) apply text edit and verify diagnostics.
+Execution rules:
+- LSP tool calls must be sequential (wait for each tool_result before next call).
 Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
 If LSP tools are missing, continue with plain text edits only.
 "@
@@ -2525,8 +2762,15 @@ If LSP tools are missing, continue with plain text edits only.
     }
 }
 
+$taskWorkspaceHint = if ($TaskShape -eq "project") {
+    "Workspace note: a minimal SDK project (`TargetHarness.csproj`) and `Program.cs` are provided. Prefer project-aware semantic tooling."
+} else {
+    "Workspace note: this is a focused single-file task (`Target.cs`)."
+}
+
 $taskPromptCore = @"
 Edit Target.cs in this directory.
+$taskWorkspaceHint
 Task:
 1) Rename method Process(int value) to Handle(int value).
 2) Update only the matching invocation Process(1) to Handle(1).
@@ -2576,29 +2820,43 @@ After editing, say explicitly whether C# LSP tools were invoked successfully.
 "@
 
 $runs = New-Object System.Collections.Generic.List[object]
+$runClaude = (-not $SkipClaude)
+
+if ($runClaude) {
+    $claudeAuthProbe = Test-ClaudeAuthentication
+    if (-not [bool]$claudeAuthProbe.ok) {
+        $failureMessage = "Claude auth preflight failed (exit=$($claudeAuthProbe.exit_code), revoked=$($claudeAuthProbe.auth_revoked)). Preview: $($claudeAuthProbe.output_preview)"
+        if ($FailOnClaudeAuthUnavailable) {
+            throw "$failureMessage. Re-run after 'claude /login' or pass -SkipClaude."
+        }
+
+        Write-Warning "$failureMessage. Skipping Claude lanes."
+        $runClaude = $false
+    }
+}
 
 if (-not $SkipCodex) {
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     if ($IncludeMcpTreatment) {
-        $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodexMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel))
+        $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodexMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape))
         Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     }
 }
 
-if (-not $SkipClaude) {
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+if ($runClaude) {
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     if ($IncludeMcpTreatment) {
-        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
         Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     }
     if ($IncludeClaudeLspTreatment) {
-        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-lsp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeLsp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel))
+        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-lsp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeLsp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
         Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     }
 }

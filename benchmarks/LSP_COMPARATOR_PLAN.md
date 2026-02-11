@@ -75,6 +75,20 @@ Then archive:
 - per-run transcripts,
 - scored deltas in `RESEARCH_FINDINGS.md`.
 
+## External Setup Notes (Claude `csharp-lsp`)
+
+Reference setup guidance:
+
+- Medium note: `https://medium.com/@tomas.tilllmann/getting-c-lsp-working-in-claude-code-3076a3b2eb11`
+- Official Claude plugin repo path: `https://github.com/anthropics/claude-plugins-official/tree/main/plugins/csharp-lsp`
+
+Applied implications for this harness:
+
+- Ensure `csharp-ls` exists in PATH (`dotnet tool install --global csharp-ls`).
+- Preserve Claude plugin metadata in isolated run homes (`installed_plugins.json`, `config.json`, `known_marketplaces.json`).
+- Use a project-backed task shape (`TargetHarness.csproj` + `Program.cs`) for LSP lanes; loose-file-only tasks can bias LSP reliability downward.
+- Require Claude auth preflight before launching Claude lanes; fail fast on revoked/expired OAuth to avoid invalid comparator artifacts.
+
 ## Follow-on Comparator Expansion: dotnet-inspect / dotnet-skills
 
 After first LSP comparator replicates, add a parallel external-tool comparator family focused on dependency/API intelligence tasks:

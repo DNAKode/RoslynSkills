@@ -780,6 +780,82 @@ Decision:
 - Treat pit-of-success guidance as part of the command/distribution contract.
 - Require future command-surface changes to preserve startup-path discoverability (`list-commands` -> `quickstart` -> `describe-command`).
 
+### F-2026-02-11-26: With Claude auth valid, LSP availability was confirmed but the first semantic call still timed out under current task shape
+
+Evidence:
+
+- `artifacts/real-agent-runs/20260211-lsp-roslyn-v4/paired-run-summary.json`
+- `artifacts/real-agent-runs/20260211-lsp-roslyn-v4/claude-treatment-lsp/transcript.jsonl`
+- `artifacts/real-agent-runs/20260211-lsp-roslyn-v4/claude-treatment-lsp/run-metadata.json`
+
+Result:
+
+- In `treatment-lsp`, Claude reported `lsp_tools_available=true` with indicators `tool:LSP` and `plugin:csharp-lsp`.
+- First LSP call (`operation=findReferences`) was attempted (`lsp_attempted_calls=1`) and then the run timed out at `180.066s` with no successful edits.
+- In the same bundle, Roslyn CLI and Roslyn MCP lanes both passed with clean constraints (`run_passed=true`).
+
+Interpretation:
+
+- This is not a pure "missing LSP setup" failure; LSP was present but operational reliability degraded on the first semantic lookup in this run shape.
+- LSP-vs-Roslyn conclusions remain provisional until we have replicate-backed runs on project-backed tasks.
+
+Decision:
+
+- Keep LSP as a mandatory comparator lane.
+- Move future LSP comparator bundles to project-backed fixtures and require replicate counts before drawing winner/loser claims.
+
+### F-2026-02-11-27: Paired harness now supports project-backed comparator tasks, reducing loose-file bias against LSP workflows
+
+Evidence:
+
+- `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`-TaskShape single-file|project`)
+- `artifacts/real-agent-runs/20260211-codex-roslyn-v5-project/paired-run-summary.json`
+
+Result:
+
+- Added `TaskShape` with `project` mode that scaffolds:
+  - `Target.cs`,
+  - `Program.cs`,
+  - `TargetHarness.csproj`.
+- Run metadata now records `task_shape`.
+- Codex project-backed control/treatment/treatment-mcp lanes stayed green (`run_passed=true` across all three).
+
+Interpretation:
+
+- Comparator infrastructure can now run in a workspace form that better reflects C# LSP expectations (project context).
+- This removes a major fairness confound where LSP was evaluated on a loose file while Roslyn helpers still had sufficient context.
+
+Decision:
+
+- Use `-TaskShape project` as the default for future LSP-vs-Roslyn comparator bundles.
+- Keep `single-file` as a diagnostic microtask mode only.
+
+### F-2026-02-11-28: Claude auth volatility can invalidate full bundles; auth preflight is now a hard gate by default
+
+Evidence:
+
+- failed bundle:
+  - `artifacts/real-agent-runs/20260211-lsp-roslyn-v5-project/paired-run-summary.json`
+- preflight implementation:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`Test-ClaudeAuthentication`, `-FailOnClaudeAuthUnavailable`)
+- auth smoke error:
+  - `artifacts/real-agent-runs/20260211-auth-preflight-smoke2` (run aborted before lane execution)
+
+Result:
+
+- In `20260211-lsp-roslyn-v5-project`, Claude control completed, but treatment lanes failed with zero-token trajectories due OAuth/authentication errors.
+- Added Claude auth preflight before launching Claude lanes; default policy now fails fast with a concrete remediation (`claude /login`).
+
+Interpretation:
+
+- Without auth preflight, a bundle can look partially successful while comparator lanes are silently non-executable.
+- Fast-fail gating is required to keep run artifacts promotion-safe.
+
+Decision:
+
+- Keep `FailOnClaudeAuthUnavailable=true` as default.
+- Treat zero-token Claude treatment lanes as invalid data for comparative interpretation.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

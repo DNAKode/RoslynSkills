@@ -17,9 +17,14 @@ on:
         required: true
         default: true
         type: boolean
+      publish_release:
+        description: "Create/update GitHub Release assets for this version"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   pack-and-publish:
@@ -34,6 +39,7 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Validate version
+        id: vars
         shell: bash
         run: |
           set -euo pipefail
@@ -42,32 +48,45 @@ jobs:
             echo "version input is required" >&2
             exit 1
           fi
+          version="${version#v}"
+          tag="v${version}"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "artifact_dir=artifacts/release/$version" >> "$GITHUB_OUTPUT"
+
           # Encourage preview semantics for this workflow.
           if [[ "$version" != *"-preview."* && "$version" != *"-rc."* ]]; then
             echo "warning: version '$version' is not a preview/rc version"
           fi
 
-      - name: Restore
-        run: dotnet restore RoslynSkills.slnx --nologo
-
-      - name: Test
-        if: inputs.run_tests
-        run: dotnet test RoslynSkills.slnx -c Release --nologo
-
-      - name: Pack DNAKode.RoslynSkills.Cli
+      - name: Build release artifacts (bundle + nupkg)
+        shell: pwsh
         run: |
-          dotnet pack src/RoslynSkills.Cli/RoslynSkills.Cli.csproj \
-            -c Release \
-            -o artifacts/nuget \
-            --nologo \
-            -p:Version=${{ inputs.version }} \
-            -p:PackageVersion=${{ inputs.version }}
+          $runTests = [System.Convert]::ToBoolean('${{ inputs.run_tests }}')
+          if ($runTests) {
+            ./scripts/release/Build-ReleaseArtifacts.ps1 `
+              -Version '${{ steps.vars.outputs.version }}' `
+              -OutputRoot '${{ steps.vars.outputs.artifact_dir }}'
+          } else {
+            ./scripts/release/Build-ReleaseArtifacts.ps1 `
+              -Version '${{ steps.vars.outputs.version }}' `
+              -OutputRoot '${{ steps.vars.outputs.artifact_dir }}' `
+              -SkipTests
+          }
+
+      - name: Upload release artifact bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: roslynskills-release-${{ steps.vars.outputs.version }}
+          path: ${{ steps.vars.outputs.artifact_dir }}
+          if-no-files-found: error
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nuget-preview-${{ inputs.version }}
-          path: artifacts/nuget/*.nupkg
+          name: nuget-preview-${{ steps.vars.outputs.version }}
+          path: ${{ steps.vars.outputs.artifact_dir }}/*.nupkg
           if-no-files-found: error
 
       - name: Publish to NuGet.org
@@ -79,8 +98,23 @@ jobs:
             echo "NUGET_API_KEY secret is not set" >&2
             exit 1
           fi
-          dotnet nuget push artifacts/nuget/*.nupkg \
+          dotnet nuget push ${{ steps.vars.outputs.artifact_dir }}/*.nupkg \
             --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
+
+      - name: Publish GitHub Release
+        if: inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: RoslynSkills ${{ steps.vars.outputs.tag }}
+          prerelease: ${{ contains(steps.vars.outputs.version, '-preview') || contains(steps.vars.outputs.version, '-rc') }}
+          generate_release_notes: true
+          target_commitish: ${{ github.sha }}
+          files: |
+            ${{ steps.vars.outputs.artifact_dir }}/*.zip
+            ${{ steps.vars.outputs.artifact_dir }}/*.nupkg
+            ${{ steps.vars.outputs.artifact_dir }}/release-manifest.json
+            ${{ steps.vars.outputs.artifact_dir }}/checksums.sha256
 
