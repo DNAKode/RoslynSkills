@@ -192,6 +192,11 @@ if (Test-Path $skillSource -PathType Leaf) {
     Copy-Item -Path $skillSource -Destination (Join-Path $skillDir "SKILL.md") -Force
 }
 
+$pitOfSuccessSource = Join-Path $repoRoot "docs\PIT_OF_SUCCESS.md"
+if (Test-Path $pitOfSuccessSource -PathType Leaf) {
+    Copy-Item -Path $pitOfSuccessSource -Destination (Join-Path $bundleRoot "PIT_OF_SUCCESS.md") -Force
+}
+
 $bundleReadme = @"
 # RoslynSkills Release Bundle
 
@@ -205,7 +210,11 @@ Contents:
   - roscli(.cmd)
   - roslyn-mcp(.cmd)
   - roslyn-transport(.cmd)
+- PIT_OF_SUCCESS.md
 - skills/roslynskills-research/SKILL.md
+
+First command:
+- bin/roscli quickstart
 "@
 Set-Content -Path (Join-Path $bundleRoot "README.txt") -Value $bundleReadme
 

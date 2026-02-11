@@ -118,6 +118,11 @@ Use roscli for local workspace semantic edits/diagnostics.
 For migration tasks: inspect first, then edit with roscli.
 ```
 
+Pit-of-success pointer for onboarding:
+
+- `roscli quickstart` (runtime guidance)
+- `docs/PIT_OF_SUCCESS.md` (project-level canonical guide)
+
 This aligns with community feedback in the referenced thread: package/assembly analysis and Roslyn workspace operations are adjacent but distinct concerns.
 
 ## LSP Comparator Implication

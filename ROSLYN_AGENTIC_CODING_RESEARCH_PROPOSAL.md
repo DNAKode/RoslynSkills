@@ -230,7 +230,8 @@ Deliverable:
 1. **Plain CLI first**
    - cross-platform executable with stable help output,
    - scriptable in shells and CI,
-   - easiest for agents to self-discover via `--help`.
+   - easiest for agents to self-discover via `--help`,
+   - explicit pit-of-success entrypoint (`quickstart`) plus per-command schema discovery (`describe-command`).
 2. **Skill wrappers second**
    - workflow orchestration and prompt guidance over CLI primitives.
 3. **MCP adapter third**
@@ -238,7 +239,18 @@ Deliverable:
 4. **External C# LSP comparator lane (parallel)**
    - benchmark against an established LSP path (for example Claude `csharp-lsp`) using matched prompts and acceptance gates.
 
-### 8.2 Distribution and dogfooding
+### 8.2 Pit-of-success requirements
+
+Every interface lane must provide:
+
+- a short startup path that minimizes argument guessing,
+- explicit guardrails for common failure modes (for example file-type misuse),
+- copy-paste-safe examples for both simple and structured payloads,
+- release artifacts that place guidance near runnable launchers.
+
+Architecture or UX changes should be evaluated against "first-minute success" as a primary constraint, not only feature completeness.
+
+### 8.3 Distribution and dogfooding
 
 - Implement tooling in C# to dogfood Roslyn-centric development.
 - Package for practical adoption:
@@ -302,6 +314,8 @@ Behavioral/adoption:
 - Time-to-first Roslyn call.
 - Success conditional on Roslyn usage vs non-usage (within Roslyn-enabled condition).
 - Explicit post-task agent self-report on tool helpfulness (structured, short-form, not hidden reasoning).
+- First-minute onboarding success rate (valid semantic command path reached without argument/file-type confusion).
+- Argument-discovery churn (extra turns/retries before first successful tool call).
 
 ### 9.4 Human involvement
 

@@ -52,6 +52,8 @@ public sealed class CliApplicationTests
         Assert.Contains("session.diff", output);
         Assert.Contains("session.commit", output);
         Assert.Contains("session.close", output);
+        Assert.Contains("pit_of_success", output);
+        Assert.Contains("quickstart", output);
     }
 
     [Fact]
@@ -71,6 +73,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("\"command_ids\": [", output);
         Assert.Contains("\"session.apply_and_commit\"", output);
+        Assert.Contains("\"pit_of_success\": {", output);
         Assert.DoesNotContain("\"InputSchemaVersion\"", output);
     }
 
@@ -419,6 +422,65 @@ public sealed class CliApplicationTests
         Assert.Contains("\"usage\": {", output);
         Assert.Contains("session.open <file-path> [session-id]", output);
         Assert.Contains(".sln/.slnx/.csproj", output);
+    }
+
+    [Fact]
+    public async Task Quickstart_ReturnsPitOfSuccessGuidance()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "quickstart" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"CommandId\": \"cli.quickstart\"", output);
+        Assert.Contains("pit_of_success", output);
+        Assert.Contains("session.open only supports .cs/.csx files", output);
+        Assert.Contains("src/MyProject/Program.cs", output);
+    }
+
+    [Fact]
+    public async Task Help_IncludesQuickstartCommand()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "--help" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("quickstart", output);
+        Assert.Contains("pit-of-success", output);
+    }
+
+    [Fact]
+    public async Task UnknownCommand_ErrorHintsIncludeQuickstart()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "not-a-command" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(1, exitCode);
+        Assert.Contains("unknown_verb", output);
+        Assert.Contains("quickstart", output);
     }
 
     [Fact]

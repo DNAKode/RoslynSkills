@@ -748,6 +748,38 @@ Decision:
 - Treat absent-lane metrics as null by construction.
 - Require explicit lane presence before including comparator deltas in summaries or decisions.
 
+### F-2026-02-11-25: Pit-of-success guidance is now embedded as a runtime surface and release deliverable (not docs-only)
+
+Evidence:
+
+- CLI/runtime:
+  - `src/RoslynSkills.Cli/CliApplication.cs` (`quickstart`, help hints, list-commands `pit_of_success` hints)
+  - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs` (quickstart/help/unknown-command guidance assertions)
+- canonical guide:
+  - `docs/PIT_OF_SUCCESS.md`
+- distribution path:
+  - `scripts/release/Build-ReleaseArtifacts.ps1` (bundle now includes `PIT_OF_SUCCESS.md` and quickstart-first README note)
+  - smoke artifact: `artifacts/release/0.1.6-pitlocal/roslynskills-bundle/PIT_OF_SUCCESS.md`
+
+Result:
+
+- Agents can now discover onboarding guidance through multiple redundant channels:
+  - `--help`,
+  - `list-commands`,
+  - `quickstart`,
+  - release bundle contents.
+- Release artifacts now carry pit-of-success guidance adjacent to launchers, reducing dependence on repository browsing.
+
+Interpretation:
+
+- Prior posture still required too much docs navigation and prompt luck.
+- Embedding guidance directly in runtime and artifacts should reduce first-command errors and argument confusion.
+
+Decision:
+
+- Treat pit-of-success guidance as part of the command/distribution contract.
+- Require future command-surface changes to preserve startup-path discoverability (`list-commands` -> `quickstart` -> `describe-command`).
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

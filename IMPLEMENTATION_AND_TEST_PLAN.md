@@ -35,6 +35,7 @@ Deliverables:
 - repository layout and artifact schema,
 - command registry and schema envelopes,
 - CLI host skeleton,
+- pit-of-success startup guidance surface (`quickstart`) and canonical onboarding doc,
 - harness runner abstraction skeleton.
 
 Tasks:
@@ -44,6 +45,7 @@ Tasks:
 Exit criteria:
 
 - commands can be discovered and invoked through stable envelopes,
+- first-minute onboarding path works without argument guessing (`list-commands` -> `quickstart` -> `describe-command`),
 - harness can run no-op and mock scenarios end-to-end.
 
 ## Wave B: Core Retrieval and Diagnostics Loop
@@ -153,6 +155,7 @@ Exit criteria:
 `Cli.Host`:
 
 - contract tests for command envelopes and output modes.
+- onboarding tests that validate pit-of-success hints in `--help`, `list-commands`, and `quickstart`.
 
 `Core.Semantics` and `Core.Operations`:
 
@@ -171,6 +174,7 @@ Exit criteria:
 - build success,
 - unit tests pass,
 - command contract snapshots unchanged or explicitly versioned,
+- pit-of-success docs/skill/release references remain consistent,
 - no unexplained analyzer regression.
 
 ## 4. Benchmark Implementation Plan

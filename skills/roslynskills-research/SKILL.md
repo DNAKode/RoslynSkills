@@ -11,19 +11,30 @@ Run command inventory first:
 
 ```powershell
 roscli list-commands --ids-only
+roscli quickstart
 ```
 
 Cross-platform alternative:
 
 ```bash
 roscli list-commands --ids-only
+roscli quickstart
 ```
 
 If `roscli` is not on PATH, in this repository use:
 
 ```powershell
 scripts\roscli.cmd list-commands --ids-only
+scripts\roscli.cmd quickstart
 ```
+
+Pit-of-success contract:
+
+- Discover: `list-commands --ids-only`
+- Orient: `quickstart`
+- Disambiguate args: `describe-command <command-id>`
+- Execute semantic-first: `nav.*`, `ctx.*`, `diag.*` before text fallback
+- Verify before finalize: diagnostics + build/tests
 
 Prefer Roslyn commands for navigation, context, diagnostics, repair, and structured edits before text-only fallbacks.
 

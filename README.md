@@ -8,6 +8,10 @@ RoslynSkills is a Roslyn-native toolkit for coding agents working on C#/.NET cod
 
 Goal: help agents navigate, edit, and validate C# with semantic correctness, then measure whether this materially beats text-first workflows.
 
+Core principle: define a clear pit of success where semantic-first, brief-first, verify-before-finalize is the default path an agent naturally follows.
+
+Pit-of-success guide: `docs/PIT_OF_SUCCESS.md`
+
 ## Start Here (5 Minutes)
 
 Use this path first.
@@ -33,9 +37,11 @@ Verify install:
 
 ```powershell
 roscli list-commands --ids-only
+roscli quickstart
 ```
 
 You should see command ids like `nav.find_symbol`, `ctx.member_source`, `diag.get_file_diagnostics`, `edit.rename_symbol`, and `session.*`.
+You should also get an explicit pit-of-success brief from `roscli quickstart`.
 
 ## Tell Your Agent About `roscli`
 
@@ -47,13 +53,14 @@ Command: roscli
 
 Workflow:
 1) Run "roscli list-commands --ids-only" once.
-2) If command arguments are unclear, run "roscli describe-command <command-id>".
-3) Prefer direct command shorthand for common calls; use "run ... --input" for complex JSON payloads.
-4) Prefer nav.* / ctx.* / diag.* before text-only fallback.
-5) For external package/API questions, use "dnx dotnet-inspect -y -- ..." before editing local code.
-6) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
-7) Run build/tests before finalizing changes.
-8) If roscli cannot answer a C# query, state why before falling back.
+2) Run "roscli quickstart" to load the built-in pit-of-success brief.
+3) If command arguments are unclear, run "roscli describe-command <command-id>".
+4) Prefer direct command shorthand for common calls; use "run ... --input" for complex JSON payloads.
+5) Prefer nav.* / ctx.* / diag.* before text-only fallback.
+6) For external package/API questions, use "dnx dotnet-inspect -y -- ..." before editing local code.
+7) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
+8) Run build/tests before finalizing changes.
+9) If roscli cannot answer a C# query, state why before falling back.
 ```
 
 First useful commands:
@@ -73,6 +80,8 @@ If command arguments are unclear in-session, run:
 roscli describe-command session.open
 roscli describe-command edit.create_file
 ```
+
+Deep guidance reference: `docs/PIT_OF_SUCCESS.md`
 
 ## What You Get
 
@@ -148,6 +157,7 @@ Bundle contents include:
 - `bin/roscli(.cmd)`
 - `mcp/RoslynSkills.McpServer.dll`
 - `transport/RoslynSkills.TransportServer.dll`
+- `PIT_OF_SUCCESS.md`
 - `skills/roslynskills-research/SKILL.md`
 
 If needed, install directly from downloaded `.nupkg`:
@@ -216,6 +226,7 @@ Repository layout:
 - `src/`: contracts, core commands, CLI, benchmark tooling
 - `tests/`: command/CLI/benchmark test suites
 - `benchmarks/`: manifests, scripts, prompts, scoring, reports
+- `docs/PIT_OF_SUCCESS.md`: canonical pit-of-success guidance for agents
 - `skills/roslynskills-research/`: Roslyn-first operating guidance
 - `AGENTS.md`: execution doctrine and meta-learning log
 - `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md`: research design and gates

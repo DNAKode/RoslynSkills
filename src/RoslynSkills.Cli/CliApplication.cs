@@ -43,6 +43,7 @@ public sealed class CliApplication
         {
             "list-commands" => await HandleListCommandsAsync(remainder, stdout).ConfigureAwait(false),
             "describe-command" => await HandleDescribeCommandAsync(remainder, stdout).ConfigureAwait(false),
+            "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
             "validate-input" => await HandleValidateInputAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
@@ -54,6 +55,7 @@ public sealed class CliApplication
     {
         bool compact = HasOption(args, "--compact");
         bool idsOnly = HasOption(args, "--ids-only");
+        object pitOfSuccessHints = BuildPitOfSuccessHints();
 
         if (idsOnly)
         {
@@ -91,6 +93,7 @@ public sealed class CliApplication
                     .Select(c => c.Id)
                     .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
+                pit_of_success = pitOfSuccessHints,
             }
             : compact
                 ? new
@@ -104,11 +107,13 @@ public sealed class CliApplication
                         })
                         .OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase)
                         .ToArray(),
+                    pit_of_success = pitOfSuccessHints,
                 }
                 : new
                 {
                     total = commands.Count,
                     commands,
+                    pit_of_success = pitOfSuccessHints,
                 };
         await WriteEnvelopeAsync(
             stdout,
@@ -153,6 +158,106 @@ public sealed class CliApplication
                 {
                     command = command.Descriptor,
                     usage = BuildCommandUsageHints(commandId),
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+
+        return 0;
+    }
+
+    private async Task<int> HandleQuickstartAsync(TextWriter stdout)
+    {
+        await WriteEnvelopeAsync(
+            stdout,
+            new CommandEnvelope(
+                Ok: true,
+                CommandId: "cli.quickstart",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    summary = "RoslynSkills pit-of-success brief for coding agents.",
+                    core_principle = "semantic-first, brief-first, verify-before-finalize",
+                    pit_of_success = new[]
+                    {
+                        "Start with: roscli list-commands --ids-only",
+                        "If arguments are unclear: roscli describe-command <command-id>",
+                        "If you need agent-facing defaults quickly: copy the prompt block below.",
+                        "Use nav.* / ctx.* / diag.* before text fallback.",
+                        "Keep payloads brief-first (for example --brief true) before expanding detail.",
+                        "Validate with diagnostics and build/tests before finalizing.",
+                    },
+                    first_minute_sequence = new[]
+                    {
+                        "roscli list-commands --ids-only",
+                        "roscli describe-command session.open",
+                        "roscli describe-command edit.create_file",
+                        "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20",
+                    },
+                    example_paths = new[]
+                    {
+                        "src/MyProject/Program.cs",
+                        "src/MyProject/Services/OrderService.cs",
+                    },
+                    quick_recipes = new object[]
+                    {
+                        new
+                        {
+                            name = "rename_symbol_safely",
+                            commands = new[]
+                            {
+                                "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20",
+                                "roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true",
+                                "roscli diag.get_file_diagnostics src/MyProject/Program.cs",
+                            },
+                        },
+                        new
+                        {
+                            name = "create_new_file_one_shot",
+                            commands = new[]
+                            {
+                                "roscli edit.create_file src/MyProject/NewType.cs --content \"public class NewType { }\"",
+                                "roscli diag.get_file_diagnostics src/MyProject/NewType.cs",
+                            },
+                        },
+                        new
+                        {
+                            name = "session_edit_loop",
+                            commands = new[]
+                            {
+                                "roscli session.open src/MyProject/Program.cs demo-session",
+                                "roscli session.status demo-session",
+                                "roscli session.diff demo-session",
+                                "roscli session.commit demo-session --keep-session false --require-disk-unchanged true",
+                            },
+                        },
+                    },
+                    agent_intro_prompt = """
+Use roscli for C# work in this session.
+Workflow:
+1) run "roscli list-commands --ids-only" once.
+2) run "roscli quickstart" and follow its recipes.
+3) if argument shape is unclear, run "roscli describe-command <command-id>".
+4) prefer nav.* / ctx.* / diag.* before text-only fallback.
+5) run diagnostics/build/tests before finalizing.
+""",
+                    complementary_tools = new[]
+                    {
+                        "For external package/framework API intelligence, use: dnx dotnet-inspect -y -- <command>",
+                        "For in-repo semantic edits and diagnostics, use roscli.",
+                    },
+                    guardrails = new[]
+                    {
+                        "session.open only supports .cs/.csx files.",
+                        "Do not use session.open on .sln/.slnx/.csproj files.",
+                        "For complex JSON payloads, prefer --input-stdin over shell-escaped inline JSON.",
+                        "If roscli cannot answer a C# query, state why before fallback.",
+                    },
+                    anti_patterns = new[]
+                    {
+                        "Do not start by opening .sln/.slnx/.csproj with session.open.",
+                        "Do not run broad solution diagnostics repeatedly when a file-level check is enough.",
+                        "Do not hand-edit complex multi-file refactors before trying semantic commands.",
+                    },
                 },
                 Errors: Array.Empty<CommandError>(),
                 TraceId: null)).ConfigureAwait(false);
@@ -297,7 +402,7 @@ public sealed class CliApplication
         await WriteEnvelopeAsync(stdout, ErrorEnvelope(
             commandId: "cli",
             code: "unknown_verb",
-            message: $"Unknown command '{verb}'. Use '--help' or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
+            message: $"Unknown command '{verb}'. Use '--help', 'quickstart', or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
         await stderr.WriteLineAsync($"Unknown command '{verb}'.").ConfigureAwait(false);
         return 1;
     }
@@ -1251,6 +1356,25 @@ public sealed class CliApplication
         };
     }
 
+    private static object BuildPitOfSuccessHints()
+    {
+        return new
+        {
+            quickstart = "Run 'quickstart' for a compact pit-of-success workflow brief.",
+            first_steps = new[]
+            {
+                "list-commands --ids-only",
+                "describe-command session.open",
+                "describe-command edit.create_file",
+            },
+            guardrails = new[]
+            {
+                "session.open supports only .cs/.csx files.",
+                "Prefer --input-stdin for complex JSON payloads.",
+            },
+        };
+    }
+
     private static CommandEnvelope ErrorEnvelope(string commandId, string code, string message)
         => new(
             Ok: false,
@@ -1272,11 +1396,18 @@ public sealed class CliApplication
             Commands:
               list-commands [--compact] [--ids-only]
               describe-command <command-id>
+              quickstart
               validate-input <command-id> [--input <json>|@<file>|-] [--input-stdin]
               run <command-id> [--input <json>|@<file>|-] [--input-stdin]
               <command-id> [simple positional args]
 
             Notes:
+              - Start with quickstart for an agent-ready pit-of-success workflow brief.
+              - Recommended first minute:
+                roscli list-commands --ids-only
+                roscli quickstart
+                roscli describe-command session.open
+                roscli describe-command edit.create_file
               - You can run commands directly without 'run' for quick workflows.
               - Shorthand positional forms:
                 ctx.file_outline <file-path>

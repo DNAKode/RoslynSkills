@@ -87,6 +87,14 @@ Gauthier-inspired:
 - Prefer Roslyn semantic certainty over regex confidence.
 - For C# changes touching symbols, references, or signatures, use semantic verification paths by default.
 
+## Pit-Of-Success-First Doctrine
+
+- Design command surfaces so the best workflow is the easiest workflow for agents.
+- For high-traffic commands, ensure argument discovery is explicit via `describe-command` examples and guardrails.
+- Maintain a short canonical startup path: `list-commands` -> `quickstart` -> targeted `describe-command`.
+- Treat onboarding friction (argument confusion, bad first command choices, fallback churn) as a core quality metric, not docs polish.
+- Keep release artifacts and skill packages aligned with this doctrine (include pit-of-success guidance near launchers).
+
 ## Operating Loop (Default)
 
 For each work package:
@@ -282,3 +290,5 @@ Initial seed entries:
 - `2026-02-11`: Guidance-profile ablation reconfirmed posture sensitivity -> `brief-first` remained lower-overhead than `skill-minimal` across completed Codex/Claude profiles while preserving pass rates -> Keep `brief-first` default and reserve `skill-minimal` for stress diagnostics.
 - `2026-02-11`: LSP lane ambiguity reduced with explicit availability telemetry -> Added `lsp_tools_available`/`lsp_tools_unavailable_detected` and verified clean LSP-lane Roslyn contamination checks in fresh Claude run artifacts -> Gate LSP efficacy claims on confirmed tool availability, not lane label alone.
 - `2026-02-11`: Ablation rollup null-handling corrected -> Missing lane deltas (for example Codex `treatment-lsp`) were being coerced into synthetic values -> Keep absent-lane metrics as null to avoid false comparator conclusions.
+- `2026-02-11`: Pit-of-success posture elevated to core design rule -> Added CLI `quickstart` guidance surface, canonical guide (`docs/PIT_OF_SUCCESS.md`), and release-bundle inclusion requirements -> Treat onboarding success and first-command correctness as first-class quality gates.
+- `2026-02-11`: Pit-of-success guidance embedded across runtime and artifacts -> Added `list-commands` pit hints, stronger `--help`, quickstart recipes, NuGet/readme/skill references, and bundle-level `PIT_OF_SUCCESS.md` inclusion -> Avoid relying on single-entry docs and make guidance discoverable from every likely starting point.

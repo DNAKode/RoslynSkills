@@ -12,8 +12,16 @@ dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
 
 ```bash
 roscli list-commands --ids-only
+roscli quickstart
 roscli describe-command session.open
 ```
+
+Recommended first minute:
+
+1. `roscli list-commands --ids-only`
+2. `roscli quickstart`
+3. `roscli describe-command session.open`
+4. `roscli describe-command edit.create_file`
 
 ## Typical usage
 
@@ -28,3 +36,4 @@ roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType
 ## Repository
 
 - https://github.com/DNAKode/RoslynSkills
+- Pit-of-success guide: https://github.com/DNAKode/RoslynSkills/blob/main/docs/PIT_OF_SUCCESS.md

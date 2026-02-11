@@ -104,6 +104,7 @@ Requirements:
 - stable machine-readable and human-readable output modes,
 - predictable exit codes and error classes,
 - high-quality `--help` and subcommand discoverability,
+- explicit pit-of-success startup surface (`quickstart`) and guardrails for common misuse,
 - JSON output schema versioning,
 - low-latency behavior for iterative agent calls.
 
@@ -111,7 +112,8 @@ Outputs:
 
 - `roscli` CLI skeleton and core subcommands,
 - command contract tests,
-- compatibility docs for Codex CLI and Claude Code workflows.
+- compatibility docs for Codex CLI and Claude Code workflows,
+- canonical pit-of-success guide wired into release artifacts and skill docs.
 
 Dependencies:
 
@@ -120,6 +122,7 @@ Dependencies:
 Acceptance gate:
 
 - key workflows scriptable in shell with no hidden state assumptions.
+- first-minute onboarding path succeeds without command-argument guesswork (`list-commands` -> `quickstart` -> `describe-command`).
 
 ## P4. Interface Adapters (Skills, then MCP)
 
@@ -334,7 +337,7 @@ Functional:
 
 - deterministic command outputs,
 - stable schemas with version tags,
-- discoverable command inventory (`help`, `list-commands`, `describe-command`),
+- discoverable command inventory (`help`, `list-commands`, `describe-command`, `quickstart`),
 - context-size aware output modes (`brief`, `standard`, `verbose`).
 
 Context policy experiment (new high-priority branch):
@@ -363,7 +366,8 @@ Quality:
 
 - contract tests for all commands,
 - snapshot tests for output schemas,
-- regression tests for exit code semantics.
+- regression tests for exit code semantics,
+- onboarding-path tests for pit-of-success guidance continuity.
 
 ## 8. Tool Distribution Requirements
 
