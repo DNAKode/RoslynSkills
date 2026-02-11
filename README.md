@@ -4,7 +4,7 @@
 
 # RoslynSkills
 
-RoslynSkills is a Roslyn-native toolkit for coding agents working on C#/.NET codebases.
+Roslyn-powered C# tools for coding agents.
 
 Goal: help agents navigate, edit, and validate C# with semantic correctness, then measure whether this materially beats text-first workflows.
 
