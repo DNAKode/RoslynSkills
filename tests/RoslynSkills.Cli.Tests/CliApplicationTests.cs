@@ -482,6 +482,8 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("\"CommandId\": \"cli.version\"", output);
         Assert.Contains("\"cli_version\":", output);
+        Assert.Contains("\"informational_version\":", output);
+        Assert.Contains("\"tool_command\": \"roscli\"", output);
     }
 
     [Fact]
@@ -501,6 +503,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("\"CommandId\": \"cli.version\"", output);
         Assert.Contains("\"cli_version\":", output);
+        Assert.Contains("\"Summary\": \"cli.version ok: roscli", output);
     }
 
     [Fact]
@@ -610,10 +613,9 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
-    public async Task DirectCommand_SessionOpen_AcceptsSolutionAliasForFilePath()
+    public async Task DirectCommand_SessionOpen_RejectsSolutionAliasForFilePath()
     {
         string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-{Guid.NewGuid():N}.cs");
-        string sessionId = $"opt-{Guid.NewGuid():N}";
         await File.WriteAllTextAsync(filePath, "public class Demo { }");
 
         try
@@ -623,22 +625,15 @@ public sealed class CliApplicationTests
             StringWriter stderr = new();
 
             int exitCode = await app.RunAsync(
-                new[] { "session.open", "--solution", filePath, "--session-id", sessionId },
+                new[] { "session.open", "--solution", filePath },
                 stdout,
                 stderr,
                 CancellationToken.None);
 
-            Assert.Equal(0, exitCode);
-            Assert.Contains("\"CommandId\": \"session.open\"", stdout.ToString());
-
-            StringWriter closeStdout = new();
-            StringWriter closeStderr = new();
-            int closeExitCode = await app.RunAsync(
-                new[] { "session.close", sessionId },
-                closeStdout,
-                closeStderr,
-                CancellationToken.None);
-            Assert.Equal(0, closeExitCode);
+            Assert.Equal(1, exitCode);
+            string output = stdout.ToString();
+            Assert.Contains("invalid_args", output);
+            Assert.Contains("session.open <file-path> [session-id]", output);
         }
         finally
         {

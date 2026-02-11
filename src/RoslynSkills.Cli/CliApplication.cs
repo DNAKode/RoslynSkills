@@ -136,7 +136,7 @@ public sealed class CliApplication
 
     private async Task<int> HandleVersionAsync(TextWriter stdout)
     {
-        string version = GetCliVersion();
+        (string version, string informationalVersion) = GetCliVersions();
         await WriteEnvelopeAsync(
             stdout,
             new CommandEnvelope(
@@ -146,6 +146,8 @@ public sealed class CliApplication
                 Data: new
                 {
                     cli_version = version,
+                    informational_version = informationalVersion,
+                    tool_command = "roscli",
                 },
                 Errors: Array.Empty<CommandError>(),
                 TraceId: null)).ConfigureAwait(false);
@@ -580,7 +582,7 @@ Workflow:
         => string.Equals(value, "--version", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(value, "-v", StringComparison.OrdinalIgnoreCase);
 
-    private static string GetCliVersion()
+    private static (string Version, string InformationalVersion) GetCliVersions()
     {
         Assembly assembly = typeof(CliApplication).Assembly;
         string? informational = assembly
@@ -588,10 +590,15 @@ Workflow:
             ?.InformationalVersion;
         if (!string.IsNullOrWhiteSpace(informational))
         {
-            return informational;
+            string displayVersion = informational.Split('+', 2, StringSplitOptions.TrimEntries)[0];
+            if (!string.IsNullOrWhiteSpace(displayVersion))
+            {
+                return (displayVersion, informational);
+            }
         }
 
-        return assembly.GetName().Version?.ToString() ?? "unknown";
+        string fallback = assembly.GetName().Version?.ToString() ?? "unknown";
+        return (fallback, fallback);
     }
 
     private static bool TryBuildDirectShorthandInput(
@@ -612,7 +619,6 @@ Workflow:
             TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 0);
             TryPromoteOptionToPositional(options, "file", ref positionalArgs, 0);
             TryPromoteOptionToPositional(options, "path", ref positionalArgs, 0);
-            TryPromoteOptionToPositional(options, "solution", ref positionalArgs, 0);
             TryPromoteOptionToPositional(options, "session_id", ref positionalArgs, 1);
         }
 
@@ -1197,6 +1203,14 @@ Workflow:
             }
         }
 
+        if (string.Equals(commandId, "cli.version", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetString(element, "cli_version", out string version) && !string.IsNullOrWhiteSpace(version))
+            {
+                return $"roscli {version}";
+            }
+        }
+
         if (commandId.StartsWith("session.", StringComparison.OrdinalIgnoreCase))
         {
             string sessionId = TryGetString(element, "session_id", out string sid) ? sid : "<session>";
@@ -1446,7 +1460,7 @@ Workflow:
               <command-id> [simple positional args]
 
             Notes:
-              - Use --version (or version) to print the installed roscli version.
+              - Use --version, -v, or version to print the installed roscli version.
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
               - Recommended first minute:
                 roscli list-commands --ids-only

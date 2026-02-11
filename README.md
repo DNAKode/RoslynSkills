@@ -27,23 +27,7 @@ Install `roscli` from NuGet preview:
 dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
 ```
 
-If your machine has extra/private NuGet feeds configured, prefer:
-
-```powershell
-dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
-```
-
-If a fresh publish is still indexing on NuGet, install by explicit version from the release page:
-
-```powershell
-dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
-```
-
-Optional companion tool for external package/API intelligence:
-
-```powershell
-dotnet tool install --global dotnet-inspect
-```
+If install fails or NuGet cannot find the package yet, jump to `Troubleshooting`.
 
 Verify install:
 
@@ -105,14 +89,22 @@ Deep guidance reference: `docs/PIT_OF_SUCCESS.md`
 - `diag.*`: diagnostics snapshots/diffs/after-edit checks
 - `edit.*`: structured semantic edits and transactions
 - `repair.*`: diagnostics-driven repair planning/application
-- `session.*`: non-destructive edit/diagnostics/diff/commit loops
+- `session.*`: non-destructive edit/diagnostics/diff/commit loops for a single C# file (`.cs`/`.csx`)
 
 ## Complementary .NET Tooling
 
-RoslynSkills sits well alongside other .NET agent tools:
+For external package/assembly API intelligence, the strongest companion here is `dotnet-inspect` by Rich Lander (and related `dotnet-skills` work), which is designed for ecosystem/package inspection workflows rather than in-repo Roslyn edits.
+
+Attribution and links:
 
 - `dotnet-inspect`: https://github.com/richlander/dotnet-inspect
 - `dotnet-skills`: https://github.com/richlander/dotnet-skills
+
+Install companion tool (optional):
+
+```powershell
+dotnet tool install --global dotnet-inspect
+```
 
 Practical split of responsibilities:
 
@@ -173,10 +165,24 @@ Bundle contents include:
 - `PIT_OF_SUCCESS.md`
 - `skills/roslynskills-research/SKILL.md`
 
-If needed, install directly from downloaded `.nupkg`:
+## Troubleshooting
+
+If `dotnet tool install` cannot find `DNAKode.RoslynSkills.Cli`:
 
 ```powershell
-dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source <folder-containing-nupkg>
+dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
+```
+
+If a just-published preview is still indexing:
+
+```powershell
+dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
+```
+
+If you downloaded `DNAKode.RoslynSkills.Cli.<version>.nupkg` from GitHub Releases and want local install:
+
+```powershell
+dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source <folder-containing-nupkg> --ignore-failed-sources
 ```
 
 ## Optional: MCP Mode
