@@ -2,7 +2,7 @@
 
 ## Title
 
-`RoslynSkills tool -- Roslyn-native C# workflows for coding agents`
+`RoslynSkills - Roslyn-powered C# tools for coding agents`
 
 ## Paste-Ready Post (No Images)
 
