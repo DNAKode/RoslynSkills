@@ -29,6 +29,16 @@ Prefer Roslyn commands for navigation, context, diagnostics, repair, and structu
 
 Mandatory policy: if a `.cs` read/edit uses non-Roslyn tooling, append a self-reflection entry to `ROSLYN_FALLBACK_REFLECTION_LOG.md` before continuing.
 
+## Complementary dependency intelligence (optional)
+
+When the task is about external package APIs (overloads, version diffs, vulnerability metadata), combine RoslynSkills with `dotnet-inspect` if available:
+
+```powershell
+dnx dotnet-inspect -y -- api JsonSerializer --package System.Text.Json
+```
+
+Use `dotnet-inspect` for dependency/package discovery, then use `roscli` for workspace-local semantic edits and diagnostics.
+
 ## Roscli performance mode (high call volume)
 
 For longer agent loops with many Roslyn calls, prefer cached published execution:

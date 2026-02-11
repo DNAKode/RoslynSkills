@@ -560,6 +560,46 @@ Decision:
 - Keep quoted `@file` syntax in PowerShell profile guidance.
 - Add this as a standing prompt-quality check in profile experimentation.
 
+### F-2026-02-11-19: External ecosystem scan supports a complementary positioning and highlights distribution upgrades for RoslynSkills
+
+Evidence:
+
+- `dotnet-inspect` repo/docs/workflows:
+  - `https://github.com/richlander/dotnet-inspect/blob/main/README.md`
+  - `https://github.com/richlander/dotnet-inspect/blob/main/src/dotnet-inspect/dotnet-inspect.csproj`
+  - `https://github.com/richlander/dotnet-inspect/blob/main/.github/workflows/ci.yml`
+  - `https://github.com/richlander/dotnet-inspect/blob/main/.github/workflows/release.yml`
+  - `https://github.com/richlander/dotnet-inspect/blob/main/docs/llm-design.md`
+- `dotnet-skills` repo:
+  - `https://github.com/richlander/dotnet-skills/blob/main/README.md`
+  - `https://github.com/richlander/dotnet-skills/blob/main/.claude-plugin/plugin.json`
+  - `https://github.com/richlander/dotnet-skills/blob/main/.claude-plugin/marketplace.json`
+  - `https://github.com/richlander/dotnet-skills/blob/main/skills/dotnet-inspect/SKILL.md`
+- Announcement thread:
+  - `https://www.reddit.com/r/dotnet/comments/1qvef17/dotnetinspect_tool_inspect_net_resource_llm/`
+- Internal research notes:
+  - `docs/ECOSYSTEM_NOTES.md`
+  - `docs/ANNOUNCEMENT_NOTES.md`
+
+Result:
+
+- `dotnet-inspect` focuses on package/library/platform inspection and is distributed as a global tool with RID-aware package variants plus a pointer package.
+- `dotnet-skills` focuses on skill/plugin distribution ergonomics (marketplace metadata + simple install/update flows).
+- Announcement framing and comments reinforce demand for source/workspace-aware semantics as a separate but adjacent capability.
+
+Interpretation:
+
+- RoslynSkills and dotnet-inspect occupy adjacent layers of the same agentic workflow:
+  - dependency/package intelligence (dotnet-inspect),
+  - workspace-semantic editing/diagnostics (RoslynSkills).
+- Distribution UX is a primary adoption lever; packaging, skill metadata, and copy-paste-safe onboarding commands materially affect real usage.
+
+Decision:
+
+- Position RoslynSkills explicitly as complementary to package-inspection tooling in user-facing docs.
+- Keep investing in low-friction onboarding surfaces (command discoverability, shell-safe examples, and skill packaging paths).
+- Track marketplace/plugin packaging as a candidate distribution lane alongside NuGet and release bundles.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

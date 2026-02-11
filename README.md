@@ -72,6 +72,29 @@ Tip: for simple rename/fix tasks, start with a minimal flow (`edit.rename_symbol
 - `repair.*`: diagnostics-driven repair planning/application
 - `session.*`: non-destructive edit/diagnostics/diff/commit loops
 
+## Complementary .NET Tooling
+
+RoslynSkills sits well alongside other .NET agent tools:
+
+- `dotnet-inspect`: https://github.com/richlander/dotnet-inspect
+- `dotnet-skills`: https://github.com/richlander/dotnet-skills
+
+Practical split of responsibilities:
+
+1. Use `dotnet-inspect` for package/assembly intelligence (external APIs, overload discovery, version diffs, vulnerability metadata).
+2. Use `roscli` for workspace-native Roslyn operations (symbol navigation, structured edits, diagnostics, repair) in your current repo.
+
+Example combined workflow:
+
+```powershell
+# External API discovery
+dnx dotnet-inspect -y -- api JsonSerializer --package System.Text.Json
+
+# Local workspace edit + verify
+roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true
+roscli diag.get_file_diagnostics src/MyProject/File.cs
+```
+
 ## Optional: Release Bundle (CLI + MCP + Transport + Skill)
 
 If you want prebuilt binaries and wrappers, use the latest release bundle:
