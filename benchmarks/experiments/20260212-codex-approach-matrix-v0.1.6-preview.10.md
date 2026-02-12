@@ -1,7 +1,7 @@
-# Codex Tooling Approach Matrix (v0.1.6-preview.10)
+# Codex Tooling Approach Matrix (v0.1.6-preview.12)
 
 Date: 2026-02-12
-Local repo describe: `v0.1.6-preview.9-4-g4ba924a`
+Local repo describe: `v0.1.6-preview.12`
 
 ## Scope
 
