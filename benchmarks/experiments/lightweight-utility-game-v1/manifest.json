@@ -53,8 +53,8 @@
         "dotnet restore"
       ],
       "acceptance_checks": [
-        "dotnet test tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj",
-        "dotnet test tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj"
+        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
       ]
     },
     {
@@ -68,8 +68,8 @@
         "dotnet restore"
       ],
       "acceptance_checks": [
-        "dotnet test tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj",
-        "dotnet test tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj"
+        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
       ]
     },
     {
@@ -83,8 +83,8 @@
         "dotnet restore"
       ],
       "acceptance_checks": [
-        "dotnet test tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj",
-        "dotnet test tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj"
+        "dotnet test tests/RoslynAgent.Core.Tests/RoslynAgent.Core.Tests.csproj",
+        "dotnet test tests/RoslynAgent.Cli.Tests/RoslynAgent.Cli.Tests.csproj"
       ]
     }
   ]

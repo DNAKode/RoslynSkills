@@ -1311,6 +1311,101 @@ Interpretation:
 Decision:
 
 - keep MCP optimization active, but maintain roscli as default practical lane for microtasks where line/column anchors are already known.
+
+### F-2026-02-12-46: Lightweight real-run harness had a Roscli project-identity defect on historical workspaces (fixed)
+
+Evidence:
+
+- failure mode observed in treatment lane transcripts under baseline commit workspaces containing `src/RoslynAgent.Cli` while generated shim expected `src/RoslynSkills.Cli`.
+- fixes:
+  - `benchmarks/scripts/Run-LightweightUtilityGameRealRuns.ps1`
+  - `scripts/roscli`
+  - `scripts/roscli.cmd`
+
+Result:
+
+- pre-fix treatment runs could fail Roscli invocation with path-not-found and drift into non-Roslyn behavior.
+- shim and launcher resolution now probes both identities (`RoslynSkills.Cli` and `RoslynAgent.Cli`) and selects the one present.
+
+Interpretation:
+
+- a large share of “treatment underperformed” evidence in historical-workspace lanes can be experiment plumbing, not tool-surface quality.
+
+Decision:
+
+- treat pre-fix lightweight treatment runs as conditionally contaminated unless transcript confirms successful Roscli call paths.
+- require project-identity self-check in future harness preflight for baseline-commit workflows.
+
+### F-2026-02-12-47: Paired Codex/Spark matrix still favors Roscli over Roslyn-MCP on token efficiency for anchored edits
+
+Evidence:
+
+- `benchmarks/experiments/20260212-codex-approach-matrix-v0.1.6-preview.9.md`
+- `artifacts/real-agent-runs/20260212-model-taskshape-roscli-mcp-v1-codex-project/paired-run-summary.json`
+- `artifacts/real-agent-runs/20260212-model-taskshape-roscli-mcp-v1-codex-singlefile/paired-run-summary.json`
+- `artifacts/real-agent-runs/20260212-model-taskshape-roscli-mcp-v1-spark-project/paired-run-summary.json`
+- `artifacts/real-agent-runs/20260212-model-taskshape-roscli-mcp-v1-spark-singlefile/paired-run-summary.json`
+
+Result:
+
+- Codex project: roscli `29,235` vs MCP `64,893` tokens.
+- Codex single-file: roscli `28,170` vs MCP `63,732` tokens.
+- Spark project: roscli `29,756` vs MCP `39,644` tokens.
+- Spark single-file: roscli `19,836` vs MCP `52,882` tokens.
+
+Interpretation:
+
+- Roscli remains the lower-overhead semantic lane on this task family, even where MCP can occasionally be faster on wall-clock.
+
+Decision:
+
+- keep Roscli as default Codex lane for anchored rename/edit flows.
+- continue MCP optimization work, but gate default-lane promotion on replicate-backed token parity or better.
+
+### F-2026-02-12-48: MCP scenario sweeps show Roslyn-MCP is consistently the highest-cost MCP arm in Codex/Spark low-effort settings
+
+Evidence:
+
+- `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v6b-cclsp-duration/codex-mcp-interop-summary.json`
+- `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v8-spark-cclsp-duration/codex-mcp-interop-summary.json`
+- matrix rollup: `benchmarks/experiments/20260212-codex-approach-matrix-v0.1.6-preview.9.md`
+
+Result (low effort):
+
+- Codex: control `64,343`, LSP-MCP `63,765`, Roslyn-MCP `123,739`, combined `89,019` tokens.
+- Spark: control `51,309`, LSP-MCP `74,626`, Roslyn-MCP `149,819`, combined `92,710` tokens.
+
+Interpretation:
+
+- for this microtask family, Roslyn-MCP is a precision-heavy lane with substantial token overhead.
+- combined Roslyn+LSP can reduce that overhead versus Roslyn-only, but still trails control and often trails LSP-only.
+
+Decision:
+
+- keep Roslyn-MCP as a specialized lane for ambiguity-heavy operations where semantic precision is expected to amortize overhead.
+- prioritize LSP-only and combined-lane prompt/runtime tuning for broader MCP viability.
+
+### F-2026-02-12-49: Open-ended larger-task comparisons are still confounded by trajectory variance and need bounded-run protocol
+
+Evidence:
+
+- `artifacts/real-agent-runs/20260212-revisionsize-codex-v2/runs/run-codex-control-control-text-only-task-001-initial-build-r01.json`
+- `artifacts/real-agent-runs/20260212-revisionsize-codex-v3-task001/runs/run-codex-control-control-text-only-task-001-initial-build-r01.json`
+- `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v5/runs/run-codex-treatment-treatment-roslyn-optional-task-001-initial-build-r01.json`
+- `artifacts/real-agent-runs/20260210-lightweight-roscli-mode-v5/runs/run-codex-treatment-treatment-roslyn-published-cache-task-001-initial-build-r01.json`
+
+Result:
+
+- control `task-001` moved from `417,091` to `996,811` tokens across runs.
+- treatment optional vs published-cache differed by `573,077` tokens in the same task family.
+
+Interpretation:
+
+- uncontrolled exploration/planning breadth can dominate token deltas and obscure lane-level effects.
+
+Decision:
+
+- introduce bounded-run large-task protocol (step caps, early acceptance-check checkpoint, required sequencing) before claiming Roscli vs MCP vs control outcomes on open-ended tasks.
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

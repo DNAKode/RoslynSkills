@@ -208,6 +208,19 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
 
+set "CLI_PROJECT=RoslynSkills.Cli"
+set "CLI_DLL_NAME=RoslynSkills.Cli.dll"
+if exist "%REPO_ROOT%\src\RoslynSkills.Cli\RoslynSkills.Cli.csproj" goto :cli_resolved
+if exist "%REPO_ROOT%\src\RoslynAgent.Cli\RoslynAgent.Cli.csproj" (
+    set "CLI_PROJECT=RoslynAgent.Cli"
+    set "CLI_DLL_NAME=RoslynAgent.Cli.dll"
+    goto :cli_resolved
+)
+echo Could not resolve Roslyn CLI project under "%REPO_ROOT%\src". 1>&2
+set "EXIT_CODE=2"
+goto :done
+
+:cli_resolved
 set "USE_PUBLISHED=%ROSCLI_USE_PUBLISHED%"
 if /I "%USE_PUBLISHED%"=="1" goto :use_published
 if /I "%USE_PUBLISHED%"=="true" goto :use_published
@@ -217,7 +230,7 @@ goto :use_dotnet_run
 
 :use_published
 set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
-set "CLI_DLL=%CACHE_DIR%\RoslynSkills.Cli.dll"
+set "CLI_DLL=%CACHE_DIR%\%CLI_DLL_NAME%"
 set "CACHE_STAMP=%CACHE_DIR%\publish.stamp"
 set "REFRESH_PUBLISHED=%ROSCLI_REFRESH_PUBLISHED%"
 set "STALE_CHECK=%ROSCLI_STALE_CHECK%"
@@ -237,7 +250,7 @@ if "%NEED_PUBLISH%"=="0" (
 )
 
 if "%NEED_PUBLISH%"=="1" (
-    dotnet publish "%REPO_ROOT%\src\RoslynSkills.Cli" -c Release -o "%CACHE_DIR%" --nologo
+    dotnet publish "%REPO_ROOT%\src\%CLI_PROJECT%" -c Release -o "%CACHE_DIR%" --nologo
     if errorlevel 1 (
         set "EXIT_CODE=%ERRORLEVEL%"
         goto :done
@@ -250,7 +263,7 @@ set "EXIT_CODE=%ERRORLEVEL%"
 goto :done
 
 :use_dotnet_run
-dotnet run --project "%REPO_ROOT%\src\RoslynSkills.Cli" -- %*
+dotnet run --project "%REPO_ROOT%\src\%CLI_PROJECT%" -- %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 :done
@@ -264,7 +277,7 @@ if not exist "%CHECK_STAMP%" (
     endlocal & exit /b 1
 )
 
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repoRoot='%CHECK_REPO_ROOT%'; $stampPath='%CHECK_STAMP%'; $extensions=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase); @('.cs','.csproj','.props','.targets','.json') | ForEach-Object { [void]$extensions.Add($_) }; $watchPaths=@((Join-Path $repoRoot 'src')); foreach($name in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json','NuGet.config','RoslynSkills.slnx')) { $watchPaths += (Join-Path $repoRoot $name) }; $stampTime=(Get-Item -LiteralPath $stampPath).LastWriteTimeUtc; foreach($watchPath in $watchPaths) { if (-not (Test-Path -LiteralPath $watchPath)) { continue }; $item=Get-Item -LiteralPath $watchPath; if ($item.PSIsContainer) { foreach($file in Get-ChildItem -LiteralPath $watchPath -Recurse -File -ErrorAction SilentlyContinue) { if (-not $extensions.Contains($file.Extension)) { continue }; if ($file.LastWriteTimeUtc -gt $stampTime) { exit 3 } } } elseif ($item.LastWriteTimeUtc -gt $stampTime) { exit 3 } }; exit 0" >nul 2>nul
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repoRoot='%CHECK_REPO_ROOT%'; $stampPath='%CHECK_STAMP%'; $extensions=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase); @('.cs','.csproj','.props','.targets','.json') | ForEach-Object { [void]$extensions.Add($_) }; $watchPaths=@((Join-Path $repoRoot 'src')); foreach($name in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json','NuGet.config','RoslynSkills.slnx','RoslynSkill.slnx')) { $watchPaths += (Join-Path $repoRoot $name) }; $stampTime=(Get-Item -LiteralPath $stampPath).LastWriteTimeUtc; foreach($watchPath in $watchPaths) { if (-not (Test-Path -LiteralPath $watchPath)) { continue }; $item=Get-Item -LiteralPath $watchPath; if ($item.PSIsContainer) { foreach($file in Get-ChildItem -LiteralPath $watchPath -Recurse -File -ErrorAction SilentlyContinue) { if (-not $extensions.Contains($file.Extension)) { continue }; if ($file.LastWriteTimeUtc -gt $stampTime) { exit 3 } } } elseif ($item.LastWriteTimeUtc -gt $stampTime) { exit 3 } }; exit 0" >nul 2>nul
 set "STALE_CHECK_EXIT=%ERRORLEVEL%"
 if "%STALE_CHECK_EXIT%"=="0" (
     endlocal & exit /b 0
@@ -281,13 +294,27 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
+cli_project="RoslynSkills.Cli"
+cli_project_path="$repo_root/src/RoslynSkills.Cli"
+cli_dll_name="RoslynSkills.Cli.dll"
+if [[ -f "$repo_root/src/RoslynSkills.Cli/RoslynSkills.Cli.csproj" ]]; then
+  :
+elif [[ -f "$repo_root/src/RoslynAgent.Cli/RoslynAgent.Cli.csproj" ]]; then
+  cli_project="RoslynAgent.Cli"
+  cli_project_path="$repo_root/src/RoslynAgent.Cli"
+  cli_dll_name="RoslynAgent.Cli.dll"
+else
+  echo "Could not resolve Roslyn CLI project under '$repo_root/src'." >&2
+  exit 2
+fi
+
 use_published="${ROSCLI_USE_PUBLISHED:-}"
 refresh_published="${ROSCLI_REFRESH_PUBLISHED:-}"
 stale_check="${ROSCLI_STALE_CHECK:-0}"
 
 if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" == "yes" || "$use_published" == "on" ]]; then
   cache_dir="$repo_root/artifacts/roscli-cache"
-  cli_dll="$cache_dir/RoslynSkills.Cli.dll"
+  cli_dll="$cache_dir/$cli_dll_name"
   stamp_file="$cache_dir/publish.stamp"
   need_publish=0
   if [[ ! -f "$cli_dll" ]]; then
@@ -303,7 +330,7 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
     elif find "$repo_root/src" -type f \( -name '*.cs' -o -name '*.csproj' -o -name '*.props' -o -name '*.targets' -o -name '*.json' \) -newer "$stamp_file" -print -quit | grep -q .; then
       need_publish=1
     else
-      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkills.slnx"; do
+      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkills.slnx" "RoslynSkill.slnx"; do
         if [[ -f "$repo_root/$file" && "$repo_root/$file" -nt "$stamp_file" ]]; then
           need_publish=1
           break
@@ -313,14 +340,14 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
   fi
 
   if [[ "$need_publish" == "1" ]]; then
-    dotnet publish "$repo_root/src/RoslynSkills.Cli" -c Release -o "$cache_dir" --nologo
+    dotnet publish "$cli_project_path" -c Release -o "$cache_dir" --nologo
     mkdir -p "$cache_dir"
     date -u +"%Y-%m-%dT%H:%M:%SZ" > "$stamp_file"
   fi
 
   dotnet "$cli_dll" "$@"
 else
-  dotnet run --project "$repo_root/src/RoslynSkills.Cli" -- "$@"
+  dotnet run --project "$cli_project_path" -- "$@"
 fi
 '@
     Set-Content -Path $shPath -Value $shBody -NoNewline
