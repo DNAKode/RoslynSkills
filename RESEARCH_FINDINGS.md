@@ -894,6 +894,117 @@ Decision:
 - Treat `workspace_context.mode=workspace` as the expected state for project-backed `nav.find_symbol` and `diag.get_file_diagnostics` calls.
 - Update pit-of-success and paired-run guidance to rerun with explicit workspace binding (`workspace_path`) when mode is `ad_hoc`.
 
+### F-2026-02-12-30: Project-shape paired runs were initially confounded by harness self-collision, now fixed and regression-tested
+
+Evidence:
+
+- harness fix:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`TargetHarness.csproj` now excludes `Target.original.cs`)
+- regression test:
+  - `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`
+- post-fix clean project bundle:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.7-project-matrix-v2/paired-run-summary.json`
+
+Result:
+
+- before fix, project-shape runs produced duplicate-type/member errors unrelated to the edit task.
+- after fix, codex `control`, `treatment`, and `treatment-mcp` all passed constraint checks in project shape.
+
+Interpretation:
+
+- this was a harness validity bug, not a Roslyn capability issue.
+- separating harness defects from tool behavior materially changes interpretation quality.
+
+Decision:
+
+- treat generated fixture compile-surface as part of experiment correctness gates.
+- keep explicit test coverage for task-shape project generation.
+
+### F-2026-02-12-31: Paired harness now emits workspace-context mode telemetry that distinguishes workspace-backed vs ad-hoc runs
+
+Evidence:
+
+- metadata/summary instrumentation:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`roslyn_workspace_mode_workspace_count`, `roslyn_workspace_mode_ad_hoc_count`, `roslyn_workspace_mode_last`)
+- refreshed project bundle:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.7-project-matrix-v5/paired-run-summary.json`
+- refreshed single-file bundle:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.7-singlefile-matrix-v4/paired-run-summary.json`
+
+Result:
+
+- codex `treatment-mcp` project shape reports `workspace/ad_hoc = 2/0`.
+- codex `treatment-mcp` single-file shape reports `workspace/ad_hoc = 0/2`.
+
+Interpretation:
+
+- workspace-context mode behavior now appears directly in run metadata, reducing transcript-only ambiguity.
+- scenario-level context differences (project vs loose file) are now measurable and auditable.
+
+Decision:
+
+- include workspace-mode counters in future promotion/readout tables.
+- use `TaskShape=project` as default for context-sensitive comparator claims.
+
+### F-2026-02-12-32: Current cross-scenario approach matrix favors roscli helper as default path, with MCP as explicit-context path
+
+Evidence:
+
+- matrix artifact:
+  - `benchmarks/experiments/20260212-approach-matrix-v0.1.6-preview.7.md`
+- codex bundles:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.7-project-matrix-v5/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.7-singlefile-matrix-v4/paired-run-summary.json`
+- latest valid Claude comparator with LSP lane:
+  - `artifacts/real-agent-runs/20260211-lsp-roslyn-v4/paired-run-summary.json`
+
+Result:
+
+- codex project shape:
+  - control: `22.626s`, `34,150` tokens
+  - treatment: `35.740s`, `27,246` tokens
+  - treatment-mcp: `27.003s`, `66,108` tokens
+- codex single-file:
+  - control: `19.980s`, `34,037` tokens
+  - treatment: `24.718s`, `26,991` tokens
+  - treatment-mcp: `35.227s`, `79,416` tokens
+- Claude prior LSP comparator (`v4`) kept Roslyn lanes passing, while `treatment-lsp` timed out (`180.066s`, `0/1` successful LSP calls).
+
+Interpretation:
+
+- for this task family, `treatment` (roscli helper) remains the most practical default:
+  - consistent pass behavior,
+  - lower token totals than control in current codex runs,
+  - materially lower token/round-trip overhead than MCP.
+- MCP is useful when explicit workspace-mode evidence is required, but still costs more tokens/round-trips.
+
+Decision:
+
+- keep roscli helper path as default treatment baseline.
+- use MCP selectively for context assurance/debugging and structured multi-step operations.
+
+### F-2026-02-12-33: Comparator reliability is currently limited by execution-environment issues, not only tool behavior
+
+Evidence:
+
+- current run logs (2026-02-12 bundles) showed Claude auth preflight failures (`401 OAuth token expired`) and skipped Claude lanes.
+- prior LSP-enabled bundle still showed first-call timeout despite LSP availability:
+  - `artifacts/real-agent-runs/20260211-lsp-roslyn-v4/paired-run-summary.json`
+
+Result:
+
+- fresh codex data is clean and reproducible on current version.
+- fresh Claude/LSP data is currently blocked by auth and prior LSP timeout behavior.
+
+Interpretation:
+
+- experimental infrastructure and account/plugin health are still first-order confounds for cross-agent conclusions.
+
+Decision:
+
+- treat Claude auth as a hard precondition for matrix refresh runs.
+- rerun full project-backed comparator (`control`, `treatment`, `treatment-mcp`, `treatment-lsp`) after auth recovery before updating architecture-level claims.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

@@ -154,6 +154,7 @@ Current guidance from skill-intro ablations (`artifacts/skill-intro-ablation/202
 - Treat `schema-first` as a debugging/contract-validation lane, not a default execution lane.
 - Keep prompt examples shell-specific (PowerShell vs Bash) and avoid inline JSON quoting in profile guidance.
 - For `nav.find_symbol` and `diag.get_file_diagnostics`, require `workspace_context.mode=workspace` on project-backed tasks; if mode is `ad_hoc`, rerun with explicit workspace path (`--workspace-path TargetHarness.csproj` or `workspace_path=TargetHarness.csproj` in MCP query).
+- `-TaskShape project` now excludes `Target.original.cs` from compilation in generated `TargetHarness.csproj` to prevent duplicate-type benchmark confounds.
 
 Isolation and integrity defaults:
 
@@ -173,6 +174,7 @@ Current harness outputs include:
   - control contamination detection,
   - deterministic rename constraint checks,
   - Roslyn attempted/successful call counts,
+  - Roslyn workspace-context mode counts (`roslyn_workspace_mode_workspace_count`, `roslyn_workspace_mode_ad_hoc_count`, `roslyn_workspace_mode_last`),
   - `duration_seconds` elapsed time per run,
   - `mcp_enabled` and MCP config file paths when applicable,
   - model token totals and cache-inclusive token totals,

@@ -197,6 +197,9 @@ public static class Program
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Target.original.cs" />
+  </ItemGroup>
 </Project>
 "@
 
@@ -1202,6 +1205,90 @@ function Get-LspAvailability {
     }
 }
 
+function Get-LiteralOccurrenceCount {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Needle
+    )
+
+    if ([string]::IsNullOrEmpty($Text) -or [string]::IsNullOrEmpty($Needle)) {
+        return 0
+    }
+
+    $count = 0
+    $start = 0
+    while ($start -lt $Text.Length) {
+        $index = $Text.IndexOf($Needle, $start, [System.StringComparison]::Ordinal)
+        if ($index -lt 0) {
+            break
+        }
+
+        $count++
+        $start = $index + $Needle.Length
+    }
+
+    return $count
+}
+
+function Get-RoslynWorkspaceContextUsage {
+    param([Parameter(Mandatory = $true)][string]$TranscriptPath)
+
+    $content = Get-Content -Path $TranscriptPath -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $content) {
+        $content = ""
+    }
+
+    # Escaped MCP payload form (for example: \"workspace_context\":{\"mode\":\"workspace\" ... }).
+    $workspaceEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"workspace'
+    $adHocEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"ad_hoc'
+
+    # Plain JSON form emitted by direct CLI envelopes.
+    $workspacePlain = ([regex]::Matches(
+            $content,
+            '"workspace_context"\s*:\s*\{\s*"mode"\s*:\s*"workspace"',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )).Count
+    $adHocPlain = ([regex]::Matches(
+            $content,
+            '"workspace_context"\s*:\s*\{\s*"mode"\s*:\s*"ad_hoc"',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )).Count
+
+    $workspaceCount = $workspaceEscaped + $workspacePlain
+    $adHocCount = $adHocEscaped + $adHocPlain
+    $total = $workspaceCount + $adHocCount
+
+    $distinctModes = @()
+    if ($workspaceCount -gt 0) {
+        $distinctModes += "workspace"
+    }
+    if ($adHocCount -gt 0) {
+        $distinctModes += "ad_hoc"
+    }
+
+    $lastMode = $null
+    if ($total -gt 0) {
+        $lastWorkspaceIndex = $content.LastIndexOf('workspace_context\\\":{\\\"mode\\\":\\\"workspace', [System.StringComparison]::Ordinal)
+        $lastAdHocIndex = $content.LastIndexOf('workspace_context\\\":{\\\"mode\\\":\\\"ad_hoc', [System.StringComparison]::Ordinal)
+        if ($lastWorkspaceIndex -lt 0) {
+            $lastWorkspaceIndex = $content.LastIndexOf('"workspace_context"', [System.StringComparison]::Ordinal)
+        }
+        if ($lastAdHocIndex -lt 0) {
+            $lastAdHocIndex = $content.LastIndexOf('"workspace_context"', [System.StringComparison]::Ordinal)
+        }
+
+        $lastMode = if ($lastAdHocIndex -gt $lastWorkspaceIndex) { "ad_hoc" } else { "workspace" }
+    }
+
+    return @{
+        workspace_count = $workspaceCount
+        ad_hoc_count = $adHocCount
+        total_count = $total
+        distinct_modes = $distinctModes
+        last_mode = $lastMode
+    }
+}
+
 function Get-TokenMetrics {
     param(
         [Parameter(Mandatory = $true)][string]$Agent,
@@ -1954,13 +2041,14 @@ function Write-PairedRunSummaryMarkdown {
                 }; Ascending = $true }
         )
 
-        $lines.Add("| Agent | Mode | Exit | Run Passed | Constraints Passed | Control Contamination | Roslyn Used | Roslyn Calls (ok/attempted) | LSP Used | LSP Calls (ok/attempted) | Duration (s) | Model Total Tokens | Cache-inclusive Tokens | Round Trips | Roslyn Round Trips | LSP Round Trips | Command Output Chars | Agent Message Chars |")
-        $lines.Add("| --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        $lines.Add("| Agent | Mode | Exit | Run Passed | Constraints Passed | Control Contamination | Roslyn Used | Roslyn Calls (ok/attempted) | Workspace Ctx (workspace/ad_hoc) | LSP Used | LSP Calls (ok/attempted) | Duration (s) | Model Total Tokens | Cache-inclusive Tokens | Round Trips | Roslyn Round Trips | LSP Round Trips | Command Output Chars | Agent Message Chars |")
+        $lines.Add("| --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
 
         foreach ($run in $sortedRuns) {
             $roslynCalls = ("{0}/{1}" -f (Convert-ToSummaryValue $run.roslyn_successful_calls), (Convert-ToSummaryValue $run.roslyn_attempted_calls))
+            $workspaceModes = ("{0}/{1}" -f (Convert-ToSummaryValue $run.roslyn_workspace_mode_workspace_count), (Convert-ToSummaryValue $run.roslyn_workspace_mode_ad_hoc_count))
             $lspCalls = ("{0}/{1}" -f (Convert-ToSummaryValue $run.lsp_successful_calls), (Convert-ToSummaryValue $run.lsp_attempted_calls))
-            $line = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} | {15} | {16} | {17} |" -f `
+            $line = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} | {15} | {16} | {17} | {18} |" -f `
                 (Convert-ToSummaryValue $run.agent), `
                 (Convert-ToSummaryValue $run.mode), `
                 (Convert-ToSummaryValue $run.exit_code), `
@@ -1969,6 +2057,7 @@ function Write-PairedRunSummaryMarkdown {
                 (Convert-ToSummaryValue $run.control_contamination_detected), `
                 (Convert-ToSummaryValue $run.roslyn_used), `
                 $roslynCalls, `
+                $workspaceModes, `
                 (Convert-ToSummaryValue $run.lsp_used), `
                 $lspCalls, `
                 (Convert-ToSummaryValue $run.duration_seconds), `
@@ -2276,6 +2365,7 @@ function Invoke-AgentRun {
         } else {
             Get-ClaudeLspUsage -TranscriptPath $transcriptPath
         }
+        $workspaceContextUsage = Get-RoslynWorkspaceContextUsage -TranscriptPath $transcriptPath
         $tokens = Get-TokenMetrics -Agent $Agent -TranscriptPath $transcriptPath
         $tokenAttribution = Get-TokenAttribution -Agent $Agent -TranscriptPath $transcriptPath
         $constraintChecks = Invoke-RenameConstraintChecks -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath
@@ -2333,6 +2423,11 @@ function Invoke-AgentRun {
             roslyn_attempted_calls = $usage.Commands.Count
             roslyn_successful_calls = $usage.Successful
             roslyn_usage_indicators = $usage.Commands
+            roslyn_workspace_mode_workspace_count = $workspaceContextUsage.workspace_count
+            roslyn_workspace_mode_ad_hoc_count = $workspaceContextUsage.ad_hoc_count
+            roslyn_workspace_context_total_count = $workspaceContextUsage.total_count
+            roslyn_workspace_mode_distinct = $workspaceContextUsage.distinct_modes
+            roslyn_workspace_mode_last = $workspaceContextUsage.last_mode
             lsp_used = ($lspUsage.Successful -gt 0)
             lsp_attempted_calls = $lspUsage.Commands.Count
             lsp_successful_calls = $lspUsage.Successful
@@ -2378,7 +2473,7 @@ function Invoke-AgentRun {
         $metadataPath = Join-Path $artifactRunDirectory "run-metadata.json"
         $metadata | ConvertTo-Json -Depth 40 | Set-Content -Path $metadataPath
 
-        Write-Host ("RUN {0} exit={1} run_passed={2} control_contamination={3} roslyn_used={4} roslyn_attempted_calls={5} roslyn_successful_calls={6} lsp_used={7} lsp_attempted_calls={8} lsp_successful_calls={9} diff_has_changes={10} round_trips={11} model_total_tokens={12} cache_inclusive_tokens={13}" -f $runId, $exitCode, $metadata.run_passed, $metadata.control_contamination_detected, $metadata.roslyn_used, $metadata.roslyn_attempted_calls, $metadata.roslyn_successful_calls, $metadata.lsp_used, $metadata.lsp_attempted_calls, $metadata.lsp_successful_calls, $diffHasChanges, $metadata.command_round_trips, $metadata.total_tokens, $metadata.cache_inclusive_total_tokens)
+        Write-Host ("RUN {0} exit={1} run_passed={2} control_contamination={3} roslyn_used={4} roslyn_attempted_calls={5} roslyn_successful_calls={6} roslyn_workspace_modes(workspace/ad_hoc)={7}/{8} lsp_used={9} lsp_attempted_calls={10} lsp_successful_calls={11} diff_has_changes={12} round_trips={13} model_total_tokens={14} cache_inclusive_tokens={15}" -f $runId, $exitCode, $metadata.run_passed, $metadata.control_contamination_detected, $metadata.roslyn_used, $metadata.roslyn_attempted_calls, $metadata.roslyn_successful_calls, $metadata.roslyn_workspace_mode_workspace_count, $metadata.roslyn_workspace_mode_ad_hoc_count, $metadata.lsp_used, $metadata.lsp_attempted_calls, $metadata.lsp_successful_calls, $diffHasChanges, $metadata.command_round_trips, $metadata.total_tokens, $metadata.cache_inclusive_total_tokens)
 
         if ($controlContaminationDetected -and $FailOnControlContamination) {
             throw ("Control contamination detected for run '{0}'. Roslyn indicators: {1}; LSP indicators: {2}" -f $runId, ($usage.Commands -join " | "), ($lspUsage.Commands -join " | "))
