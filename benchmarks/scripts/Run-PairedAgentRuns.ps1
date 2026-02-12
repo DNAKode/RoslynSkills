@@ -1230,6 +1230,47 @@ function Get-LiteralOccurrenceCount {
     return $count
 }
 
+function Add-WorkspaceModeFromEnvelope {
+    param(
+        $Envelope,
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Modes
+    )
+
+    if ($null -eq $Envelope) {
+        return
+    }
+
+    $data = $null
+    if ($Envelope.PSObject.Properties.Match("Data").Count -gt 0) {
+        $data = $Envelope.Data
+    } elseif ($Envelope.PSObject.Properties.Match("data").Count -gt 0) {
+        $data = $Envelope.data
+    }
+
+    if ($null -eq $data) {
+        return
+    }
+
+    $workspaceContext = $null
+    if ($data.PSObject.Properties.Match("workspace_context").Count -gt 0) {
+        $workspaceContext = $data.workspace_context
+    } elseif ($data.PSObject.Properties.Match("query").Count -gt 0) {
+        $query = $data.query
+        if ($null -ne $query -and $query.PSObject.Properties.Match("workspace_context").Count -gt 0) {
+            $workspaceContext = $query.workspace_context
+        }
+    }
+
+    if ($null -eq $workspaceContext -or $workspaceContext.PSObject.Properties.Match("mode").Count -eq 0) {
+        return
+    }
+
+    $mode = [string]$workspaceContext.mode
+    if (-not [string]::IsNullOrWhiteSpace($mode)) {
+        $Modes.Add($mode.Trim().ToLowerInvariant()) | Out-Null
+    }
+}
+
 function Get-RoslynWorkspaceContextUsage {
     param([Parameter(Mandatory = $true)][string]$TranscriptPath)
 
@@ -1238,46 +1279,121 @@ function Get-RoslynWorkspaceContextUsage {
         $content = ""
     }
 
-    # Escaped MCP payload form (for example: \"workspace_context\":{\"mode\":\"workspace\" ... }).
-    $workspaceEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"workspace'
-    $adHocEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"ad_hoc'
+    $modes = New-Object System.Collections.Generic.List[string]
+    foreach ($line in (Get-Content -Path $TranscriptPath -ErrorAction SilentlyContinue)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
 
-    # Plain JSON form emitted by direct CLI envelopes.
-    $workspacePlain = ([regex]::Matches(
-            $content,
-            '"workspace_context"\s*:\s*\{\s*"mode"\s*:\s*"workspace"',
-            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-        )).Count
-    $adHocPlain = ([regex]::Matches(
-            $content,
-            '"workspace_context"\s*:\s*\{\s*"mode"\s*:\s*"ad_hoc"',
-            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-        )).Count
+        try {
+            $parsedLine = $line | ConvertFrom-Json -ErrorAction Stop
+            if ($null -eq $parsedLine) {
+                continue
+            }
 
-    $workspaceCount = $workspaceEscaped + $workspacePlain
-    $adHocCount = $adHocEscaped + $adHocPlain
+            if ($parsedLine.PSObject.Properties.Match("type").Count -eq 0 -or
+                -not [string]::Equals([string]$parsedLine.type, "item.completed", [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+
+            if ($parsedLine.PSObject.Properties.Match("item").Count -eq 0 -or $null -eq $parsedLine.item) {
+                continue
+            }
+
+            $item = $parsedLine.item
+            if ($item.PSObject.Properties.Match("type").Count -eq 0) {
+                continue
+            }
+
+            if ([string]::Equals([string]$item.type, "command_execution", [System.StringComparison]::OrdinalIgnoreCase)) {
+                if ($item.PSObject.Properties.Match("aggregated_output").Count -gt 0) {
+                    $aggregatedOutput = [string]$item.aggregated_output
+                    if (-not [string]::IsNullOrWhiteSpace($aggregatedOutput)) {
+                        try {
+                            $aggregatedEnvelope = $aggregatedOutput | ConvertFrom-Json -ErrorAction Stop
+                            Add-WorkspaceModeFromEnvelope -Envelope $aggregatedEnvelope -Modes $modes
+                        } catch {
+                        }
+                    }
+                }
+            } elseif ([string]::Equals([string]$item.type, "mcp_tool_call", [System.StringComparison]::OrdinalIgnoreCase)) {
+                if ($item.PSObject.Properties.Match("result").Count -eq 0 -or $null -eq $item.result) {
+                    continue
+                }
+
+                if ($item.result.PSObject.Properties.Match("content").Count -eq 0 -or $null -eq $item.result.content) {
+                    continue
+                }
+
+                foreach ($contentNode in @($item.result.content)) {
+                    if ($null -eq $contentNode -or $contentNode.PSObject.Properties.Match("text").Count -eq 0) {
+                        continue
+                    }
+
+                    $outerText = [string]$contentNode.text
+                    if ([string]::IsNullOrWhiteSpace($outerText)) {
+                        continue
+                    }
+
+                    try {
+                        $outerPayload = $outerText | ConvertFrom-Json -ErrorAction Stop
+                        Add-WorkspaceModeFromEnvelope -Envelope $outerPayload -Modes $modes
+
+                        if ($outerPayload.PSObject.Properties.Match("contents").Count -gt 0 -and $null -ne $outerPayload.contents) {
+                            foreach ($innerContent in @($outerPayload.contents)) {
+                                if ($null -eq $innerContent -or $innerContent.PSObject.Properties.Match("text").Count -eq 0) {
+                                    continue
+                                }
+
+                                $innerText = [string]$innerContent.text
+                                if ([string]::IsNullOrWhiteSpace($innerText)) {
+                                    continue
+                                }
+
+                                try {
+                                    $innerPayload = $innerText | ConvertFrom-Json -ErrorAction Stop
+                                    if ($innerPayload.PSObject.Properties.Match("envelope").Count -gt 0) {
+                                        Add-WorkspaceModeFromEnvelope -Envelope $innerPayload.envelope -Modes $modes
+                                    } else {
+                                        Add-WorkspaceModeFromEnvelope -Envelope $innerPayload -Modes $modes
+                                    }
+                                } catch {
+                                }
+                            }
+                        }
+                    } catch {
+                    }
+                }
+            }
+        } catch {
+            # Keep best-effort telemetry extraction. Some transcript lines may be non-JSON.
+        }
+    }
+
+    $workspaceCount = ($modes | Where-Object { $_ -eq "workspace" }).Count
+    $adHocCount = ($modes | Where-Object { $_ -eq "ad_hoc" }).Count
+
+    if ($workspaceCount -eq 0 -and $adHocCount -eq 0) {
+        # Fallback to raw escaped scan when transcript JSON parsing fails unexpectedly.
+        $workspaceEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"workspace'
+        $adHocEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"ad_hoc'
+        $workspaceCount = $workspaceEscaped
+        $adHocCount = $adHocEscaped
+    }
+
     $total = $workspaceCount + $adHocCount
-
-    $distinctModes = @()
-    if ($workspaceCount -gt 0) {
-        $distinctModes += "workspace"
-    }
-    if ($adHocCount -gt 0) {
-        $distinctModes += "ad_hoc"
-    }
-
+    $distinctModes = @($modes | Where-Object { $_ -eq "workspace" -or $_ -eq "ad_hoc" } | Select-Object -Unique)
     $lastMode = $null
-    if ($total -gt 0) {
-        $lastWorkspaceIndex = $content.LastIndexOf('workspace_context\\\":{\\\"mode\\\":\\\"workspace', [System.StringComparison]::Ordinal)
-        $lastAdHocIndex = $content.LastIndexOf('workspace_context\\\":{\\\"mode\\\":\\\"ad_hoc', [System.StringComparison]::Ordinal)
-        if ($lastWorkspaceIndex -lt 0) {
-            $lastWorkspaceIndex = $content.LastIndexOf('"workspace_context"', [System.StringComparison]::Ordinal)
+    if ($modes.Count -gt 0) {
+        for ($index = $modes.Count - 1; $index -ge 0; $index--) {
+            $candidate = $modes[$index]
+            if ($candidate -eq "workspace" -or $candidate -eq "ad_hoc") {
+                $lastMode = $candidate
+                break
+            }
         }
-        if ($lastAdHocIndex -lt 0) {
-            $lastAdHocIndex = $content.LastIndexOf('"workspace_context"', [System.StringComparison]::Ordinal)
-        }
-
-        $lastMode = if ($lastAdHocIndex -gt $lastWorkspaceIndex) { "ad_hoc" } else { "workspace" }
+    } elseif ($total -gt 0) {
+        $lastMode = if ($adHocCount -gt 0 -and $workspaceCount -eq 0) { "ad_hoc" } else { "workspace" }
     }
 
     return @{

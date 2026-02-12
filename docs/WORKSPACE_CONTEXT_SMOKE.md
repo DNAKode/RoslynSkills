@@ -79,3 +79,18 @@ Interpretation:
 
 - the same Roslyn MCP command path (`nav.find_symbol` + `diag.get_file_diagnostics`) binds to project context when `.csproj` is present and falls back to ad-hoc when it is absent.
 - this confirms that workspace-mode differences are scenario-driven, not random tool instability.
+
+## Current Release Confirmation (v0.1.6-preview.8)
+
+Artifacts:
+
+- `artifacts/real-agent-runs/20260212-v0.1.6-preview.8-project-matrix-v4/paired-run-summary.json`
+
+Observed in codex `treatment-mcp` lane:
+
+- `roslyn_workspace_mode_workspace_count=2`
+- `roslyn_workspace_mode_ad_hoc_count=0`
+
+Interpretation:
+
+- on the current published release, MCP-backed symbol/diagnostic calls still bind to project workspace context for project-shaped tasks.

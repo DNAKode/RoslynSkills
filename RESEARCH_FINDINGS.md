@@ -1005,6 +1005,84 @@ Decision:
 - treat Claude auth as a hard precondition for matrix refresh runs.
 - rerun full project-backed comparator (`control`, `treatment`, `treatment-mcp`, `treatment-lsp`) after auth recovery before updating architecture-level claims.
 
+### F-2026-02-12-34: Current release snapshot published at `v0.1.6-preview.8` with fresh project matrix artifacts
+
+Evidence:
+
+- release workflow run:
+  - https://github.com/DNAKode/RoslynSkills/actions/runs/21934666374
+- release/tag:
+  - `v0.1.6-preview.8`
+- fresh project matrix artifacts:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.8-project-matrix-v4/paired-run-summary.json`
+  - `benchmarks/experiments/20260212-approach-matrix-v0.1.6-preview.8.md`
+
+Result:
+
+- release publish succeeded (`NuGet push` + `GitHub Release` assets).
+- project matrix lanes passed constraints for `control`, `treatment`, and `treatment-mcp`.
+
+Interpretation:
+
+- current exploration state is now tied to a published release tag plus same-day matrix artifact.
+
+Decision:
+
+- use `v0.1.6-preview.8` as the current baseline reference for follow-up comparator runs.
+
+### F-2026-02-12-35: Workspace telemetry parser had a PowerShell compatibility defect (`ConvertFrom-Json -Depth`) that caused false-zero helper counts
+
+Evidence:
+
+- telemetry parser update:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`Get-RoslynWorkspaceContextUsage`)
+- regression coverage:
+  - `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`
+- compatibility observation:
+  - local PowerShell reported `ConvertFrom-Json` does not support `-Depth`, causing parse failures to be swallowed by best-effort catches.
+
+Result:
+
+- parser now uses compatible `ConvertFrom-Json -ErrorAction Stop` calls and explicit envelope extraction for:
+  - direct CLI command outputs (`aggregated_output`),
+  - MCP wrapper payloads (`result.content[].text` and nested `contents[].text`).
+
+Interpretation:
+
+- previous helper-lane `workspace/ad_hoc=0/0` values could be instrumentation artifacts when parser paths failed.
+- telemetry interpretation must include parser/runtime compatibility checks.
+
+Decision:
+
+- treat transcript parser compatibility as a hard validity gate for workspace-mode telemetry.
+- keep MCP lane as primary workspace-mode evidence lane until helper prompts explicitly emit workspace-context-bearing responses consistently.
+
+### F-2026-02-12-36: Updated matrix interpretation separates trajectory policy effects from workspace-binding evidence
+
+Evidence:
+
+- current-version matrix:
+  - `benchmarks/experiments/20260212-approach-matrix-v0.1.6-preview.8.md`
+- project run summary:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.8-project-matrix-v4/paired-run-summary.json`
+
+Result:
+
+- codex project snapshot (`v0.1.6-preview.8`) shows:
+  - control: `20.531s`, `34,112` tokens
+  - treatment: `43.119s`, `38,280` tokens
+  - treatment-mcp: `32.656s`, `102,195` tokens, workspace `2/0`
+
+Interpretation:
+
+- `treatment` vs `control` overhead in this replicate is trajectory/prompt-behavior dominated, not a direct proof that Roslyn primitives regressed.
+- `treatment-mcp` still provides explicit project-context evidence (`workspace=2`, `ad_hoc=0`) on current release.
+
+Decision:
+
+- keep practical default as helper treatment for routine tasks, but use MCP lane when explicit workspace-context evidence is required for claims.
+- require replicate-backed interpretation before promoting latency/token conclusions.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

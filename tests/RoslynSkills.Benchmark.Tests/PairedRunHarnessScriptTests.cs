@@ -13,6 +13,19 @@ public sealed class PairedRunHarnessScriptTests
         Assert.Contains("<Compile Remove=\"Target.original.cs\" />", script, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void WorkspaceTelemetryParser_UsesJsonAwareExtraction()
+    {
+        string repoRoot = FindRepoRoot();
+        string scriptPath = Path.Combine(repoRoot, "benchmarks", "scripts", "Run-PairedAgentRuns.ps1");
+
+        string script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("function Add-WorkspaceModeFromEnvelope", script, StringComparison.Ordinal);
+        Assert.Contains("ConvertFrom-Json -ErrorAction Stop", script, StringComparison.Ordinal);
+        Assert.Contains("Get-RoslynWorkspaceContextUsage", script, StringComparison.Ordinal);
+    }
+
     private static string FindRepoRoot()
     {
         DirectoryInfo? cursor = new(AppContext.BaseDirectory);
