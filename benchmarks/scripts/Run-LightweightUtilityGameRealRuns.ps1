@@ -2,6 +2,7 @@ param(
     [string]$ManifestPath = "benchmarks/experiments/lightweight-utility-game-v1/manifest.json",
     [string]$OutputRoot = "",
     [string]$CodexModel = "",
+    [string]$CodexReasoningEffort = "",
     [string]$ClaudeModel = "",
     [switch]$SkipCodex,
     [switch]$SkipClaude,
@@ -16,6 +17,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+$allowedCodexReasoningEfforts = @("low", "medium", "high", "xhigh")
+if (-not [string]::IsNullOrWhiteSpace($CodexReasoningEffort)) {
+    $normalizedEffort = $CodexReasoningEffort.Trim().ToLowerInvariant()
+    if ($normalizedEffort -notin $allowedCodexReasoningEfforts) {
+        throw "Invalid -CodexReasoningEffort '$CodexReasoningEffort'. Allowed: $($allowedCodexReasoningEfforts -join ', ')."
+    }
+
+    $CodexReasoningEffort = $normalizedEffort
+}
+
 
 function Convert-ToText {
     param([object]$Value)
@@ -1414,8 +1426,8 @@ Working directory: $WorkspacePath
 
 Rules:
 - Prefer Roslyn tooling for C# exploration and edits.
-- Start by listing commands:
-  scripts\roscli.cmd list-commands
+- Start by listing commands (compact):
+  scripts\roscli.cmd list-commands --ids-only
 - Invoke Roslyn commands with `run <command-id> --input ...`.
 - Use `--input @payload.json` for structured payloads to avoid shell escaping failures.
 - Minimal examples:
@@ -1629,20 +1641,21 @@ foreach ($agent in $agents) {
                     "exec",
                     "--json",
                     "--dangerously-bypass-approvals-and-sandbox",
-                    "--skip-git-repo-check",
-                    "-"
+                    "--skip-git-repo-check"
                 )
+
                 if (-not [string]::IsNullOrWhiteSpace($CodexModel)) {
-                    $agentArgs = @(
-                        "exec",
-                        "--json",
-                        "--dangerously-bypass-approvals-and-sandbox",
-                        "--skip-git-repo-check",
-                        "--model",
-                        $CodexModel,
-                        "-"
+                    $agentArgs += @("--model", $CodexModel)
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($CodexReasoningEffort)) {
+                    $agentArgs += @(
+                        "-c",
+                        ("model_reasoning_effort=""{0}""" -f $CodexReasoningEffort)
                     )
                 }
+
+                $agentArgs += @("-")
 
                 $agentExitCode = Invoke-AgentProcess `
                     -Executable $codexExecutable `
@@ -1756,6 +1769,7 @@ foreach ($agent in $agents) {
                 replicate = 1
                 agent = $agentLabel
                 model = $modelLabel
+                model_reasoning_effort = if ($agent -eq "codex" -and -not [string]::IsNullOrWhiteSpace($CodexReasoningEffort)) { $CodexReasoningEffort } else { $null }
                 succeeded = $succeeded
                 compile_passed = $compilePassed
                 tests_passed = $testsPassed

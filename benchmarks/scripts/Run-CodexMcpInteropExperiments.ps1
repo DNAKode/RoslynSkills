@@ -61,6 +61,18 @@ function Get-DefaultLspMcpCommand {
         return [string]$env:ROSLYNSKILLS_LSP_MCP_COMMAND
     }
 
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+
+    $localCmd = Join-Path $repoRoot "scripts\csharp-lsp-mcp.cmd"
+    if (Test-Path $localCmd -PathType Leaf) {
+        return [string](Resolve-Path $localCmd).Path
+    }
+
+    $localSh = Join-Path $repoRoot "scripts\csharp-lsp-mcp"
+    if (Test-Path $localSh -PathType Leaf) {
+        return [string](Resolve-Path $localSh).Path
+    }
+
     foreach ($candidate in @("cclsp", "mcp-lsp", "csharp-lsp-mcp", "csharp_lsp_mcp", "lspuse-csharp", "csharp-ls-mcp")) {
         $command = Get-Command $candidate -ErrorAction SilentlyContinue
         if ($null -ne $command) {

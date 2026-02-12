@@ -9,6 +9,7 @@ public sealed class CodexMcpInteropScriptTests
 
         Assert.Contains("\"cclsp\"", script, StringComparison.Ordinal);
         Assert.Contains("\"mcp-lsp\"", script, StringComparison.Ordinal);
+        Assert.Contains("csharp-lsp-mcp.cmd", script, StringComparison.Ordinal);
     }
 
     [Fact]

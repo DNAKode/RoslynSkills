@@ -1329,7 +1329,7 @@ Result:
 
 Interpretation:
 
-- a large share of ìtreatment underperformedî evidence in historical-workspace lanes can be experiment plumbing, not tool-surface quality.
+- a large share of ‚Äútreatment underperformed‚Äù evidence in historical-workspace lanes can be experiment plumbing, not tool-surface quality.
 
 Decision:
 
@@ -1461,3 +1461,40 @@ Interpretation:
 Decision:
 - <what changes now>
 ```
+
+
+### F-2026-02-12-50: Codex Spark roscli treatment reduced tokens and round-trips vs control on task-001 (1 replicate)
+
+Evidence:
+- `artifacts/real-agent-runs/20260212-roscli-vs-base-task001-spark-low-brief/gate/summary/agent-eval-summary.md`
+- `artifacts/real-agent-runs/20260212-roscli-vs-base-task001-spark-low-brief/runs/run-codex-control-control-text-only-task-001-initial-build-r01.json`
+- `artifacts/real-agent-runs/20260212-roscli-vs-base-task001-spark-low-brief/runs/run-codex-treatment-treatment-roslyn-published-cache-task-001-initial-build-r01.json`
+
+Result:
+- tokens: control `830,221` vs treatment `640,223` (delta `-189,998`, `-22.89%`).
+- command round trips: control `45` vs treatment `24`.
+- success/tests: both passed.
+
+Interpretation:
+- even on an open-ended build task (high variance), offering roscli correlated with fewer loops and lower token spend in this replicate.
+
+Decision:
+- update treatment prompt guidance to start with compact `list-commands --ids-only` (avoid verbose dumps);
+- continue replicate runs with thinking-effort variation and explicitly measure how many successful Roslyn calls happen before editing.
+
+### F-2026-02-12-51: LSP MCP lane via csharp-ls remains high-overhead and failure-prone (timeouts + weak diagnostics)
+
+Evidence:
+- `artifacts/real-agent-runs/20260212-mcp-interop-lsp-sanity/lsp-mcp-gpt-5.3-codex-spark-low/transcript.jsonl`
+- `artifacts/real-agent-runs/20260212-mcp-interop-lsp-sanity/codex-mcp-interop-summary.md`
+- `artifacts/real-agent-runs/20260212-mcp-interop-lsp-sanity2/codex-mcp-interop-summary.md`
+
+Result:
+- `gpt-5.3-codex-spark` (project shape, lsp-mcp): runs were manually terminated after ~5 minutes with `lsp_calls=5..6` and `total_tokens=63k..93k`.
+- observed repeated `textDocument/references` timeouts; no pushed diagnostics observed.
+
+Interpretation:
+- current LSP lane is confounded by server indexing/restore latency and unreliable diagnostics surfaces; it is not yet a competitive baseline against roscli for workspace-semantics.
+
+Decision:
+- treat LSP MCP as experimental only; require explicit warm-up and long timeouts, and avoid using it as primary evidence for overall tool effectiveness until stabilized.

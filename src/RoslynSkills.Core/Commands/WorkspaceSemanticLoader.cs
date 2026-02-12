@@ -240,7 +240,8 @@ internal static class WorkspaceSemanticLoader
             return new WorkspaceCandidatePlan(resolutionSource, requestedWorkspacePath, planError, candidates);
         }
 
-        IReadOnlyList<string> autoAncestors = GetAncestorDirectories(fileDirectory, stopAtDirectoryInclusive: null);
+        string? autoStop = FindNearestGitRoot(fileDirectory);
+        IReadOnlyList<string> autoAncestors = GetAncestorDirectories(fileDirectory, stopAtDirectoryInclusive: autoStop);
         AddCandidatesFromAncestors(autoAncestors, candidates, seen);
         if (candidates.Count == 0)
         {
@@ -379,6 +380,25 @@ internal static class WorkspaceSemanticLoader
         return await workspace.OpenSolutionAsync(candidate.path, cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
+
+
+    private static string? FindNearestGitRoot(string startDirectory)
+    {
+        DirectoryInfo? current = new(startDirectory);
+        while (current is not null)
+        {
+            string candidate = NormalizePath(current.FullName);
+            string dotGit = Path.Combine(candidate, ".git");
+            if (Directory.Exists(dotGit) || File.Exists(dotGit))
+            {
+                return candidate;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
     private static Document? FindDocument(Solution solution, string filePath)
     {
         string normalizedFilePath = NormalizePath(filePath);

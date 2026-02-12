@@ -13,7 +13,7 @@ public sealed class SessionOpenCommand : IAgentCommand
 
     public CommandDescriptor Descriptor { get; } = new(
         Id: "session.open",
-        Summary: "Open a persistent in-memory Roslyn session for a C# file.",
+        Summary: "Open a persistent in-memory Roslyn session for a C# file (file-only; not project-backed).",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: true);
@@ -95,6 +95,11 @@ public sealed class SessionOpenCommand : IAgentCommand
                 errors = snapshot.errors,
                 warnings = snapshot.warnings,
                 items = snapshot.diagnostics,
+            },
+            diagnostics_context = new
+            {
+                mode = "ad_hoc",
+                note = "session.* diagnostics are file-only and may report false errors for project code because no .csproj/.sln is loaded. Use diag.get_file_diagnostics with require_workspace=true (and workspace_path if needed) for project-backed diagnostics.",
             },
             status = new
             {

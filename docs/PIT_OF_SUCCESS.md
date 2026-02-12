@@ -54,9 +54,12 @@ roscli session.diff demo-session
 roscli session.commit demo-session --keep-session false --require-disk-unchanged true
 ```
 
+Note: `session.*` diagnostics are file-only (`ad_hoc`). For project-backed errors/warnings, prefer `diag.get_file_diagnostics` with `--require-workspace true` and pass `--workspace-path` if needed.
+
 ## Guardrails (Must Be Explicit)
 
 - `session.open` supports only `.cs` and `.csx`.
+- `session.*` diagnostics are `ad_hoc` (file-only). Missing type/reference errors may be false negatives until verified with workspace-backed diagnostics (`diag.get_file_diagnostics`).
 - Do not open `.sln`, `.slnx`, or `.csproj` with `session.open`.
 - Check `workspace_context.mode` on `nav.find_symbol` and `diag.get_file_diagnostics`.
 - If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.csproj|.sln|.slnx|dir>` and prefer `--require-workspace true`.
@@ -77,6 +80,7 @@ Combined migration pattern:
 ## Agent Prompt Block
 
 ```text
+
 Use roscli for C# work in this session.
 Workflow:
 1) run "roscli list-commands --ids-only" once.

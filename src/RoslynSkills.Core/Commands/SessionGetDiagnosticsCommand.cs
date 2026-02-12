@@ -7,7 +7,7 @@ public sealed class SessionGetDiagnosticsCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "session.get_diagnostics",
-        Summary: "Return diagnostics for the current in-memory session snapshot.",
+        Summary: "Return diagnostics for the current in-memory session snapshot (file-only; not project-backed).",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false);
@@ -52,6 +52,11 @@ public sealed class SessionGetDiagnosticsCommand : IAgentCommand
                 errors = snapshot.errors,
                 warnings = snapshot.warnings,
                 items = snapshot.diagnostics,
+            },
+            diagnostics_context = new
+            {
+                mode = "ad_hoc",
+                note = "session.* diagnostics are file-only and may report false errors for project code because no .csproj/.sln is loaded. Use diag.get_file_diagnostics with require_workspace=true (and workspace_path if needed) for project-backed diagnostics.",
             },
             status = new
             {
