@@ -22,7 +22,11 @@ public sealed class PairedRunHarnessScriptTests
         string script = File.ReadAllText(scriptPath);
 
         Assert.Contains("function Add-WorkspaceModeFromEnvelope", script, StringComparison.Ordinal);
+        Assert.Contains("function Add-WorkspaceModesFromText", script, StringComparison.Ordinal);
         Assert.Contains("ConvertFrom-Json -ErrorAction Stop", script, StringComparison.Ordinal);
+        Assert.Contains("workspace_context", script, StringComparison.Ordinal);
+        Assert.Contains("Add-WorkspaceModesFromText -Text $aggregatedOutput -Modes $modes", script, StringComparison.Ordinal);
+        Assert.Contains("Add-WorkspaceModesFromText -Text $content -Modes $modes", script, StringComparison.Ordinal);
         Assert.Contains("Get-RoslynWorkspaceContextUsage", script, StringComparison.Ordinal);
     }
 

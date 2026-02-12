@@ -1083,6 +1083,86 @@ Decision:
 - keep practical default as helper treatment for routine tasks, but use MCP lane when explicit workspace-context evidence is required for claims.
 - require replicate-backed interpretation before promoting latency/token conclusions.
 
+### F-2026-02-12-37: Guidance profile is now a dominant trajectory variable on v0.1.6-preview.9
+
+Evidence:
+
+- matrix artifact:
+  - `benchmarks/experiments/20260212-approach-matrix-v0.1.6-preview.9.md`
+- paired summaries (project + single-file profile sweeps):
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-project-*/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-singlefile-*/paired-run-summary.json`
+
+Result:
+
+- project shape:
+  - `surgical+treatment`: `26,932` tokens vs control `34,875` (lower tokens, moderate duration overhead).
+  - `schema-first+treatment`: `89,629` tokens and `77.249s` (large overhead).
+  - `skill-minimal+treatment`: `75,420` tokens and `70.301s` (large overhead).
+- single-file shape:
+  - `brief-first/surgical+treatment`: `~27k` tokens (lower than control `~34k`).
+  - `schema-first/skill-minimal+treatment`: `64k-98k` tokens with large duration overhead.
+
+Interpretation:
+
+- prompt posture is not a cosmetic variable; it materially changes tool call count, retries, and token/latency envelope.
+- `brief-first` and `surgical` are currently the strongest defaults; `schema-first` and `skill-minimal` should be reserved for debugging/contract validation.
+
+Decision:
+
+- keep `brief-first`/`surgical` as primary optimization lanes.
+- treat `schema-first`/`skill-minimal` as explicit stress lanes, not default guidance.
+
+### F-2026-02-12-38: Workspace telemetry for helper lanes is now empirically improved after parser hardening
+
+Evidence:
+
+- parser update:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1`
+- regression assertions:
+  - `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`
+- before/after run artifacts:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-singlefile-schema-first-v1/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-singlefile-schema-first-telemetryfix-v2/paired-run-summary.json`
+
+Result:
+
+- before fix (`schema-first`, single-file, treatment): workspace counters `0/0` despite transcript outputs showing `workspace=ad_hoc`.
+- after fix (`schema-first`, single-file, treatment): workspace counters `0/2`, aligning with observed ad-hoc workspace responses.
+
+Interpretation:
+
+- previous zero workspace counters in helper lanes were sometimes instrumentation artifacts, not tool-behavior evidence.
+- this reduces confounding between telemetry defects and Roslyn workspace semantics in analysis.
+
+Decision:
+
+- treat post-fix counters as the current baseline for workspace-mode analysis.
+- re-run key historical bundles when strict longitudinal comparability is required.
+
+### F-2026-02-12-39: LSP lane remains an environment-availability confound in current-day matrixing
+
+Evidence:
+
+- current all-approach codex bundle:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-project-all-approaches-v1/paired-run-summary.json`
+- latest valid LSP snapshot:
+  - `artifacts/real-agent-runs/20260211-lsp-roslyn-v4/paired-run-summary.json`
+
+Result:
+
+- same-day (`2026-02-12`) matrix contains codex `control/treatment/treatment-mcp` lanes.
+- freshest valid `treatment-lsp` evidence is still prior-day Claude snapshot, where `treatment-lsp` failed (`run_passed=false`, `lsp calls 0/1`).
+
+Interpretation:
+
+- LSP comparator conclusions are currently bottlenecked by environment/auth/tool-availability stability, not just task quality.
+
+Decision:
+
+- keep LSP rows in the matrix with explicit freshness/confound labeling.
+- require fresh auth-preflight-passing project-shape replicates before updating Roslyn-vs-LSP claims.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

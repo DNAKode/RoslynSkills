@@ -1271,6 +1271,33 @@ function Add-WorkspaceModeFromEnvelope {
     }
 }
 
+function Add-WorkspaceModesFromText {
+    param(
+        [string]$Text,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Modes
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return
+    }
+
+    foreach ($pattern in @(
+            '(?is)"workspace_context"\s*:\s*\{.*?"mode"\s*:\s*"(workspace|ad_hoc)"',
+            '(?is)workspace_context\\\"\s*:\s*\{.*?\\\"mode\\\"\s*:\s*\\\"(workspace|ad_hoc)\\\"'
+        )) {
+        foreach ($match in [System.Text.RegularExpressions.Regex]::Matches($Text, $pattern)) {
+            if ($null -eq $match -or $match.Groups.Count -lt 2) {
+                continue
+            }
+
+            $mode = [string]$match.Groups[1].Value
+            if (-not [string]::IsNullOrWhiteSpace($mode)) {
+                $Modes.Add($mode.Trim().ToLowerInvariant()) | Out-Null
+            }
+        }
+    }
+}
+
 function Get-RoslynWorkspaceContextUsage {
     param([Parameter(Mandatory = $true)][string]$TranscriptPath)
 
@@ -1313,6 +1340,7 @@ function Get-RoslynWorkspaceContextUsage {
                             $aggregatedEnvelope = $aggregatedOutput | ConvertFrom-Json -ErrorAction Stop
                             Add-WorkspaceModeFromEnvelope -Envelope $aggregatedEnvelope -Modes $modes
                         } catch {
+                            Add-WorkspaceModesFromText -Text $aggregatedOutput -Modes $modes
                         }
                     }
                 }
@@ -1358,10 +1386,12 @@ function Get-RoslynWorkspaceContextUsage {
                                         Add-WorkspaceModeFromEnvelope -Envelope $innerPayload -Modes $modes
                                     }
                                 } catch {
+                                    Add-WorkspaceModesFromText -Text $innerText -Modes $modes
                                 }
                             }
                         }
                     } catch {
+                        Add-WorkspaceModesFromText -Text $outerText -Modes $modes
                     }
                 }
             }
@@ -1374,11 +1404,10 @@ function Get-RoslynWorkspaceContextUsage {
     $adHocCount = ($modes | Where-Object { $_ -eq "ad_hoc" }).Count
 
     if ($workspaceCount -eq 0 -and $adHocCount -eq 0) {
-        # Fallback to raw escaped scan when transcript JSON parsing fails unexpectedly.
-        $workspaceEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"workspace'
-        $adHocEscaped = Get-LiteralOccurrenceCount -Text $content -Needle 'workspace_context\\\":{\\\"mode\\\":\\\"ad_hoc'
-        $workspaceCount = $workspaceEscaped
-        $adHocCount = $adHocEscaped
+        # Fallback to raw transcript scan for escaped/unescaped payloads.
+        Add-WorkspaceModesFromText -Text $content -Modes $modes
+        $workspaceCount = ($modes | Where-Object { $_ -eq "workspace" }).Count
+        $adHocCount = ($modes | Where-Object { $_ -eq "ad_hoc" }).Count
     }
 
     $total = $workspaceCount + $adHocCount
