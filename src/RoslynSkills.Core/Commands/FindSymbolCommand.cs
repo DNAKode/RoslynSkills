@@ -26,6 +26,7 @@ public sealed class FindSymbolCommand : IAgentCommand
 
         InputParsing.TryGetRequiredString(input, "symbol_name", errors, out _);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
         {
@@ -59,6 +60,7 @@ public sealed class FindSymbolCommand : IAgentCommand
         int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 50, minValue: 1, maxValue: 1_000);
         bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         int contextLines = InputParsing.GetOptionalInt(
             input,
             "context_lines",
@@ -70,6 +72,22 @@ public sealed class FindSymbolCommand : IAgentCommand
             filePath,
             cancellationToken,
             workspacePath).ConfigureAwait(false);
+
+        if (requireWorkspace &&
+            !string.Equals(analysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            string fallbackReason = string.IsNullOrWhiteSpace(analysis.WorkspaceContext.fallback_reason)
+                ? "Workspace context could not be resolved."
+                : analysis.WorkspaceContext.fallback_reason;
+            return new CommandExecutionResult(
+                null,
+                new[]
+                {
+                    new CommandError(
+                        "workspace_required",
+                        $"Command '{Descriptor.Id}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.sln/.slnx or containing directory) and retry."),
+                });
+        }
 
         IEnumerable<SyntaxToken> matches = analysis.Root
             .DescendantTokens(descendIntoTrivia: false)
@@ -108,6 +126,7 @@ public sealed class FindSymbolCommand : IAgentCommand
                 context_lines = contextLines,
                 brief,
                 semantic_enrichment = true,
+                require_workspace = requireWorkspace,
                 workspace_context = BuildWorkspaceContextPayload(analysis.WorkspaceContext),
             },
             total_matches = resultMatches.Count,

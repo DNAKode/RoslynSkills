@@ -34,7 +34,7 @@ Pit-of-success contract:
 - Orient: `quickstart`
 - Disambiguate args: `describe-command <command-id>`
 - Execute semantic-first: `nav.*`, `ctx.*`, `diag.*` before text fallback
-- Verify workspace binding: inspect `workspace_context.mode` on nav/diag file commands
+- Verify workspace binding: inspect `workspace_context.mode` on nav/diag file commands (use `--require-workspace true` for fail-closed checks)
 - Verify before finalize: diagnostics + build/tests
 
 Prefer Roslyn commands for navigation, context, diagnostics, repair, and structured edits before text-only fallbacks.
@@ -98,7 +98,7 @@ scripts\roscli.cmd ctx.file_outline src/RoslynSkills.Core/DefaultRegistryFactory
 scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 25 body --brief true
 scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 25 --mode body --include-source-text true --context-lines-before 2
 scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs
-scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs --workspace-path src/RoslynSkills.Core/RoslynSkills.Core.csproj
+scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs --workspace-path src/RoslynSkills.Core/RoslynSkills.Core.csproj --require-workspace true
 scripts\roscli.cmd diag.get_solution_snapshot src --brief true
 scripts\roscli.cmd diag.get_solution_snapshot src --mode compact --severity-filter Error --severity-filter Warning
 scripts\roscli.cmd nav.find_symbol src/RoslynSkills.Cli/CliApplication.cs TryGetCommandAndInputAsync --brief true --max-results 200
@@ -121,7 +121,7 @@ Flag syntax supports:
 
 Keep JSON input for complex/structured operations (especially `edit.transaction`, `session.apply_text_edits`, `repair.apply_plan`, and advanced `diag.*` payloads).
 When unsure about arguments for any command, run `roscli describe-command <command-id>` first.
-For project-backed files, `workspace_context.mode` should be `workspace`; if it is `ad_hoc`, rerun with `--workspace-path <.csproj|.sln|.slnx|dir>`.
+For project-backed files, `workspace_context.mode` should be `workspace`; if it is `ad_hoc`, rerun with `--workspace-path <.csproj|.sln|.slnx|dir>` and prefer `--require-workspace true`.
 
 Use JSON for `session.set_content` (full source payload) to avoid shell escaping issues.
 Use `session.apply_and_commit` for one-shot structured edits + guarded commit when you do not need a long-lived session.
@@ -316,4 +316,5 @@ Use this template in `ROSLYN_FALLBACK_REFLECTION_LOG.md`:
 - Missing command/option hypothesis
 - Proposed improvement
 - Expected impact (correctness, latency, token_count)
+
 

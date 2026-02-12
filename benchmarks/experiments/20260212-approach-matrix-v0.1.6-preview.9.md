@@ -113,3 +113,15 @@ Use that matrix as the latest detailed source for:
 - control vs roslyn-mcp vs lsp-mcp vs combined lane metrics,
 - model-effort interactions (`gpt-5.3-codex` and `gpt-5.3-codex-spark`),
 - disentangled setup/model-availability confounds.
+
+## F) Focused Roscli vs MCP Follow-on (Workspaceguard v3/v4)
+
+For post-fix workspace telemetry and MCP prompt-sequencing optimization details, see:
+
+- `benchmarks/experiments/20260212-roscli-vs-mcp-workspace-context-v0.1.6-preview.9.md`
+
+Highlights from that follow-on:
+
+- roscli helper lane now reports project workspace mode directly (`workspace/ad_hoc = 1/0`) in focused project-shape runs.
+- MCP `brief-first` token overhead dropped from `80,374` to `64,901` after prompt tuning that removes mandatory pre-rename nav lookup when line/column anchors are already known.
+- Even after this prompt improvement, best MCP snapshot remains materially above roscli on this microtask family.

@@ -440,6 +440,7 @@ public sealed class CliApplicationTests
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
         Assert.Contains("\"workspace_path\"", output);
+        Assert.Contains("\"require_workspace\"", output);
         Assert.Contains("workspace_context.mode", output);
     }
 
@@ -462,6 +463,7 @@ public sealed class CliApplicationTests
         Assert.Contains("pit_of_success", output);
         Assert.Contains("session.open only supports .cs/.csx files", output);
         Assert.Contains("workspace_context.mode", output);
+        Assert.Contains("--require-workspace true", output);
         Assert.Contains("src/MyProject/Program.cs", output);
     }
 
@@ -893,4 +895,5 @@ public sealed class CliApplicationTests
         }
     }
 }
+
 

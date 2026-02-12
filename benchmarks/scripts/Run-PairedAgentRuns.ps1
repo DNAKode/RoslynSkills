@@ -449,7 +449,11 @@ param(
   [Parameter(Mandatory=`$true)][string]`$FilePath,
   [Parameter(Mandatory=`$true)][string]`$SymbolName
 )
-& ".\scripts\roscli.cmd" nav.find_symbol `$FilePath `$SymbolName --brief true --max-results 200
+`$workspaceArgs = @()
+if (Test-Path ".\TargetHarness.csproj") {
+  `$workspaceArgs = @("--workspace-path", "TargetHarness.csproj", "--require-workspace", "true")
+}
+& ".\scripts\roscli.cmd" nav.find_symbol `$FilePath `$SymbolName --brief true --max-results 200 @`$workspaceArgs
 "@
     $renameScript = @"
 param(
@@ -496,6 +500,11 @@ function Invoke-RoscliJson {
   }
 }
 
+`$workspaceArgs = @()
+if (Test-Path ".\TargetHarness.csproj") {
+  `$workspaceArgs = @("--workspace-path", "TargetHarness.csproj", "--require-workspace", "true")
+}
+
 `$rename = Invoke-RoscliJson -CommandArgs @(
   "edit.rename_symbol",
   `$FilePath,
@@ -511,21 +520,47 @@ if (-not `$rename.Ok) {
   exit 1
 }
 
+function Get-WorkspaceContext {
+  param(`$Response)
+
+  if (`$null -eq `$Response -or `$null -eq `$Response.Data) {
+    return `$null
+  }
+
+  if (`$Response.Data.PSObject.Properties.Match("workspace_context").Count -gt 0 -and `$null -ne `$Response.Data.workspace_context) {
+    return `$Response.Data.workspace_context
+  }
+
+  if (`$Response.Data.PSObject.Properties.Match("query").Count -gt 0 -and
+      `$null -ne `$Response.Data.query -and
+      `$Response.Data.query.PSObject.Properties.Match("workspace_context").Count -gt 0) {
+    return `$Response.Data.query.workspace_context
+  }
+
+  return `$null
+}
+
 `$verification = [ordered]@{
   new_symbol_matches = `$null
   old_symbol_matches = `$null
   diagnostics_errors = `$null
+  new_symbol_workspace_context = `$null
+  old_symbol_workspace_context = `$null
+  diagnostics_workspace_context = `$null
   checks = @()
 }
 
-`$newMatches = Invoke-RoscliJson -CommandArgs @(
+`$newMatchArgs = @(
   "nav.find_symbol",
   `$FilePath,
   `$NewName,
   "--brief", "true",
   "--max-results", "200"
 )
+`$newMatchArgs += `$workspaceArgs
+`$newMatches = Invoke-RoscliJson -CommandArgs `$newMatchArgs
 `$verification.new_symbol_matches = [int]`$newMatches.Data.total_matches
+`$verification.new_symbol_workspace_context = Get-WorkspaceContext -Response `$newMatches
 
 if (`$ExpectedNewExact -ge 0) {
   `$verification.checks += [ordered]@{
@@ -536,14 +571,17 @@ if (`$ExpectedNewExact -ge 0) {
 }
 
 if (-not [string]::IsNullOrWhiteSpace(`$OldName)) {
-  `$oldMatches = Invoke-RoscliJson -CommandArgs @(
+  `$oldMatchArgs = @(
     "nav.find_symbol",
     `$FilePath,
     `$OldName,
     "--brief", "true",
     "--max-results", "200"
   )
+  `$oldMatchArgs += `$workspaceArgs
+  `$oldMatches = Invoke-RoscliJson -CommandArgs `$oldMatchArgs
   `$verification.old_symbol_matches = [int]`$oldMatches.Data.total_matches
+  `$verification.old_symbol_workspace_context = Get-WorkspaceContext -Response `$oldMatches
 
   if (`$ExpectedOldExact -ge 0) {
     `$verification.checks += [ordered]@{
@@ -555,11 +593,14 @@ if (-not [string]::IsNullOrWhiteSpace(`$OldName)) {
 }
 
 if (`$RequireNoDiagnostics) {
-  `$diag = Invoke-RoscliJson -CommandArgs @(
+  `$diagArgs = @(
     "diag.get_file_diagnostics",
     `$FilePath
   )
+  `$diagArgs += `$workspaceArgs
+  `$diag = Invoke-RoscliJson -CommandArgs `$diagArgs
   `$verification.diagnostics_errors = [int]`$diag.Data.errors
+  `$verification.diagnostics_workspace_context = Get-WorkspaceContext -Response `$diag
   `$verification.checks += [ordered]@{
     name = "no_diagnostics_errors"
     passed = (`$verification.diagnostics_errors -eq 0)
@@ -568,9 +609,17 @@ if (`$RequireNoDiagnostics) {
 }
 
 `$allChecksPassed = -not (`$verification.checks | Where-Object { -not [bool]`$_.passed })
+`$workspaceContextForTelemetry = `$verification.diagnostics_workspace_context
+if (`$null -eq `$workspaceContextForTelemetry) {
+  `$workspaceContextForTelemetry = `$verification.new_symbol_workspace_context
+}
+if (`$null -eq `$workspaceContextForTelemetry) {
+  `$workspaceContextForTelemetry = `$verification.old_symbol_workspace_context
+}
 `$result = [ordered]@{
   ok = [bool]`$allChecksPassed
   command = "roslyn.rename_and_verify"
+  workspace_context = `$workspaceContextForTelemetry
   rename = `$rename.Data
   verify = `$verification
 }
@@ -1230,6 +1279,57 @@ function Get-LiteralOccurrenceCount {
     return $count
 }
 
+function Add-WorkspaceModesFromObject {
+    param(
+        $Node,
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Modes
+    )
+
+    if ($null -eq $Node) {
+        return
+    }
+
+    if ($Node -is [string] -or $Node.GetType().IsPrimitive) {
+        return
+    }
+
+    if ($Node -is [System.Collections.IEnumerable] -and -not ($Node -is [string])) {
+        foreach ($child in $Node) {
+            Add-WorkspaceModesFromObject -Node $child -Modes $Modes
+        }
+        return
+    }
+
+    $properties = $Node.PSObject.Properties
+    if ($null -eq $properties -or $properties.Count -eq 0) {
+        return
+    }
+
+    $workspaceProperty = $properties["workspace_context"]
+    if ($null -ne $workspaceProperty -and $null -ne $workspaceProperty.Value) {
+        $workspaceContext = $workspaceProperty.Value
+        if ($workspaceContext.PSObject.Properties.Match("mode").Count -gt 0) {
+            $mode = [string]$workspaceContext.mode
+            if (-not [string]::IsNullOrWhiteSpace($mode)) {
+                $Modes.Add($mode.Trim().ToLowerInvariant()) | Out-Null
+            }
+        }
+    }
+
+    foreach ($property in $properties) {
+        if ($null -eq $property -or [string]::Equals([string]$property.Name, "workspace_context", [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $value = $property.Value
+        if ($null -eq $value -or $value -is [string] -or $value.GetType().IsPrimitive) {
+            continue
+        }
+
+        Add-WorkspaceModesFromObject -Node $value -Modes $Modes
+    }
+}
+
 function Add-WorkspaceModeFromEnvelope {
     param(
         $Envelope,
@@ -1240,35 +1340,7 @@ function Add-WorkspaceModeFromEnvelope {
         return
     }
 
-    $data = $null
-    if ($Envelope.PSObject.Properties.Match("Data").Count -gt 0) {
-        $data = $Envelope.Data
-    } elseif ($Envelope.PSObject.Properties.Match("data").Count -gt 0) {
-        $data = $Envelope.data
-    }
-
-    if ($null -eq $data) {
-        return
-    }
-
-    $workspaceContext = $null
-    if ($data.PSObject.Properties.Match("workspace_context").Count -gt 0) {
-        $workspaceContext = $data.workspace_context
-    } elseif ($data.PSObject.Properties.Match("query").Count -gt 0) {
-        $query = $data.query
-        if ($null -ne $query -and $query.PSObject.Properties.Match("workspace_context").Count -gt 0) {
-            $workspaceContext = $query.workspace_context
-        }
-    }
-
-    if ($null -eq $workspaceContext -or $workspaceContext.PSObject.Properties.Match("mode").Count -eq 0) {
-        return
-    }
-
-    $mode = [string]$workspaceContext.mode
-    if (-not [string]::IsNullOrWhiteSpace($mode)) {
-        $Modes.Add($mode.Trim().ToLowerInvariant()) | Out-Null
-    }
+    Add-WorkspaceModesFromObject -Node $Envelope -Modes $Modes
 }
 
 function Add-WorkspaceModesFromText {
@@ -2011,7 +2083,8 @@ function Get-RegexCount {
 function Invoke-RenameConstraintChecks {
     param(
         [Parameter(Mandatory = $true)][string]$RunDirectory,
-        [Parameter(Mandatory = $true)][string]$CliDllPath
+        [Parameter(Mandatory = $true)][string]$CliDllPath,
+        [Parameter(Mandatory = $false)][ValidateSet("single-file", "project")][string]$TaskShape = "single-file"
     )
 
     $targetPath = Join-Path $RunDirectory "Target.cs"
@@ -2076,11 +2149,16 @@ function Invoke-RenameConstraintChecks {
         command_output = $null
     }
 
+    $diagCommandArgs = @("diag.get_file_diagnostics", "Target.cs")
+    if ($TaskShape -eq "project" -and (Test-Path (Join-Path $RunDirectory "TargetHarness.csproj"))) {
+        $diagCommandArgs += @("--workspace-path", "TargetHarness.csproj", "--require-workspace", "true")
+    }
+
     $rawDiagnosticsOutput = $null
     $diagExitCode = 1
     Push-Location $RunDirectory
     try {
-        $rawDiagnosticsOutput = & dotnet $CliDllPath diag.get_file_diagnostics Target.cs
+        $rawDiagnosticsOutput = & dotnet $CliDllPath @diagCommandArgs
         $diagExitCode = $LASTEXITCODE
     } finally {
         Pop-Location
@@ -2513,7 +2591,7 @@ function Invoke-AgentRun {
         $workspaceContextUsage = Get-RoslynWorkspaceContextUsage -TranscriptPath $transcriptPath
         $tokens = Get-TokenMetrics -Agent $Agent -TranscriptPath $transcriptPath
         $tokenAttribution = Get-TokenAttribution -Agent $Agent -TranscriptPath $transcriptPath
-        $constraintChecks = Invoke-RenameConstraintChecks -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath
+        $constraintChecks = Invoke-RenameConstraintChecks -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath -TaskShape $TaskShape
         $constraintChecksPath = Join-Path $workspaceDirectory "constraint-checks.json"
         $constraintChecks | ConvertTo-Json -Depth 40 | Set-Content -Path $constraintChecksPath
 
@@ -2875,38 +2953,45 @@ function Get-McpRoslynGuidanceBlock {
         "standard" {
             return @"
 Roslyn MCP resources are available for this run and should be used before manual edits.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
 Use MCP in this sequence:
 1) list_mcp_resource_templates server=roslyn
 2) read_mcp_resource server=roslyn uri=roslyn://commands
-3) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=200
-4) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=100
-5) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+3) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=100
+4) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+If line/column are unclear, run targeted nav fallback only then:
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
 Use MCP calls sequentially and keep responses compact.
 "@
         }
         "brief-first" {
             return @"
 Roslyn MCP resources are available for this run and should be used before manual edits.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
 Prioritize compact MCP usage:
 1) Skip roslyn://commands unless direct command URIs fail.
-2) Run only targeted calls first:
-- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
+2) If a precise line/column is provided, do not run pre-rename nav lookups.
+3) Run only this minimal sequence first:
 - read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
 - read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
+4) If rename target is ambiguous, use one fallback check:
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
 "@
         }
         "surgical" {
             return @"
 Roslyn MCP resources are available for this run and should be used before manual edits.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
 Use the minimum MCP sequence:
 1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
 2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
-Only call discovery/catalog resources if these fail.
+Only call discovery/catalog resources if these fail; skip nav.find_symbol prechecks when line/column is already provided.
 "@
         }
         "skill-minimal" {
             return @"
 Roslyn MCP resources are available and should be used as skill guidance.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
 Use this sequence:
 1) read_mcp_resource server=roslyn uri=roslyn://commands
 2) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
@@ -2917,6 +3002,7 @@ Use this sequence:
         "schema-first" {
             return @"
 Roslyn MCP resources are available and should be used contract-first.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
 1) Read command metadata contracts:
 - read_mcp_resource server=roslyn uri=roslyn://command-meta/nav.find_symbol
 - read_mcp_resource server=roslyn uri=roslyn://command-meta/edit.rename_symbol
@@ -3024,9 +3110,10 @@ $roslynWorkspaceGuardrail = @"
 Workspace-context guardrail for Roslyn runs:
 - For `nav.find_symbol` and `diag.get_file_diagnostics`, inspect `workspace_context.mode`.
 - For project-backed runs (when `TargetHarness.csproj` exists), expected mode is `workspace`.
-- If mode is `ad_hoc`, rerun with explicit workspace binding:
-  - CLI: add `--workspace-path TargetHarness.csproj`
-  - MCP: add `workspace_path=TargetHarness.csproj` to the command URI query.
+- Prefer fail-closed workspace checks for project-backed runs:
+  - CLI: add `--workspace-path TargetHarness.csproj --require-workspace true`
+  - MCP: add `workspace_path=TargetHarness.csproj&require_workspace=true` to the command URI query.
+- If mode is `ad_hoc`, rerun with explicit workspace binding and keep `require_workspace=true`.
 "@
 
 $controlPrompt = @"
@@ -3130,4 +3217,11 @@ $summaryMarkdownPath = Join-Path $bundleDirectory "paired-run-summary.md"
 Write-PairedRunSummaryMarkdown -Runs $runs.ToArray() -MarkdownPath $summaryMarkdownPath
 $summaryMarkdownFullPath = [System.IO.Path]::GetFullPath($summaryMarkdownPath)
 Write-Host ("SUMMARY_MARKDOWN={0}" -f $summaryMarkdownFullPath)
+
+
+
+
+
+
+
 

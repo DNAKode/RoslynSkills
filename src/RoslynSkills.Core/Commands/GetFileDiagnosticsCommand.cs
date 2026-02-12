@@ -22,6 +22,7 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         }
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
         {
@@ -52,10 +53,27 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         }
 
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
             filePath,
             cancellationToken,
             workspacePath).ConfigureAwait(false);
+
+        if (requireWorkspace &&
+            !string.Equals(analysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            string fallbackReason = string.IsNullOrWhiteSpace(analysis.WorkspaceContext.fallback_reason)
+                ? "Workspace context could not be resolved."
+                : analysis.WorkspaceContext.fallback_reason;
+            return new CommandExecutionResult(
+                null,
+                new[]
+                {
+                    new CommandError(
+                        "workspace_required",
+                        $"Command '{Descriptor.Id}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.sln/.slnx or containing directory) and retry."),
+                });
+        }
 
         IReadOnlyList<Diagnostic> diagnostics = GetDiagnosticsForFile(analysis, cancellationToken);
         NormalizedDiagnostic[] payload = CompilationDiagnostics.Normalize(diagnostics);
@@ -64,6 +82,7 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         {
             file_path = analysis.FilePath,
             workspace_context = BuildWorkspaceContextPayload(analysis.WorkspaceContext),
+            require_workspace = requireWorkspace,
             total = payload.Length,
             errors = payload.Count(d => string.Equals(d.severity, "Error", StringComparison.OrdinalIgnoreCase)),
             warnings = payload.Count(d => string.Equals(d.severity, "Warning", StringComparison.OrdinalIgnoreCase)),

@@ -1263,6 +1263,54 @@ Decision:
 
 - record as an open disentangle item and only promote it to backlog defect status if reproducible in subsequent sweeps.
 
+### F-2026-02-12-44: Roscli helper lane now emits workspace context directly, and workspace counters are no longer false-zero on project tasks
+
+Evidence:
+
+- helper output + parser updates:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1`
+  - `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`
+- post-fix project bundles:
+  - `artifacts/real-agent-runs/20260212-roscli-vs-mcp-workspaceguard-v3-surgical/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260212-roscli-vs-mcp-workspaceguard-v3-brief-first/paired-run-summary.json`
+
+Result:
+
+- `treatment` (roscli helper lane) now reports workspace counts as expected on project-shape runs (`workspace/ad_hoc = 1/0`) instead of prior `0/0` false-zero under helper-driven runs.
+
+Interpretation:
+
+- workspace-mode telemetry is now suitable for comparing roscli and MCP workspace binding behavior in the same matrix.
+
+Decision:
+
+- treat post-fix (`workspaceguard-v3+`) bundles as the baseline for workspace-context interpretation.
+
+### F-2026-02-12-45: MCP prompt tightening reduced overhead materially, but roscli remains lower-cost on this microtask
+
+Evidence:
+
+- MCP guidance updates (skip pre-rename nav when line/column is already known):
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1`
+- before/after bundles:
+  - `artifacts/real-agent-runs/20260212-roscli-vs-mcp-workspaceguard-v3-brief-first/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260212-roscli-vs-mcp-workspaceguard-v4-brief-first/paired-run-summary.json`
+- consolidated readout:
+  - `benchmarks/experiments/20260212-roscli-vs-mcp-workspace-context-v0.1.6-preview.9.md`
+
+Result:
+
+- MCP `brief-first` moved from `80,374` tokens / `5` round trips (`3` Roslyn calls) to `64,901` tokens / `4` round trips (`2` Roslyn calls).
+- prompt-only change produced `-15,473` tokens (`-19.3%`) and one fewer round trip.
+- best MCP snapshot in this run family (`64,714` tokens, `41.932s`) still trails best roscli lane (`29,004` tokens, `37.319s`) on this microtask.
+
+Interpretation:
+
+- prompting is a first-order variable for MCP overhead, but current MCP transport/surface still carries substantial fixed+per-call token cost relative to roscli on small, anchored edits.
+
+Decision:
+
+- keep MCP optimization active, but maintain roscli as default practical lane for microtasks where line/column anchors are already known.
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:

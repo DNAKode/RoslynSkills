@@ -644,6 +644,7 @@ internal static class Program
             properties["brief"] = BoolProperty("Return compact result payload.");
             properties["max_results"] = IntProperty("Maximum matches to return.", 1);
             properties["workspace_path"] = StringProperty("Optional .csproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("symbol_name");
             return;
@@ -653,6 +654,7 @@ internal static class Program
         {
             properties["file_path"] = StringProperty("Path to a C# source file.");
             properties["workspace_path"] = StringProperty("Optional .csproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             return;
         }
@@ -1320,4 +1322,6 @@ internal static class Program
         IReadOnlyDictionary<string, ToolBinding> ByToolName,
         IReadOnlyDictionary<string, ToolBinding> ByCommandId);
 }
+
+
 

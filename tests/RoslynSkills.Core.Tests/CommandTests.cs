@@ -188,6 +188,69 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public async Task GetFileDiagnosticsCommand_RequireWorkspace_ReturnsErrorWhenWorkspaceFallsBackToAdhoc()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Standalone
+            {
+                public int Value => 42;
+            }
+            """);
+
+        try
+        {
+            GetFileDiagnosticsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                require_workspace = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.False(result.Ok);
+            Assert.Contains(result.Errors, error => error.Code == "workspace_required");
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task FindSymbolCommand_RequireWorkspace_ReturnsErrorWhenWorkspaceFallsBackToAdhoc()
+    {
+        string filePath = WriteTempFile(
+            """
+            namespace Demo;
+            public class Worker
+            {
+                public void Run() { }
+            }
+            """);
+
+        try
+        {
+            FindSymbolCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                symbol_name = "Worker",
+                require_workspace = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.False(result.Ok);
+            Assert.Contains(result.Errors, error => error.Code == "workspace_required");
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+    [Fact]
     public async Task FindSymbolCommand_UsesWorkspaceContextAndResolvesSymbols()
     {
         string repoRoot = FindRepositoryRoot();
@@ -657,4 +720,5 @@ public sealed class CommandTests
         throw new InvalidOperationException("Unable to locate repository root containing RoslynSkills.slnx.");
     }
 }
+
 

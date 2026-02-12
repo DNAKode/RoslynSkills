@@ -213,6 +213,7 @@ public sealed class CliApplication
                         "Keep payloads brief-first (for example --brief true) before expanding detail.",
                         "For file diagnostics/symbol queries, confirm workspace_context.mode is 'workspace'.",
                         "If workspace_context.mode is 'ad_hoc', rerun with --workspace-path <.csproj|.sln|.slnx|dir>.",
+                        "For project-backed files, prefer --require-workspace true to fail closed instead of silently using ad_hoc.",
                         "Validate with diagnostics and build/tests before finalizing.",
                     },
                     first_minute_sequence = new[]
@@ -220,7 +221,7 @@ public sealed class CliApplication
                         "roscli list-commands --ids-only",
                         "roscli describe-command session.open",
                         "roscli describe-command edit.create_file",
-                        "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20",
+                        "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --require-workspace true",
                     },
                     example_paths = new[]
                     {
@@ -234,9 +235,9 @@ public sealed class CliApplication
                             name = "rename_symbol_safely",
                             commands = new[]
                             {
-                                "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20",
+                                "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --require-workspace true",
                                 "roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true",
-                                "roscli diag.get_file_diagnostics src/MyProject/Program.cs",
+                                "roscli diag.get_file_diagnostics src/MyProject/Program.cs --require-workspace true",
                             },
                         },
                         new
@@ -280,6 +281,7 @@ Workflow:
                         "Do not use session.open on .sln/.slnx/.csproj files.",
                         "diag/nav file commands auto-resolve nearest workspace; check workspace_context.mode in responses.",
                         "If workspace_context.mode is ad_hoc for a project file, pass --workspace-path explicitly.",
+                        "For project-backed files where ad_hoc is unacceptable, set --require-workspace true.",
                         "For complex JSON payloads, prefer --input-stdin over shell-escaped inline JSON.",
                         "If roscli cannot answer a C# query, state why before fallback.",
                     },
@@ -1439,11 +1441,12 @@ Workflow:
                 direct = "nav.find_symbol <file-path> <symbol-name> [--option value ...]",
                 run = "run nav.find_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"symbol_name\":\"Run\",\"brief\":true}'",
                 required_properties = new[] { "file_path", "symbol_name" },
-                optional_properties = new[] { "brief", "max_results", "context_lines", "workspace_path" },
+                optional_properties = new[] { "brief", "max_results", "context_lines", "workspace_path", "require_workspace" },
                 notes = new[]
                 {
                     "By default, roscli auto-resolves nearest .csproj/.sln/.slnx from file path.",
                     "If workspace_context.mode is 'ad_hoc', pass workspace_path explicitly.",
+                    "Set require_workspace=true for project-backed files when ad_hoc fallback should fail closed.",
                 },
             };
         }
@@ -1453,13 +1456,14 @@ Workflow:
             return new
             {
                 direct = "diag.get_file_diagnostics <file-path> [--workspace-path <path>] [--option value ...]",
-                run = "run diag.get_file_diagnostics --input '{\"file_path\":\"src/MyFile.cs\",\"workspace_path\":\"src/MyProject/MyProject.csproj\"}'",
+                run = "run diag.get_file_diagnostics --input '{\"file_path\":\"src/MyFile.cs\",\"workspace_path\":\"src/MyProject/MyProject.csproj\",\"require_workspace\":true}'",
                 required_properties = new[] { "file_path" },
-                optional_properties = new[] { "workspace_path" },
+                optional_properties = new[] { "workspace_path", "require_workspace" },
                 notes = new[]
                 {
                     "By default, roscli auto-resolves nearest .csproj/.sln/.slnx from file path.",
                     "Response includes workspace_context.mode = workspace|ad_hoc.",
+                    "Set require_workspace=true to fail closed when workspace resolution falls back to ad_hoc.",
                 },
             };
         }
@@ -1492,6 +1496,7 @@ Workflow:
                 "session.open supports only .cs/.csx files.",
                 "Check workspace_context.mode on nav/diag file commands.",
                 "Use --workspace-path when auto workspace resolution falls back to ad_hoc.",
+                "Use --require-workspace true when ad_hoc fallback is unacceptable.",
                 "Prefer --input-stdin for complex JSON payloads.",
             },
         };
@@ -1550,11 +1555,11 @@ Workflow:
                 session.close <session-id>
               - Direct shorthand also accepts command options:
                 ctx.file_outline <file-path> --include-members false --max-members 50
-                diag.get_file_diagnostics <file-path> --workspace-path src/MyProject/MyProject.csproj
+                diag.get_file_diagnostics <file-path> --workspace-path src/MyProject/MyProject.csproj --require-workspace true
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - For nav/diag file commands, check response workspace_context.mode.
-                If mode=ad_hoc and project context exists, rerun with --workspace-path.
+                If mode=ad_hoc and project context exists, rerun with --workspace-path. For fail-closed behavior, add --require-workspace true.
               - list-commands supports compact response modes:
                 list-commands --compact
                 list-commands --ids-only
@@ -1567,4 +1572,6 @@ Workflow:
             """);
     }
 }
+
+
 

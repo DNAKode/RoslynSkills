@@ -106,6 +106,26 @@ internal static class InputParsing
         return property.GetBoolean();
     }
 
+    public static void ValidateOptionalBool(
+        JsonElement input,
+        string propertyName,
+        List<CommandError> errors)
+    {
+        if (!input.TryGetProperty(propertyName, out JsonElement property))
+        {
+            return;
+        }
+
+        if (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False)
+        {
+            return;
+        }
+
+        errors.Add(new CommandError(
+            "invalid_input",
+            $"Property '{propertyName}' must be a boolean when provided."));
+    }
+
     public static string[] GetOptionalStringArray(JsonElement input, string propertyName)
     {
         if (!input.TryGetProperty(propertyName, out JsonElement property) || property.ValueKind != JsonValueKind.Array)
