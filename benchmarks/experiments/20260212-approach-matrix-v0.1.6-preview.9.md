@@ -101,3 +101,15 @@ Latest valid `treatment-lsp` evidence is currently from 2026-02-11:
 3. Workspace counters are now improved, but parser changes should be validated on additional mixed-output trajectories before treating time-series comparisons as fully stable.
 4. Cross-agent token comparisons remain secondary; primary interpretation should stay within-agent and within task shape/profile.
 
+
+## E) Follow-on Codex MCP Interop Matrix (Same-Day)
+
+A deeper same-day codex/spark MCP interop sweep (including `csharp-ls` via `cclsp`, cross-model low/high, and codex medium/xhigh extensions) is captured in:
+
+- `benchmarks/experiments/20260212-codex-mcp-interop-matrix-v0.1.6-preview.9.md`
+
+Use that matrix as the latest detailed source for:
+
+- control vs roslyn-mcp vs lsp-mcp vs combined lane metrics,
+- model-effort interactions (`gpt-5.3-codex` and `gpt-5.3-codex-spark`),
+- disentangled setup/model-availability confounds.

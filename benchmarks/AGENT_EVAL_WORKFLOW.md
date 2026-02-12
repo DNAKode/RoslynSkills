@@ -218,8 +218,36 @@ Wrapper knobs for high-call local sessions:
 - `ROSCLI_REFRESH_PUBLISHED=1` for one-call republish refresh.
 - `scripts/roscli-warm(.cmd)` to prewarm cache before long runs.
 
+## 5.6 Optional Codex MCP interop matrix harness
+
+Use `Run-CodexMcpInteropExperiments.ps1` when you need a direct model x reasoning x MCP-lane matrix for Codex (control, Roslyn MCP, LSP MCP, combined).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-CodexMcpInteropExperiments.ps1 `
+  -OutputRoot artifacts/real-agent-runs/<bundle-name> `
+  -Models 'gpt-5.3-codex','gpt-5.3-codex-spark' `
+  -ReasoningEfforts 'low','high' `
+  -Scenarios 'control','roslyn-mcp','lsp-mcp','roslyn-plus-lsp-mcp' `
+  -TaskShape project `
+  -LspMcpCommand npx `
+  -LspMcpArgs '-y','cclsp'
+```
+
+Key outputs:
+
+- `codex-mcp-interop-summary.json`
+- `codex-mcp-interop-summary.md`
+- per-run `run-record.json` + transcript + edited `Target.cs`
+
+Notes:
+
+- The script records `duration_seconds` per run in addition to token/call metrics.
+- LSP MCP lanes fail closed with explicit skip reasons when the MCP command is missing or unresolved.
+- For `cclsp`, the harness auto-writes a run-local `cclsp.json` that maps `.cs/.csx` to `csharp-ls`.
+- Keep `-TaskShape project` for workspace-context claims; single-file mode is intentionally ad-hoc-prone.
+
+
 ## 6. Interpretation rule
 
 - Component diagnostics (for example `rq1`) are supporting evidence only.
 - End-to-end claims require this A/B pipeline.
-

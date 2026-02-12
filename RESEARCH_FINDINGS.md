@@ -1163,6 +1163,106 @@ Decision:
 - keep LSP rows in the matrix with explicit freshness/confound labeling.
 - require fresh auth-preflight-passing project-shape replicates before updating Roslyn-vs-LSP claims.
 
+
+### F-2026-02-12-40: Codex LSP-over-MCP lane is now executable with `csharp-ls` via `cclsp`
+
+Evidence:
+
+- harness/script updates:
+  - `benchmarks/scripts/Run-CodexMcpInteropExperiments.ps1`
+  - `tests/RoslynSkills.Benchmark.Tests/CodexMcpInteropScriptTests.cs`
+- successful Codex LSP MCP runs:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v6b-cclsp-duration/codex-mcp-interop-summary.json`
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v9-codex-lsp-medium-xhigh/codex-mcp-interop-summary.json`
+
+Result:
+
+- `lsp-mcp` passed in Codex across `low/high/medium/xhigh` effort settings.
+- LSP call counters were non-zero on all successful LSP lanes (`2-3` calls depending on lane/profile).
+
+Interpretation:
+
+- previous LSP gaps were primarily MCP-bridge/configuration availability issues, not an inherent inability for Codex to run LSP-backed MCP workflows.
+
+Decision:
+
+- keep `cclsp` as the default practical bridge for Codex LSP comparator lanes in current experiments.
+
+### F-2026-02-12-41: Spark model availability changed in-session; current account context now supports Spark runs
+
+Evidence:
+
+- earlier unsupported snapshot:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v1/codex-mcp-interop-summary.json`
+- successful Spark smoke + full matrix:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v7-spark-cclsp-duration-smoke/codex-mcp-interop-summary.json`
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v8-spark-cclsp-duration/codex-mcp-interop-summary.json`
+
+Result:
+
+- Spark now passes `control`, `roslyn-mcp`, `lsp-mcp`, and `roslyn-plus-lsp-mcp` lanes at `low` and `high` efforts.
+
+Interpretation:
+
+- model-access status is temporally unstable and can confound interpretation if not revalidated before each matrix sweep.
+
+Decision:
+
+- treat model availability preflight as mandatory for cross-model comparator runs.
+
+### F-2026-02-12-42: For this project-backed rename microtask, `lsp-mcp` is currently the strongest semantic-cost lane
+
+Evidence:
+
+- Codex `low/high` all-scenario matrix:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v6b-cclsp-duration/codex-mcp-interop-summary.json`
+- Codex `medium/xhigh` extension:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v9-codex-lsp-medium-xhigh/codex-mcp-interop-summary.json`
+- Spark `low/high` all-scenario matrix:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v8-spark-cclsp-duration/codex-mcp-interop-summary.json`
+
+Result:
+
+- Codex low effort:
+  - control: `43.424s`, `64,343` tokens
+  - lsp-mcp: `49.926s`, `63,765` tokens
+  - roslyn-mcp: `49.120s`, `123,739` tokens
+- Spark high effort:
+  - control: `70.439s`, `87,229` tokens
+  - lsp-mcp: `67.187s`, `88,308` tokens
+  - roslyn-mcp: `107.873s`, `224,090` tokens
+
+Interpretation:
+
+- semantic tooling does not need to imply Roslyn-heavy call volume on this task family; LSP MCP achieved much closer control-like cost than Roslyn MCP while preserving semantic operations.
+- combined lane can be fast in isolated runs but still shows elevated token usage versus control/LSP-only.
+
+Decision:
+
+- keep `lsp-mcp` and `roslyn-plus-lsp-mcp` as active optimization lanes, and treat `roslyn-mcp` as precision-heavy but currently high-overhead on microtasks.
+
+### F-2026-02-12-43: One transient harness failure (`Invoke-CodexRun` process-start) was observed and not reproduced immediately
+
+Evidence:
+
+- transient failure during first duration-enabled run:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v6-cclsp-duration`
+- immediate successful rerun:
+  - `artifacts/real-agent-runs/20260212-v0.1.6-preview.9-codex-mcp-interop-v6b-cclsp-duration/codex-mcp-interop-summary.json`
+
+Result:
+
+- initial run aborted mid-sweep with process start error.
+- rerun completed full matrix without recurrence.
+
+Interpretation:
+
+- this is currently an execution-environment transient, not yet a deterministic harness defect.
+
+Decision:
+
+- record as an open disentangle item and only promote it to backlog defect status if reproducible in subsequent sweeps.
+
 ## Token-to-Information Efficiency (Proxy Metrics)
 
 Current telemetry allows two practical proxies:
