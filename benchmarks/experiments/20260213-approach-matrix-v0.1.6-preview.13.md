@@ -1,4 +1,4 @@
-﻿# Approach Matrix (v0.1.6-preview.13 pending)
+﻿# Approach Matrix (v0.1.6-preview.13)
 
 Date: 2026-02-13  
 Purpose: consolidate current evidence across approaches/scenarios and separate experimental confounds from Roslyn-tooling learnings.
@@ -60,3 +60,4 @@ Workspace-binding evidence (treatment lane):
 2. When tools are actually useful: define task families where text-first fails (ambiguity, multi-file refactors, workspace-only diagnostics) and measure on those.
 3. Workspace prereqs: submodules, restore scope, and solution filters must be encoded in manifests to avoid "tool looks bad" false negatives.
 4. Prompt posture: keep `brief-first` as default and explicitly discourage verbose multi-call exploration before editing.
+

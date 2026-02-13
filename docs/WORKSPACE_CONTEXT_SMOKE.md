@@ -120,3 +120,12 @@ Observed in `nav.find_symbol` output:
 - `workspace_context.resolved_workspace_path`: `src/Avalonia.Base/Avalonia.Base.csproj`
 
 This is the key signal that we are not accidentally running file-only compilation for project code.
+
+## Current Release Confirmation (v0.1.6-preview.13)
+
+Published: 2026-02-13
+
+Notes:
+- `.slnx` is supported as `--workspace-path` for workspace-bound operations.
+- `diag.get_workspace_snapshot` is available for project-backed diagnostics over file sets.
+- OSS pilot traces confirm `workspace_context.mode=workspace` with resolved `.csproj` binding on a large repo.
