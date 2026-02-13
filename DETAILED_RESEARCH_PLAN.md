@@ -235,6 +235,50 @@ Acceptance gate:
 
 - results are reproducible and decision-ready.
 
+### P8.1 Next Steps (2026-02-13): Roscli vs Base Comparator Refresh
+
+Objective:
+
+- Re-run roscli vs base comparisons with systematic variation across prompt posture, model, and reasoning effort.
+- Add at least one large OSS repo run where workspace binding is expected (`workspace_context.mode=workspace`).
+
+Plan:
+
+- Vary tool prompts:
+  - Use existing guidance profiles (`brief-first`, `surgical`, `standard`, `schema-first`, `skill-minimal`).
+  - Add 3-5 improved prompt variants focused on lowering overhead:
+    - `brief-first-v2`: 1 targeted `nav.find_symbol` (or direct `edit.rename_symbol` when coordinates are known) + 1 verification `diag.get_file_diagnostics`.
+    - `workspace-locked`: always pass explicit `--workspace-path <.csproj|.sln|.slnx>` for project code; treat `ad_hoc` as retry-required.
+    - `edit-then-verify`: forbid exploratory `nav.*` unless ambiguity is detected; prefer direct edit primitives + post-edit diagnostics.
+    - `diagnostics-first`: start with `diag.get_workspace_snapshot` scoped to the touched directory before choosing an edit.
+
+- Vary Codex model and reasoning effort (extra effort here):
+  - Models: `gpt-5.3-codex`, `gpt-5.3-codex-spark`.
+  - Reasoning efforts: `low`, `medium`, `high`, `xhigh`.
+  - Update harnesses where needed to parameterize reasoning effort (matrix sweeps), not just guidance profile.
+
+- Vary task size and project shape:
+  - Micro (paired harness): `benchmarks/scripts/Run-PairedAgentRuns.ps1` (project + single-file) to keep variance low.
+  - Medium (multi-step): `benchmarks/scripts/Run-LightweightUtilityGameRealRuns.ps1` (roscli vs base) for longer trajectories.
+  - Large OSS (real repo): `benchmarks/scripts/Run-OssCsharpPilotRealRuns.ps1`.
+
+- Large OSS repo target (pick one and encode as a task):
+  - Preferred candidate: `grpc/grpc-dotnet` (large, idiomatic .NET, usually `dotnet test` friendly).
+  - Alternative fallback if build/test is too heavy: `Spectre.Console/Spectre.Console` (smaller but reliable).
+  - For any OSS task, encode:
+    - required `git submodule update --init --recursive` (if applicable),
+    - scoped restore/test commands that avoid optional workloads,
+    - workspace-mode gate evidence in transcripts.
+
+Acceptance/validity gates (must hold before interpreting deltas):
+
+- Project-shaped tasks: at least one Roslyn nav/diag call reports `workspace_context.mode=workspace`.
+- Single-file tasks: `ad_hoc` is expected and must not be treated as a tool failure.
+- Report within-agent, within-scenario deltas; do not compare across agents as primary evidence.
+
+Outputs:
+
+- New version-stamped matrix markdown in `benchmarks/experiments/` and corresponding `RESEARCH_FINDINGS.md` update with artifact links.
 ## P9. Production Hardening and Distribution
 
 Objective:
