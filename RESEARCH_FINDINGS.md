@@ -1548,3 +1548,61 @@ Interpretation:
 
 Decision:
 - Keep LSP MCP in the matrix but exclude it from "best approach" claims until it can reliably complete bounded tasks.
+
+
+### F-2026-02-13-55: Workspace mode can be false-positive if MSBuildLocator registers an incompatible MSBuild instance (CS0518 core types)
+
+Observation:
+
+- A run can report `workspace_context.mode=workspace` while still producing unusable diagnostics (`CS0518` for predefined/core types like `System.String`).
+- Root cause: MSBuildWorkspace can load a project with missing reference assemblies when MSBuildLocator binds to a VS MSBuild instance behind preview TFMs (for example `net10.0`).
+
+Evidence:
+
+- `artifacts/real-agent-runs/20260213-092429-paired/codex-treatment/transcript.jsonl` (UTF-16LE) contains `diag.get_file_diagnostics` output with `CS0518`.
+- `artifacts/real-agent-runs/20260213-092429-paired/paired-run-summary.md` shows the run completed but was diagnostic-noisy.
+
+Fix:
+
+- `WorkspaceSemanticLoader.TryEnsureMsBuildRegistered` now prefers `.NET SDK` MSBuild (`DiscoveryType.DotNetSdk`) over VS instances.
+- Post-fix check: running `diag.get_file_diagnostics` against the same `TargetHarness.csproj` now returns `errors=0` with `workspace=workspace`.
+
+Rule update:
+
+- Treat `workspace_context.mode=workspace` as necessary but not sufficient for project-shaped benchmark validity; additionally fail/redo if diagnostics include `CS0518` or workspace diagnostics indicate MSBuild evaluation failure.
+
+
+### F-2026-02-13-56: Fail-closed treatment integrity + better prompts can reduce roscli token overhead on microtasks
+
+Evidence:
+- `artifacts/real-agent-runs/20260213-094724-paired/paired-run-summary.md`
+
+Result (Codex Spark, project task shape, `brief-first-v2`, fail-closed):
+- control: `total_tokens=26,057`, `duration_seconds=7.295`, passed.
+- roscli treatment: `total_tokens=30,162`, `duration_seconds=36.831`, passed.
+- token delta: `+4,105` (ratio `1.158`).
+
+Interpretation:
+- With prompts that (a) explicitly require a Roslyn attempt and (b) keep the command sequence minimal, roscli overhead can be brought down near parity on a trivial edit.
+- Duration is still sensitive to wrapper/tool invocation latency (one timed-out helper attempt occurred before a successful retry).
+
+Decision:
+- Keep `-FailOnMissingTreatmentRoslynUsage` available and recommended for paired runs used as comparative evidence.
+- Continue optimizing the helper path (timeouts/warm reuse) and test Spark vs non-Spark at low/high reasoning to see if duration improves without token regression.
+
+
+### F-2026-02-13-57: Treatment token impact can invert depending on trajectory variance; keep runs bounded and fail-closed on condition integrity
+
+Evidence:
+- `artifacts/real-agent-runs/20260213-094929-paired/paired-run-summary.md`
+
+Result (Codex, high reasoning, project task shape, `brief-first-v2`):
+- control: `total_tokens=40,452`, `duration_seconds=17.566`.
+- roscli treatment: `total_tokens=34,733`, `duration_seconds=33.744`.
+
+Interpretation:
+- The direction of the token delta is not stable on microtasks because agents may take divergent high-output trajectories (e.g. directory listings / raw dumps) in control.
+- This reinforces the need to: (a) keep prompts tightly bounded, (b) record round-trips/output chars, and (c) use multiple replicates before drawing token conclusions.
+
+Decision:
+- For microtasks, treat token totals as noisy; emphasize reliability/condition integrity (fail-closed on missing tool usage) and shift primary evidence to ambiguity-heavy and multi-file tasks.

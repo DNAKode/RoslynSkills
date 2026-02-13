@@ -247,6 +247,7 @@ Every interface lane must provide:
 - explicit guardrails for common failure modes (for example file-type misuse),
 - explicit visibility into workspace binding for file-scoped commands (`workspace_context.mode`) plus an override path (`workspace_path`) when calls are launched from disconnected contexts,
 - benchmark validity gates for workspace context: for project-shaped tasks, at least one Roslyn nav/diag call must report `workspace_context.mode=workspace`; for single-file tasks, `ad_hoc` is expected and should not be treated as failure.
+- workspace health gate for project-shaped tasks: treat `workspace_context.mode=workspace` as necessary but not sufficient; redo/fail the run if diagnostics show missing core reference assemblies (e.g. `CS0518` for `System.String`/`System.Int32`) or if `workspace_diagnostics` indicates MSBuild evaluation failure.
 - copy-paste-safe examples for both simple and structured payloads,
 - release artifacts that place guidance near runnable launchers.
 

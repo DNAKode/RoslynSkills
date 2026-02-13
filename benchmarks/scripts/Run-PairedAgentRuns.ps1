@@ -2,14 +2,16 @@ param(
     [string]$OutputRoot = "",
     [string]$IsolationRoot = "",
     [string]$CodexModel = "",
+    [AllowEmptyString()][ValidateSet("", "low", "medium", "high", "xhigh")][string]$CodexReasoningEffort = "",
     [string]$ClaudeModel = "",
-    [ValidateSet("standard", "brief-first", "surgical", "skill-minimal", "schema-first")][string]$RoslynGuidanceProfile = "standard",
+    [ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$RoslynGuidanceProfile = "standard",
     [string]$CliPublishConfiguration = "Release",
     [switch]$IncludeMcpTreatment,
     [switch]$IncludeClaudeLspTreatment,
     [bool]$FailOnControlContamination = $true,
     [bool]$FailOnLspRoslynContamination = $true,
     [bool]$FailOnMissingLspTools = $false,
+    [switch]$FailOnMissingTreatmentRoslynUsage,
     [bool]$FailOnClaudeAuthUnavailable = $true,
     [switch]$KeepIsolatedWorkspaces,
     [switch]$SkipCodex,
@@ -505,7 +507,7 @@ if (Test-Path ".\TargetHarness.csproj") {
   `$workspaceArgs = @("--workspace-path", "TargetHarness.csproj", "--require-workspace", "true")
 }
 
-`$rename = Invoke-RoscliJson -CommandArgs @(
+`$renameArgs = @(
   "edit.rename_symbol",
   `$FilePath,
   `$Line.ToString(),
@@ -514,6 +516,8 @@ if (Test-Path ".\TargetHarness.csproj") {
   "--apply", "true",
   "--max-diagnostics", "100"
 )
+`$renameArgs += `$workspaceArgs
+`$rename = Invoke-RoscliJson -CommandArgs `$renameArgs
 
 if (-not `$rename.Ok) {
   `$rename | ConvertTo-Json -Depth 12
@@ -2534,12 +2538,15 @@ function Invoke-AgentRun {
                     "exec",
                     "--json",
                     "--dangerously-bypass-approvals-and-sandbox",
-                    "--skip-git-repo-check",
-                    "-"
+                    "--skip-git-repo-check"
                 )
                 if (-not [string]::IsNullOrWhiteSpace($Model)) {
-                    $args = @("exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--model", $Model, "-")
+                    $args += @("--model", $Model)
                 }
+                if (-not [string]::IsNullOrWhiteSpace($CodexReasoningEffort)) {
+                    $args += @("-c", ("model_reasoning_effort=""{0}""" -f $CodexReasoningEffort))
+                }
+                $args += @("-")
 
                 $exitCode = Invoke-AgentProcess -Executable $codexExecutable -Arguments $args -PromptText $PromptText -TranscriptPath $transcriptPath -EnvironmentOverrides $environmentOverrides
             } elseif ($Agent -eq "claude") {
@@ -2614,6 +2621,7 @@ function Invoke-AgentRun {
         $lspToolsAvailable = if ($null -eq $lspAvailability) { $null } else { [bool]$lspAvailability.available }
         $lspAvailabilityIndicators = if ($null -eq $lspAvailability) { @() } else { @($lspAvailability.indicators) }
         $lspToolsUnavailableDetected = ($Mode -eq "treatment-lsp" -and -not [bool]$lspToolsAvailable)
+        $missingTreatmentRoslynUsageDetected = (($Mode -eq "treatment" -or $Mode -eq "treatment-mcp") -and $usage.Successful -eq 0)
         $failureReasons = New-Object System.Collections.Generic.List[string]
         if ($exitCode -ne 0) {
             $failureReasons.Add("agent_exit_code_non_zero")
@@ -2630,6 +2638,9 @@ function Invoke-AgentRun {
         if ($lspToolsUnavailableDetected -and $FailOnMissingLspTools) {
             $failureReasons.Add("lsp_tools_unavailable")
         }
+        if ($missingTreatmentRoslynUsageDetected -and $FailOnMissingTreatmentRoslynUsage) {
+            $failureReasons.Add("missing_treatment_roslyn_usage")
+        }
         $runPassed = ($failureReasons.Count -eq 0)
 
         $metadata = [ordered]@{
@@ -2637,6 +2648,7 @@ function Invoke-AgentRun {
             mode = $Mode
             roslyn_guidance_profile = $RoslynGuidanceProfile
             task_shape = $TaskShape
+            codex_reasoning_effort = $(if ($Agent -eq "codex") { $CodexReasoningEffort } else { "" })
             timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
             exit_code = $exitCode
             workspace_path = $workspaceDirectory
@@ -2681,6 +2693,8 @@ function Invoke-AgentRun {
             lsp_tool_availability_indicators = $lspAvailabilityIndicators
             lsp_tools_unavailable_detected = $lspToolsUnavailableDetected
             fail_on_missing_lsp_tools = $FailOnMissingLspTools
+            missing_treatment_roslyn_usage_detected = $missingTreatmentRoslynUsageDetected
+            fail_on_missing_treatment_roslyn_usage = [bool]$FailOnMissingTreatmentRoslynUsage
             mcp_enabled = $EnableMcp
             codex_mcp_config_path = $codexMcpConfigPath
             claude_mcp_config_path = $claudeMcpConfigPath
@@ -2767,7 +2781,7 @@ public class Overloads
 function Get-CliRoslynGuidanceBlock {
     param(
         [Parameter(Mandatory = $true)][ValidateSet("codex", "claude")][string]$Agent,
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical", "skill-minimal", "schema-first")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$Profile
     )
 
     switch ($Profile) {
@@ -2837,6 +2851,44 @@ For PowerShell environments, you may run:
 - powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
 "@
         }
+        "brief-first-v2" {
+            $base = Get-CliRoslynGuidanceBlock -Agent $Agent -Profile "brief-first"
+            return ($base + @"
+
+Workspace correctness addendum:
+- If TargetHarness.csproj exists, pass --workspace-path TargetHarness.csproj --require-workspace true to *all* nav/edit/diag calls.
+- Hard rule: do not edit Target.cs directly before attempting Roslyn helpers (rename_and_verify or roscli).
+"@)
+        }
+        "workspace-locked" {
+            $base = Get-CliRoslynGuidanceBlock -Agent $Agent -Profile "surgical"
+            return ($base + @"
+
+Workspace lock rule:
+- If TargetHarness.csproj exists, every Roslyn call MUST include --workspace-path TargetHarness.csproj --require-workspace true.
+- If a Roslyn response reports workspace_context.mode=ad_hoc on a project-shaped task, rerun with explicit workspace flags.
+- Hard rule: do not proceed with manual edits until at least one Roslyn call has been attempted.
+"@)
+        }
+        "diagnostics-first" {
+            return @"
+Roslyn tooling is available and recommended.
+Diagnostics-first flow:
+1) diag.get_file_diagnostics Target.cs (include workspace flags if TargetHarness.csproj exists)
+2) edit.rename_symbol ... (same workspace flags)
+3) diag.get_file_diagnostics Target.cs (same workspace flags)
+"@
+        }
+        "edit-then-verify" {
+            return @"
+Roslyn tooling is available and recommended.
+Edit-then-verify flow:
+1) edit.rename_symbol ... (include workspace flags if TargetHarness.csproj exists)
+2) diag.get_file_diagnostics Target.cs (same workspace flags)
+Only if blocked, run nav.find_symbol once.
+"@
+        }
+
         "surgical" {
             if ($Agent -eq "codex") {
                 return @"
@@ -2946,14 +2998,14 @@ If validation fails, fix payload shape before continuing.
 
 function Get-McpRoslynGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical", "skill-minimal", "schema-first")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$Profile
     )
 
     switch ($Profile) {
         "standard" {
             return @"
 Roslyn MCP resources are available for this run and should be used before manual edits.
-If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/edit/diag command URIs.
 Use MCP in this sequence:
 1) list_mcp_resource_templates server=roslyn
 2) read_mcp_resource server=roslyn uri=roslyn://commands
@@ -2967,7 +3019,7 @@ Use MCP calls sequentially and keep responses compact.
         "brief-first" {
             return @"
 Roslyn MCP resources are available for this run and should be used before manual edits.
-If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/edit/diag command URIs.
 Prioritize compact MCP usage:
 1) Skip roslyn://commands unless direct command URIs fail.
 2) If a precise line/column is provided, do not run pre-rename nav lookups.
@@ -2978,10 +3030,46 @@ Prioritize compact MCP usage:
 - read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
 "@
         }
+        "brief-first-v2" {
+            $base = Get-McpRoslynGuidanceBlock -Profile "brief-first"
+            return ($base + @"
+
+Workspace correctness addendum:
+- If TargetHarness.csproj exists, append workspace_path=TargetHarness.csproj&require_workspace=true to nav/edit/diag URIs (including edit.rename_symbol).
+"@)
+        }
+        "workspace-locked" {
+            $base = Get-McpRoslynGuidanceBlock -Profile "surgical"
+            return ($base + @"
+
+Workspace lock rule:
+- If TargetHarness.csproj exists, every nav/edit/diag URI MUST include workspace_path=TargetHarness.csproj&require_workspace=true.
+- If workspace_context.mode remains ad_hoc on a project-shaped task, rerun with explicit workspace query parameters.
+"@)
+        }
+        "diagnostics-first" {
+            return @"
+Roslyn MCP resources are available for this run and should be used before manual edits.
+Diagnostics-first workflow:
+1) diag.get_file_diagnostics (append workspace args if available)
+2) edit.rename_symbol (same workspace args)
+3) diag.get_file_diagnostics (same workspace args)
+"@
+        }
+        "edit-then-verify" {
+            return @"
+Roslyn MCP resources are available for this run and should be used before manual edits.
+Edit-then-verify workflow:
+1) edit.rename_symbol (append workspace args if available)
+2) diag.get_file_diagnostics (same workspace args)
+Only if blocked, run nav.find_symbol once.
+"@
+        }
+
         "surgical" {
             return @"
 Roslyn MCP resources are available for this run and should be used before manual edits.
-If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/edit/diag command URIs.
 Use the minimum MCP sequence:
 1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50
 2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
@@ -2991,7 +3079,7 @@ Only call discovery/catalog resources if these fail; skip nav.find_symbol preche
         "skill-minimal" {
             return @"
 Roslyn MCP resources are available and should be used as skill guidance.
-If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/edit/diag command URIs.
 Use this sequence:
 1) read_mcp_resource server=roslyn uri=roslyn://commands
 2) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50
@@ -3002,7 +3090,7 @@ Use this sequence:
         "schema-first" {
             return @"
 Roslyn MCP resources are available and should be used contract-first.
-If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/diag command URIs.
+If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&require_workspace=true` to nav/edit/diag command URIs.
 1) Read command metadata contracts:
 - read_mcp_resource server=roslyn uri=roslyn://command-meta/nav.find_symbol
 - read_mcp_resource server=roslyn uri=roslyn://command-meta/edit.rename_symbol
@@ -3018,7 +3106,7 @@ If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&re
 
 function Get-ClaudeLspGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "surgical", "skill-minimal", "schema-first")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$Profile
     )
 
     switch ($Profile) {
@@ -3051,6 +3139,11 @@ If one LSP request hangs or fails, stop LSP retries and continue with minimal pl
 If LSP tools are missing, continue with plain text edits only.
 "@
         }
+        "brief-first-v2" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "workspace-locked" { return (Get-ClaudeLspGuidanceBlock -Profile "standard") }
+        "diagnostics-first" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "edit-then-verify" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+
         "surgical" {
             return @"
 Use the narrowest possible LSP sequence:

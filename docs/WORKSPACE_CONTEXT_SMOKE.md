@@ -53,6 +53,16 @@ Observed summary:
 
 ## Expected Agent Behavior
 
+## Workspace Health Caveat
+
+A run can report `workspace_context.mode=workspace` but still be effectively broken if MSBuild resolves without reference assemblies. The most common symptom is `CS0518` for predefined/core types like `System.String` or `System.Int32`.
+
+If you see this:
+- Treat it as a workspace-load failure for benchmark interpretation (do not attribute those diagnostics to code quality).
+- Rerun with explicit `workspace_path`/`--require-workspace true` and verify diagnostics do not contain `CS0518`.
+- If it persists, suspect MSBuild instance mismatch (VS MSBuild behind preview TFMs). RoslynSkills now prefers the .NET SDK MSBuild instance when registering MSBuildLocator.
+
+
 For project-backed files:
 
 1. read `workspace_context.mode`,

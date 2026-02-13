@@ -357,9 +357,15 @@ internal static class WorkspaceSemanticLoader
                 {
                     if (!MSBuildLocator.IsRegistered)
                     {
-                        VisualStudioInstance? instance = MSBuildLocator.QueryVisualStudioInstances()
+                        VisualStudioInstance[] instances = MSBuildLocator.QueryVisualStudioInstances().ToArray();
+
+                        // Prefer .NET SDK MSBuild for the current runtime, since VS MSBuild can be behind preview TFMs
+                        // and yield workspaces missing reference assemblies (e.g., CS0518 for System.String).
+                        VisualStudioInstance? instance = instances
+                            .Where(candidate => candidate.DiscoveryType == DiscoveryType.DotNetSdk)
                             .OrderByDescending(candidate => candidate.Version)
-                            .FirstOrDefault();
+                            .FirstOrDefault()
+                            ?? instances.OrderByDescending(candidate => candidate.Version).FirstOrDefault();
 
                         if (instance is not null)
                         {

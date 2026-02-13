@@ -273,6 +273,8 @@ Plan:
 Acceptance/validity gates (must hold before interpreting deltas):
 
 - Project-shaped tasks: at least one Roslyn nav/diag call reports `workspace_context.mode=workspace`.
+- Workspace health gate: fail/redo if diagnostics include `CS0518` (missing core reference assemblies) even when mode reports `workspace`.
+- Treatment integrity gate: prefer failing closed if a treatment lane completes with `roslyn_used=false` (prevents silent text-only treatment confounds).
 - Single-file tasks: `ad_hoc` is expected and must not be treated as a tool failure.
 - Report within-agent, within-scenario deltas; do not compare across agents as primary evidence.
 

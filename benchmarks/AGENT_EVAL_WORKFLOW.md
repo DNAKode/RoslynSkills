@@ -132,7 +132,7 @@ With `--fail-on-warnings true`, the gate treats run-validation warnings as hard 
 For fast paired control/treatment smoke runs with transcript + token attribution artifacts:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 -OutputRoot <artifact-dir> [-IsolationRoot <temp-dir>] [-KeepIsolatedWorkspaces] [-RoslynGuidanceProfile <standard|brief-first|surgical|skill-minimal|schema-first>]
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 -OutputRoot <artifact-dir> [-IsolationRoot <temp-dir>] [-KeepIsolatedWorkspaces] [-CodexModel <model>] [-CodexReasoningEffort <low|medium|high|xhigh>] [-RoslynGuidanceProfile <standard|brief-first|brief-first-v2|workspace-locked|diagnostics-first|edit-then-verify|surgical|skill-minimal|schema-first>]
 ```
 
 Optional MCP treatment arm:
@@ -157,6 +157,8 @@ Current guidance from skill-intro ablations (`artifacts/skill-intro-ablation/202
 - `-TaskShape project` now excludes `Target.original.cs` from compilation in generated `TargetHarness.csproj` to prevent duplicate-type benchmark confounds.
 
 Isolation and integrity defaults:
+
+- Optional integrity guard: pass `-FailOnMissingTreatmentRoslynUsage` to fail the paired run if a treatment lane completes without any successful Roslyn calls (prevents treatment lanes silently degrading into text-only).
 
 - Agent execution workspaces are created outside the repository tree by default (temp directory isolation).
 - The harness hard-fails if an execution workspace is inside the host repo or any existing git repo.

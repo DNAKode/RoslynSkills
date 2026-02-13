@@ -61,6 +61,47 @@ public sealed class PairedRunHarnessScriptTests
         Assert.Contains("workspace_context = `$workspaceContextForTelemetry", script, StringComparison.Ordinal);
     }
 
+
+
+    [Fact]
+    public void CodexReasoningEffort_IsWiredToCodexExecConfigOverrides()
+    {
+        string script = ReadScript();
+
+        Assert.Contains("CodexReasoningEffort", script, StringComparison.Ordinal);
+        Assert.Contains("model_reasoning_effort", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenameAndVerifyHelper_PassesWorkspaceArgsToEditRenameSymbol()
+    {
+        string script = ReadScript();
+
+        Assert.Contains("`$renameArgs += `$workspaceArgs", script, StringComparison.Ordinal);
+        Assert.Contains("edit.rename_symbol", script, StringComparison.Ordinal);
+        Assert.Contains("--workspace-path\", \"TargetHarness.csproj\", \"--require-workspace\", \"true\"", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GuidanceProfiles_IncludeWorkspaceCorrectnessVariants()
+    {
+        string script = ReadScript();
+
+        Assert.Contains("brief-first-v2", script, StringComparison.Ordinal);
+        Assert.Contains("workspace-locked", script, StringComparison.Ordinal);
+        Assert.Contains("diagnostics-first", script, StringComparison.Ordinal);
+        Assert.Contains("edit-then-verify", script, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public void TreatmentIntegrity_CanFailClosedWhenRoslynNotUsed()
+    {
+        string script = ReadScript();
+
+        Assert.Contains("FailOnMissingTreatmentRoslynUsage", script, StringComparison.Ordinal);
+        Assert.Contains("missing_treatment_roslyn_usage", script, StringComparison.Ordinal);
+    }
     private static string ReadScript()
     {
         string repoRoot = FindRepoRoot();
