@@ -82,6 +82,26 @@ Workspace-binding evidence (treatment lane):
 - `nav.find_symbol` returned `workspace_context.mode=workspace` and resolved to `src/Avalonia.Base/Avalonia.Base.csproj` in:
   - `artifacts/real-agent-runs/20260213-080511-oss-csharp-pilot/avalonia-cornerradius-tryparse/treatment-roslyn-optional/run-codex-treatment-roslyn-optional-avalonia-cornerradius-tryparse-brief-first-r01/transcript.jsonl`
 
+
+
+## C2) OSS Pilot (FluentValidation)
+
+Task: `fluentvalidation-rule-disambiguation` (workspace expected)
+
+Evidence:
+- run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-095150-oss-csharp-pilot/*.json`
+- artifacts:
+  - control: `artifacts/real-agent-runs/20260213-095150-oss-csharp-pilot/fluentvalidation-rule-disambiguation/control-text-only/*`
+  - treatment: `artifacts/real-agent-runs/20260213-095150-oss-csharp-pilot/fluentvalidation-rule-disambiguation/treatment-roslyn-optional/*`
+
+Result (Codex Spark, low reasoning):
+- control: failed acceptance (`dotnet test --nologo`), no Roslyn tool calls.
+- treatment (Roslyn optional): passed acceptance, but still recorded zero Roslyn tool calls in telemetry (agent solved via text edits).
+- both runs reported very large `input_tokens` (~1.1M to ~1.3M), indicating high prompt/context pressure in large-repo lanes.
+
+Read:
+- This replicate is useful as an OSS realism check, but it is confounded for tool effectiveness because the treatment lane did not actually use roscli.
+- Next step: add/enable a treatment-required lane (or fail-closed integrity policy) so OSS treatment runs must demonstrate at least one successful Roslyn call (and `workspace_context.mode=workspace`).
 ## Most Promising Path (Current Read)
 
 1. Default lane for day-to-day: roscli (CLI) with `brief-first` posture and explicit `require_workspace=true` on nav/diag for project code.
