@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using RoslynSkills.Contracts;
 using System.Text.Json;
@@ -24,6 +24,9 @@ public sealed class FindImplementationsCommand : IAgentCommand
 
         InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         if (!File.Exists(filePath))
         {
             errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
@@ -49,7 +52,15 @@ public sealed class FindImplementationsCommand : IAgentCommand
 
         int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 200, minValue: 1, maxValue: 2_000);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
         if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
@@ -93,8 +104,8 @@ public sealed class FindImplementationsCommand : IAgentCommand
 
         object data = new
         {
-            file_path = filePath,
-            query = new { line, column, max_results = maxResults },
+            file_path = analysis.FilePath,
+            query = new { line, column, max_results = maxResults, workspace_path = workspacePath, require_workspace = requireWorkspace, workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext) },
             symbol = new
             {
                 symbol_display = anchorSymbol.ToDisplayString(),

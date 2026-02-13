@@ -4,7 +4,8 @@
     [string]$CodexModel = "gpt-5.3-codex",
     [ValidateSet("low", "medium", "high", "xhigh")][string]$CodexReasoningEffort = "low",
     [ValidateSet("control-text-only", "treatment-roslyn-optional")][string[]]$ConditionIds = @("control-text-only", "treatment-roslyn-optional"),
-    [string[]]$TaskIds = @("roslyn-analyzers-diagnostic-fix-flow"),
+    [string[]]$TaskIds = @('avalonia-cornerradius-tryparse'),
+    [int]$CodexTimeoutSeconds = 240,
     [int]$RunsPerCell = 1,
     [ValidateSet("brief-first", "standard", "verbose-first")][string]$RoslynGuidanceProfile = "brief-first",
     [switch]$KeepWorkspaces
@@ -132,7 +133,16 @@ function Invoke-CommandLine {
     Push-Location $WorkingDirectory
     try {
         Add-Content -Path $LogPath -Value ("$ Command: {0}" -f $CommandLine)
-        & cmd.exe /d /c $CommandLine 2>&1 | ForEach-Object { Add-Content -Path $LogPath -Value $_ }
+
+        $savedPreference = $ErrorActionPreference
+        try {
+            # Some dotnet tooling writes warnings to stderr; don't treat that as a terminating error.
+            $ErrorActionPreference = "Continue"
+            & cmd.exe /d /c $CommandLine 2>&1 | ForEach-Object { Add-Content -Path $LogPath -Value $_ }
+        } finally {
+            $ErrorActionPreference = $savedPreference
+        }
+
         $exitCode = $LASTEXITCODE
         Add-Content -Path $LogPath -Value ("$ ExitCode: {0}" -f $exitCode)
         return $exitCode
@@ -158,7 +168,6 @@ function Get-CodexTokenMetrics {
 
     $total = $null
     if ($null -ne $promptTokens -and $null -ne $completionTokens) { $total = $promptTokens + $completionTokens }
-
     return @{ prompt_tokens = $promptTokens; completion_tokens = $completionTokens; total_tokens = $total }
 }
 
@@ -181,7 +190,7 @@ function Invoke-Codex {
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--model", $Model,
-        "-c", ("model_reasoning_effort=\"{0}\"" -f $ReasoningEffort),
+        "-c", ('model_reasoning_effort="{0}"' -f $ReasoningEffort),
         "-"
     )
 
@@ -205,16 +214,35 @@ function Invoke-Codex {
     $process.StandardInput.WriteLine($PromptText)
     $process.StandardInput.Close()
 
-    $stdOut = $process.StandardOutput.ReadToEnd()
-    $stdErr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    $outTask = $process.StandardOutput.ReadToEndAsync()
+    $errTask = $process.StandardError.ReadToEndAsync()
+
+    $timeoutMs = [int]([math]::Max(1, $CodexTimeoutSeconds) * 1000)
+    $exited = $process.WaitForExit($timeoutMs)
+    if (-not $exited) {
+        try { & cmd.exe /d /c ("taskkill /PID {0} /T /F" -f $process.Id) | Out-Null } catch { }
+        [void]$process.WaitForExit(5000)
+    }
+
     $sw.Stop()
+    $timedOut = -not $exited
+
+    $stdOut = ""
+    $stdErr = ""
+    try { if ($outTask.Wait(5000)) { $stdOut = [string]$outTask.Result } } catch { }
+    try { if ($errTask.Wait(5000)) { $stdErr = [string]$errTask.Result } } catch { }
 
     $combined = $stdOut
     if (-not [string]::IsNullOrWhiteSpace($stdErr)) { $combined = ($combined + "`n" + $stdErr).Trim() }
+    if ($timedOut) {
+        if (-not [string]::IsNullOrWhiteSpace($combined)) { $combined += "`n" }
+        $combined += "TIMED_OUT"
+    }
+
     Set-Content -Path $TranscriptPath -Value $combined
 
-    return @{ exit_code = [int]$process.ExitCode; duration_seconds = [math]::Round($sw.Elapsed.TotalSeconds, 3) }
+    $exit = if ($timedOut) { 124 } else { [int]$process.ExitCode }
+    return @{ exit_code = $exit; duration_seconds = [math]::Round($sw.Elapsed.TotalSeconds, 3); timed_out = $timedOut }
 }
 
 function Build-Prompt {
@@ -238,9 +266,9 @@ $TaskPrompt
 
 RoslynSkills tools are available via scripts\\roscli.cmd.
 Pit-of-success:
-- scripts\\roscli.cmd list-commands --ids-only
-- scripts\\roscli.cmd nav.find_symbol <file> <name> --brief true --max-results 20 --require-workspace true
-- scripts\\roscli.cmd diag.get_file_diagnostics <file> --require-workspace true
+1) scripts\\roscli.cmd list-commands --ids-only
+2) scripts\\roscli.cmd nav.find_symbol <file> <name> --brief true --max-results 20 --require-workspace true
+3) scripts\\roscli.cmd diag.get_file_diagnostics <file> --require-workspace true
 Always check workspace_context.mode.
 "@
     }
@@ -265,6 +293,30 @@ Brief-first workflow:
 "@
 }
 
+function New-WorkspaceId {
+    param(
+        [Parameter(Mandatory = $true)][string]$TaskSlug,
+        [Parameter(Mandatory = $true)][string]$ConditionSlug,
+        [Parameter(Mandatory = $true)][string]$ProfileSlug,
+        [Parameter(Mandatory = $true)][int]$Replicate
+    )
+
+    $raw = "{0}|{1}|{2}|{3}" -f $TaskSlug, $ConditionSlug, $ProfileSlug, $Replicate
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+        $hash = ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join ''
+    } finally {
+        $sha.Dispose()
+    }
+
+    $t = if ($TaskSlug.Length -gt 12) { $TaskSlug.Substring(0, 12) } else { $TaskSlug }
+    $c = if ($ConditionSlug.Length -gt 12) { $ConditionSlug.Substring(0, 12) } else { $ConditionSlug }
+    $p = if ($ProfileSlug.Length -gt 12) { $ProfileSlug.Substring(0, 12) } else { $ProfileSlug }
+
+    return ("oss-{0}-{1}-{2}-r{3:00}-{4}" -f $c, $t, $p, $Replicate, $hash.Substring(0, 8))
+}
+
 $repoRoot = Resolve-RepoRoot
 Ensure-Command git
 Ensure-Command dotnet
@@ -281,6 +333,16 @@ $outputDir = (Resolve-Path $outputDir).Path
 $runsDir = Join-Path $repoRoot "benchmarks/experiments/oss-csharp-pilot-v1/runs"
 New-Item -ItemType Directory -Force -Path $runsDir | Out-Null
 
+$runBundleId = Split-Path -Path $outputDir -Leaf
+$runBundleDir = Join-Path $runsDir $runBundleId
+New-Item -ItemType Directory -Force -Path $runBundleDir | Out-Null
+
+# Keep cache/workspaces on a short path to avoid Windows max-path issues in deep OSS repos.
+$repoCacheRoot = Join-Path $repoRoot "_tmp\oss-csharp-pilot\repo-cache"
+$workspaceRoot = Join-Path $repoRoot "_tmp\oss-csharp-pilot\workspaces"
+New-Item -ItemType Directory -Force -Path $repoCacheRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $workspaceRoot | Out-Null
+
 $publishedCliDll = Publish-Roscli -RepoRoot $repoRoot -OutputDirectory $outputDir
 
 $taskLookup = @{}
@@ -289,19 +351,36 @@ foreach ($t in @($manifest.tasks)) { $taskLookup[(Convert-ToText $t.id)] = $t }
 foreach ($taskId in $TaskIds) {
     if (-not $taskLookup.ContainsKey($taskId)) { throw "Unknown task id '$taskId'" }
     $task = $taskLookup[$taskId]
+
     $taskPromptPath = Join-Path $manifestDir (Convert-ToText $task.task_prompt_file)
     $taskPromptText = Get-Content -Path $taskPromptPath -Raw
 
+    $taskSlug = Convert-ToSlug $taskId
+    $repoCacheDir = Join-Path $repoCacheRoot $taskSlug
+
+    if (-not (Test-Path (Join-Path $repoCacheDir ".git"))) {
+        & git clone (Convert-ToText $task.repo_url) $repoCacheDir | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git clone failed for $($task.repo_url)" }
+    }
+
+    Push-Location $repoCacheDir
+    try {
+        & git fetch --all --tags --prune | Out-Host
+        & git fetch origin (Convert-ToText $task.commit) | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git fetch failed for commit $($task.commit)" }
+    } finally { Pop-Location }
+
     foreach ($conditionId in $ConditionIds) {
-        $taskSlug = Convert-ToSlug $taskId
         $condSlug = Convert-ToSlug $conditionId
         $profileSlug = Convert-ToSlug $RoslynGuidanceProfile
 
         for ($rep = 1; $rep -le [Math]::Max(1, $RunsPerCell); $rep++) {
             $runId = "run-codex-{0}-{1}-{2}-r{3:00}" -f $condSlug, $taskSlug, $profileSlug, $rep
             $runDir = Join-Path $outputDir (Join-Path $taskId (Join-Path $conditionId $runId))
-            $workspaceDir = Join-Path $runDir "workspace"
-            New-Item -ItemType Directory -Force -Path $workspaceDir | Out-Null
+            New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+
+            $workspaceId = New-WorkspaceId -TaskSlug $taskSlug -ConditionSlug $condSlug -ProfileSlug $profileSlug -Replicate $rep
+            $workspaceDir = Join-Path $workspaceRoot $workspaceId
 
             $setupLog = Join-Path $runDir "setup.log"
             $acceptLog = Join-Path $runDir "acceptance.log"
@@ -313,17 +392,14 @@ foreach ($taskId in $TaskIds) {
             Copy-CodexAuthToRunHome -RunCodexHome $codexHome
             $envOverrides = @{ CODEX_HOME = $codexHome }
 
-            if (-not (Test-Path (Join-Path $workspaceDir ".git"))) {
-                & git clone (Convert-ToText $task.repo_url) $workspaceDir | Out-Host
-                if ($LASTEXITCODE -ne 0) { throw "git clone failed for $($task.repo_url)" }
+            # Ensure no stale worktree entry or directory exists.
+            if (Test-Path (Join-Path $workspaceDir ".git")) {
+                try { & git -C $repoCacheDir worktree remove -f $workspaceDir | Out-Null } catch { }
             }
+            if (Test-Path $workspaceDir) { & cmd.exe /d /c ('rmdir /s /q "{0}"' -f $workspaceDir) | Out-Null }
 
-            Push-Location $workspaceDir
-            try {
-                & git fetch --all --tags --prune | Out-Host
-                & git checkout --force (Convert-ToText $task.commit) | Out-Host
-                if ($LASTEXITCODE -ne 0) { throw "git checkout failed for commit $($task.commit)" }
-            } finally { Pop-Location }
+            & git -C $repoCacheDir worktree add --detach -f $workspaceDir (Convert-ToText $task.commit) | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "git worktree add failed for commit $($task.commit)" }
 
             Write-RoscliShim -WorkspacePath $workspaceDir -PublishedCliDll $publishedCliDll
 
@@ -341,22 +417,34 @@ foreach ($taskId in $TaskIds) {
 
             $agentExit = 1
             $durationSeconds = $null
+            $timedOut = $false
             if ($setupOk) {
                 $result = Invoke-Codex -WorkspacePath $workspaceDir -PromptText $fullPrompt -TranscriptPath $transcriptPath -Model $CodexModel -ReasoningEffort $CodexReasoningEffort -EnvironmentOverrides $envOverrides
                 $agentExit = [int]$result.exit_code
                 $durationSeconds = [double]$result.duration_seconds
+                $timedOut = [bool]$result.timed_out
             } else {
                 Add-Content -Path $transcriptPath -Value '{"type":"setup.failed","message":"Setup commands failed."}'
             }
 
-            $acceptOk = $true
-            foreach ($cmdLine in @($task.acceptance_checks)) {
-                if ([string]::IsNullOrWhiteSpace($cmdLine)) { continue }
-                if ((Invoke-CommandLine -WorkingDirectory $workspaceDir -CommandLine (Convert-ToText $cmdLine) -LogPath $acceptLog) -ne 0) { $acceptOk = $false; break }
+            $acceptOk = $false
+            if ($setupOk) {
+                $acceptOk = $true
+                foreach ($cmdLine in @($task.acceptance_checks)) {
+                    if ([string]::IsNullOrWhiteSpace($cmdLine)) { continue }
+                    if ((Invoke-CommandLine -WorkingDirectory $workspaceDir -CommandLine (Convert-ToText $cmdLine) -LogPath $acceptLog) -ne 0) { $acceptOk = $false; break }
+                }
+            } else {
+                Add-Content -Path $acceptLog -Value 'SKIPPED: acceptance checks not run because setup failed.'
             }
 
             Push-Location $workspaceDir
             try { Set-Content -Path $diffPath -Value (& git diff) } finally { Pop-Location }
+
+            if (-not $KeepWorkspaces) {
+                & git -C $repoCacheDir worktree remove -f $workspaceDir | Out-Host
+                if (Test-Path $workspaceDir) { & cmd.exe /d /c ('rmdir /s /q "{0}"' -f $workspaceDir) | Out-Null }
+            }
 
             $tokens = Get-CodexTokenMetrics -TranscriptPath $transcriptPath
             $succeeded = ($setupOk -and $agentExit -eq 0 -and $acceptOk)
@@ -370,8 +458,11 @@ foreach ($taskId in $TaskIds) {
                 model = $CodexModel
                 model_reasoning_effort = $CodexReasoningEffort
                 succeeded = $succeeded
+                setup_passed = $setupOk
                 compile_passed = $acceptOk
                 tests_passed = $acceptOk
+                exit_code = $agentExit
+                timed_out = $timedOut
                 duration_seconds = $durationSeconds
                 prompt_tokens = $tokens.prompt_tokens
                 completion_tokens = $tokens.completion_tokens
@@ -391,12 +482,12 @@ foreach ($taskId in $TaskIds) {
                 }
             }
 
-            $runPath = Join-Path $runsDir ("{0}.json" -f $runId)
+            $runPath = Join-Path $runBundleDir ("{0}.json" -f $runId)
             $runRecord | ConvertTo-Json -Depth 12 | Set-Content -Path $runPath
-
-            if (-not $KeepWorkspaces) {
-                try { Remove-Item -Recurse -Force -Path $workspaceDir } catch { }
-            }
         }
     }
 }
+
+
+
+

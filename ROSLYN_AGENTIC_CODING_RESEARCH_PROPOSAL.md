@@ -1,4 +1,4 @@
-# Research Proposal: Roslyn-Native Agentic Coding for C#/.NET
+﻿# Research Proposal: Roslyn-Native Agentic Coding for C#/.NET
 
 Date: February 8, 2026  
 Status: Active implementation and benchmark validation (proposal remains source of truth for RQs/methodology)
@@ -246,6 +246,7 @@ Every interface lane must provide:
 - a short startup path that minimizes argument guessing,
 - explicit guardrails for common failure modes (for example file-type misuse),
 - explicit visibility into workspace binding for file-scoped commands (`workspace_context.mode`) plus an override path (`workspace_path`) when calls are launched from disconnected contexts,
+- benchmark validity gates for workspace context: for project-shaped tasks, at least one Roslyn nav/diag call must report `workspace_context.mode=workspace`; for single-file tasks, `ad_hoc` is expected and should not be treated as failure.
 - copy-paste-safe examples for both simple and structured payloads,
 - release artifacts that place guidance near runnable launchers.
 
@@ -456,3 +457,4 @@ Meta-study inputs on agentic coding practice:
 29. Claude official C# LSP plugin: https://github.com/anthropics/claude-plugins-official/tree/main/plugins/csharp-lsp
 30. dotnet-inspect repository: https://github.com/richlander/dotnet-inspect
 31. dotnet-skills repository: https://github.com/richlander/dotnet-skills
+

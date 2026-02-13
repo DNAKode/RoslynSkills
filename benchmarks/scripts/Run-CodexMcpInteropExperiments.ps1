@@ -1,8 +1,9 @@
-param(
+﻿param(
     [string]$OutputRoot = "",
     [string[]]$Models = @("gpt-5.3-codex", "gpt-5.3-codex-spark"),
     [ValidateSet("single-file", "project")][string]$TaskShape = "project",
     [string[]]$ReasoningEfforts = @("low", "medium", "high"),
+    [int]$CodexTimeoutSeconds = 300,
     [ValidateSet("control", "roslyn-mcp", "lsp-mcp", "roslyn-plus-lsp-mcp")][string[]]$Scenarios = @("control", "roslyn-mcp", "lsp-mcp", "roslyn-plus-lsp-mcp"),
     [string]$CliPublishConfiguration = "Release",
     [string]$LspMcpCommand = "",
@@ -362,7 +363,8 @@ function Invoke-CodexRun {
         [Parameter(Mandatory = $true)][string]$ReasoningEffort,
         [Parameter(Mandatory = $true)][string]$PromptText,
         [Parameter(Mandatory = $true)][string]$TranscriptPath,
-        [Parameter(Mandatory = $true)][hashtable]$EnvironmentOverrides
+        [Parameter(Mandatory = $true)][hashtable]$EnvironmentOverrides,
+        [int]$TimeoutSeconds = 300
     )
 
     $args = @(
@@ -398,10 +400,39 @@ function Invoke-CodexRun {
     $process.StandardInput.WriteLine($PromptText)
     $process.StandardInput.Close()
 
-    $stdOut = $process.StandardOutput.ReadToEnd()
-    $stdErr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    $outTask = $process.StandardOutput.ReadToEndAsync()
+    $errTask = $process.StandardError.ReadToEndAsync()
+
+    $timeoutMs = [int]([math]::Max(1, $TimeoutSeconds) * 1000)
+    $exited = $process.WaitForExit($timeoutMs)
+    if (-not $exited) {
+        try {
+            & cmd.exe /d /c ("taskkill /PID {0} /T /F" -f $process.Id) | Out-Null
+        } catch {
+        }
+        [void]$process.WaitForExit(5000)
+    }
+
     $stopwatch.Stop()
+
+    $timedOut = -not $exited
+
+    $stdOut = ""
+    $stdErr = ""
+
+    try {
+        if ($outTask.Wait(5000)) {
+            $stdOut = [string]$outTask.Result
+        }
+    } catch {
+    }
+
+    try {
+        if ($errTask.Wait(5000)) {
+            $stdErr = [string]$errTask.Result
+        }
+    } catch {
+    }
 
     $combined = $stdOut
     if (-not [string]::IsNullOrWhiteSpace($stdErr)) {
@@ -411,14 +442,23 @@ function Invoke-CodexRun {
         $combined += $stdErr
     }
 
+    if ($timedOut) {
+        if (-not [string]::IsNullOrWhiteSpace($combined)) {
+            $combined += [Environment]::NewLine
+        }
+        $combined += "TIMED_OUT"
+    }
+
     Set-Content -Path $TranscriptPath -Value $combined
 
     return @{
-        exit_code = [int]$process.ExitCode
+        exit_code = if ($timedOut) { 124 } else { [int]$process.ExitCode }
         stdout = $stdOut
         stderr = $stdErr
         combined = $combined
         duration_seconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
+        timed_out = $timedOut
+        timeout_seconds = [int]$TimeoutSeconds
     }
 }
 
@@ -496,11 +536,17 @@ function Get-CodexUsageCounters {
         $commandText = if ($event.item.PSObject.Properties.Match("command").Count -gt 0) { [string]$event.item.command } else { "" }
         $blob = ($serverName + " " + $toolName + " " + $commandText).ToLowerInvariant()
 
-        if ($blob.Contains("roslyn")) {
-            $roslynCalls++
-        }
-        if ($blob.Contains("csharp") -or $blob.Contains("lsp")) {
-            $lspCalls++
+        if ($itemType -eq "mcp_tool_call") {
+            if (-not [string]::IsNullOrWhiteSpace($serverName) -and $serverName.ToLowerInvariant().Contains("roslyn")) {
+                $roslynCalls++
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($serverName)) {
+                $serverLower = $serverName.ToLowerInvariant()
+                if ($serverLower.Contains("lsp") -or $serverLower.Contains("csharp")) {
+                    $lspCalls++
+                }
+            }
         }
     }
 
@@ -512,7 +558,7 @@ function Get-CodexUsageCounters {
 }
 
 function Get-FailureSnippet {
-    param([Parameter(Mandatory = $true)][string]$Text)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
 
     if ([string]::IsNullOrWhiteSpace($Text)) {
         return ""
@@ -681,10 +727,13 @@ foreach ($model in $Models) {
                 -ReasoningEffort $effort `
                 -PromptText $promptText `
                 -TranscriptPath $transcriptPath `
-                -EnvironmentOverrides $envOverrides
+                -EnvironmentOverrides $envOverrides `
+                -TimeoutSeconds $CodexTimeoutSeconds
 
             $record.exit_code = [int]$runResult.exit_code
             $record.duration_seconds = [double]$runResult.duration_seconds
+            $record.timed_out = [bool]$runResult.timed_out
+            $record.timeout_seconds = [int]$runResult.timeout_seconds
 
             $usage = Get-CodexUsageCounters -TranscriptPath $transcriptPath
             $record.round_trips = [int]$usage.round_trips
@@ -781,3 +830,13 @@ Set-Content -Path $summaryMarkdownPath -Value ($lines -join [Environment]::NewLi
 
 Write-Host ("SUMMARY_JSON={0}" -f $summaryJsonPath)
 Write-Host ("SUMMARY_MARKDOWN={0}" -f $summaryMarkdownPath)
+
+
+
+
+
+
+
+
+
+

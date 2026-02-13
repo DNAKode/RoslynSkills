@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
@@ -25,6 +25,9 @@ public sealed class FindReferencesCommand : IAgentCommand
 
         InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
         {
@@ -57,7 +60,15 @@ public sealed class FindReferencesCommand : IAgentCommand
         int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 2, minValue: 0, maxValue: 20);
         bool includeDeclaration = InputParsing.GetOptionalBool(input, "include_declaration", defaultValue: true);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
         if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
@@ -117,13 +128,16 @@ public sealed class FindReferencesCommand : IAgentCommand
 
         object data = new
         {
-            file_path = filePath,
+            file_path = analysis.FilePath,
             query = new
             {
                 line,
                 column,
                 include_declaration = includeDeclaration,
                 max_results = maxResults,
+                workspace_path = workspacePath,
+                require_workspace = requireWorkspace,
+                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             },
             symbol = new
             {

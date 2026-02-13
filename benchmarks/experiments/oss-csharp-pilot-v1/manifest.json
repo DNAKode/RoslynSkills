@@ -1,88 +1,89 @@
 {
-  "experiment_id": "oss-csharp-pilot-v1",
-  "description": "First realistic C# OSS control/treatment A/B pilot for Roslyn augmentation utility.",
-  "roslyn_tool_prefixes": [
-    "roslyn-agent.",
-    "nav.",
-    "diag.",
-    "ctx.",
-    "edit."
-  ],
-  "runs_per_cell": 2,
-  "conditions": [
-    {
-      "id": "control-text-only",
-      "name": "Control (No Roslyn Tools)",
-      "roslyn_tools_enabled": false,
-      "notes": "Default agent toolset without Roslyn augmentation."
-    },
-    {
-      "id": "treatment-roslyn-optional",
-      "name": "Treatment (Roslyn Optional)",
-      "roslyn_tools_enabled": true,
-      "notes": "Roslyn tools are available but optional."
-    }
-  ],
-  "tasks": [
-    {
-      "id": "mediatr-behavior-targeting",
-      "title": "MediatR pipeline behavior targeting and test update",
-      "repo": "jbogard/MediatR",
-      "repo_url": "https://github.com/jbogard/MediatR.git",
-      "commit": "be61f5a415965bf81893a05b25e0c4936079f35c",
-      "issue_url": null,
-      "task_prompt_file": "prompts/mediatr-behavior-targeting.md",
-      "setup_commands": [
-        "dotnet restore"
-      ],
-      "acceptance_checks": [
-        "dotnet test --nologo"
-      ]
-    },
-    {
-      "id": "fluentvalidation-rule-disambiguation",
-      "title": "FluentValidation ambiguous member targeting in validator updates",
-      "repo": "FluentValidation/FluentValidation",
-      "repo_url": "https://github.com/FluentValidation/FluentValidation.git",
-      "commit": "a712e36fdb3b5fc92559c0d19367bf3b046d4e8d",
-      "issue_url": null,
-      "task_prompt_file": "prompts/fluentvalidation-rule-disambiguation.md",
-      "setup_commands": [
-        "dotnet restore"
-      ],
-      "acceptance_checks": [
-        "dotnet test --nologo"
-      ]
-    },
-    {
-      "id": "serilog-structured-context-change",
-      "title": "Serilog API usage adjustment with call-site precision",
-      "repo": "serilog/serilog",
-      "repo_url": "https://github.com/serilog/serilog.git",
-      "commit": "dc529798b07de14d74393f33e388a51be9c610b2",
-      "issue_url": null,
-      "task_prompt_file": "prompts/serilog-structured-context-change.md",
-      "setup_commands": [
-        "dotnet restore"
-      ],
-      "acceptance_checks": [
-        "dotnet test --nologo"
-      ]
-    },
-    {
-      "id": "roslyn-analyzers-diagnostic-fix-flow",
-      "title": "Roslyn Analyzers targeted diagnostic + fix update",
-      "repo": "dotnet/roslyn-analyzers",
-      "repo_url": "https://github.com/dotnet/roslyn-analyzers.git",
-      "commit": "4e301e92afe5e027796b14c36d5049c855b2e9a7",
-      "issue_url": null,
-      "task_prompt_file": "prompts/roslyn-analyzers-diagnostic-fix-flow.md",
-      "setup_commands": [
-        "dotnet restore"
-      ],
-      "acceptance_checks": [
-        "dotnet test --nologo"
-      ]
-    }
-  ]
+    "experiment_id":  "oss-csharp-pilot-v1",
+    "description":  "First realistic C# OSS control/treatment A/B pilot for Roslyn augmentation utility.",
+    "roslyn_tool_prefixes":  [
+                                 "roslyn-agent.",
+                                 "nav.",
+                                 "diag.",
+                                 "ctx.",
+                                 "edit."
+                             ],
+    "runs_per_cell":  2,
+    "conditions":  [
+                       {
+                           "id":  "control-text-only",
+                           "name":  "Control (No Roslyn Tools)",
+                           "roslyn_tools_enabled":  false,
+                           "notes":  "Default agent toolset without Roslyn augmentation."
+                       },
+                       {
+                           "id":  "treatment-roslyn-optional",
+                           "name":  "Treatment (Roslyn Optional)",
+                           "roslyn_tools_enabled":  true,
+                           "notes":  "Roslyn tools are available but optional."
+                       }
+                   ],
+    "tasks":  [
+                  {
+                      "id":  "avalonia-cornerradius-tryparse",
+                      "title":  "Avalonia CornerRadius.TryParse additive API + tests",
+                      "repo":  "AvaloniaUI/Avalonia",
+                      "repo_url":  "https://github.com/AvaloniaUI/Avalonia.git",
+                      "commit":  "d9a6ae517fd59ffd2dbbc674e81d59a628c1458f",
+                      "issue_url":  null,
+                      "task_prompt_file":  "prompts/avalonia-cornerradius-tryparse.md",
+                      "setup_commands":  [
+                                             "git submodule update --init --recursive",
+                                             "dotnet restore tests/Avalonia.Base.UnitTests/Avalonia.Base.UnitTests.csproj"
+                                         ],
+                      "acceptance_checks":  [
+                                                "dotnet test --project tests/Avalonia.Base.UnitTests/Avalonia.Base.UnitTests.csproj"
+                                            ]
+                  },
+                  {
+                      "id":  "fluentvalidation-rule-disambiguation",
+                      "title":  "FluentValidation ambiguous member targeting in validator updates",
+                      "repo":  "FluentValidation/FluentValidation",
+                      "repo_url":  "https://github.com/FluentValidation/FluentValidation.git",
+                      "commit":  "a712e36fdb3b5fc92559c0d19367bf3b046d4e8d",
+                      "issue_url":  null,
+                      "task_prompt_file":  "prompts/fluentvalidation-rule-disambiguation.md",
+                      "setup_commands":  [
+                                             "dotnet restore"
+                                         ],
+                      "acceptance_checks":  [
+                                                "dotnet test --nologo"
+                                            ]
+                  },
+                  {
+                      "id":  "mediatr-behavior-targeting",
+                      "title":  "MediatR pipeline behavior targeting and test update",
+                      "repo":  "jbogard/MediatR",
+                      "repo_url":  "https://github.com/jbogard/MediatR.git",
+                      "commit":  "be61f5a415965bf81893a05b25e0c4936079f35c",
+                      "issue_url":  null,
+                      "task_prompt_file":  "prompts/mediatr-behavior-targeting.md",
+                      "setup_commands":  [
+                                             "dotnet restore"
+                                         ],
+                      "acceptance_checks":  [
+                                                "dotnet test --nologo"
+                                            ]
+                  },
+                  {
+                      "id":  "serilog-structured-context-change",
+                      "title":  "Serilog API usage adjustment with call-site precision",
+                      "repo":  "serilog/serilog",
+                      "repo_url":  "https://github.com/serilog/serilog.git",
+                      "commit":  "dc529798b07de14d74393f33e388a51be9c610b2",
+                      "issue_url":  null,
+                      "task_prompt_file":  "prompts/serilog-structured-context-change.md",
+                      "setup_commands":  [
+                                             "dotnet restore"
+                                         ],
+                      "acceptance_checks":  [
+                                                "dotnet test --nologo"
+                                            ]
+                  }
+              ]
 }

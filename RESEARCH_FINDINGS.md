@@ -1498,3 +1498,53 @@ Interpretation:
 
 Decision:
 - treat LSP MCP as experimental only; require explicit warm-up and long timeouts, and avoid using it as primary evidence for overall tool effectiveness until stabilized.
+
+### F-2026-02-13-52: Roscli workspace binding works on a large OSS repo (Avalonia) when commands are run inside the repo and `require_workspace=true`
+
+Evidence:
+- `artifacts/real-agent-runs/20260213-080511-oss-csharp-pilot/avalonia-cornerradius-tryparse/treatment-roslyn-optional/run-codex-treatment-roslyn-optional-avalonia-cornerradius-tryparse-brief-first-r01/transcript.jsonl`
+- `benchmarks/experiments/oss-csharp-pilot-v1/runs/run-codex-treatment-roslyn-optional-avalonia-cornerradius-tryparse-brief-first-r01.json`
+
+Result:
+- `nav.find_symbol` returned `workspace_context.mode=workspace` and resolved to `src/Avalonia.Base/Avalonia.Base.csproj`.
+- run outcome: `succeeded=true`, `duration_seconds=132.602`, `total_tokens=273,439` (Codex Spark, low reasoning).
+
+Interpretation:
+- This directly addresses the "false error floods" failure mode: when a file belongs to a project, RoslynSkills can bind to the correct `.csproj` workspace and report symbol/diagnostic results in that context.
+
+Decision:
+- Keep `workspace_context` surfaced on nav/diag commands and treat `require_workspace=true` as the pit-of-success default for project code.
+
+### F-2026-02-13-53: Paired (project-shape) rename shows Roslyn tooling overhead on low-ambiguity tasks; roscli is cheaper than Roslyn MCP here
+
+Evidence:
+- `artifacts/real-agent-runs/20260213-081019-paired/paired-run-summary.md`
+- `artifacts/real-agent-runs/20260213-081019-paired/paired-run-summary.json`
+
+Result (Codex Spark, project task shape):
+- control: `model_total_tokens=26,630`, passed.
+- roscli treatment: `model_total_tokens=45,546`, passed.
+- MCP treatment: `model_total_tokens=55,694`, passed.
+
+Interpretation:
+- For simple edits with unambiguous targets, tool usage increases tokens/round-trips without improving correctness.
+- Between Roslyn-enabled lanes, `roscli` was lower overhead than MCP on this task.
+
+Decision:
+- Update guidance to use Roslyn calls sparingly and "brief-first": one targeted call for ambiguity, then edit, then one verification call.
+- Keep MCP lane for warm-call latency experiments and multi-step/ambiguity-heavy tasks, not as default for micro-edits.
+
+### F-2026-02-13-54: LSP via MCP remains non-viable in Codex in current configuration (timeouts)
+
+Evidence:
+- `artifacts/real-agent-runs/20260213-mcp-interop-workspace-v4/codex-mcp-interop-summary.md`
+
+Result:
+- `lsp-mcp` and `roslyn-plus-lsp-mcp` timed out at ~180s across multiple model/effort cells.
+- `roslyn-mcp` succeeded but had significantly higher token totals than control in this microtask.
+
+Interpretation:
+- LSP MCP stability/perf is currently confounded by initialization/indexing latency and/or tool-call prompting; treat as experimental until we can get consistent completion.
+
+Decision:
+- Keep LSP MCP in the matrix but exclude it from "best approach" claims until it can reliably complete bounded tasks.

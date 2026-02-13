@@ -94,3 +94,29 @@ Observed in codex `treatment-mcp` lane:
 Interpretation:
 
 - on the current published release, MCP-backed symbol/diagnostic calls still bind to project workspace context for project-shaped tasks.
+
+### 4) Explicit `.slnx` workspace binding works
+
+Command:
+
+```text
+roscli nav.find_symbol src/RoslynSkills.Core/DefaultRegistryFactory.cs Create --brief true --workspace-path RoslynSkills.slnx --require-workspace true
+```
+
+Expected:
+
+- `workspace_context.mode`: `workspace`
+- `workspace_context.resolved_workspace_path`: `RoslynSkills.slnx`
+
+### 5) OSS repo confirmation: workspace resolves to the correct `.csproj`
+
+Evidence (Avalonia pilot):
+
+- `artifacts/real-agent-runs/20260213-080511-oss-csharp-pilot/avalonia-cornerradius-tryparse/treatment-roslyn-optional/run-codex-treatment-roslyn-optional-avalonia-cornerradius-tryparse-brief-first-r01/transcript.jsonl`
+
+Observed in `nav.find_symbol` output:
+
+- `workspace_context.mode`: `workspace`
+- `workspace_context.resolved_workspace_path`: `src/Avalonia.Base/Avalonia.Base.csproj`
+
+This is the key signal that we are not accidentally running file-only compilation for project code.

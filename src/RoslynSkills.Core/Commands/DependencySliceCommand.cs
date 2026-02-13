@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using RoslynSkills.Contracts;
@@ -25,6 +25,9 @@ public sealed class DependencySliceCommand : IAgentCommand
 
         InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         if (!File.Exists(filePath))
         {
             errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
@@ -51,7 +54,15 @@ public sealed class DependencySliceCommand : IAgentCommand
         }
 
         int maxDependencies = InputParsing.GetOptionalInt(input, "max_dependencies", defaultValue: 200, minValue: 1, maxValue: 5_000);
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
         if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
@@ -119,7 +130,16 @@ public sealed class DependencySliceCommand : IAgentCommand
         FileLinePositionSpan memberLineSpan = member.GetLocation().GetLineSpan();
         object data = new
         {
-            file_path = filePath,
+            file_path = analysis.FilePath,
+            query = new
+            {
+                line,
+                column,
+                max_dependencies = maxDependencies,
+                workspace_path = workspacePath,
+                require_workspace = requireWorkspace,
+                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
+            },
             containing_member = new
             {
                 kind = member.Kind().ToString(),

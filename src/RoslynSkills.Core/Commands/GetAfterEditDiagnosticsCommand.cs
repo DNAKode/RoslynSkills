@@ -1,5 +1,4 @@
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
+﻿using Microsoft.CodeAnalysis;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -21,6 +20,9 @@ public sealed class GetAfterEditDiagnosticsCommand : IAgentCommand
         {
             return errors;
         }
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
         {
@@ -45,11 +47,21 @@ public sealed class GetAfterEditDiagnosticsCommand : IAgentCommand
                 new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
         }
 
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 100, minValue: 1, maxValue: 1_000);
 
-        string beforeContent = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
+
+        string beforeContent = analysis.Source;
         string afterContent = beforeContent;
         bool usedProposedContent = false;
+
         if (input.TryGetProperty("proposed_content", out JsonElement proposedContentProperty) &&
             proposedContentProperty.ValueKind == JsonValueKind.String)
         {
@@ -61,11 +73,10 @@ public sealed class GetAfterEditDiagnosticsCommand : IAgentCommand
             }
         }
 
-        SyntaxTree beforeTree = CSharpSyntaxTree.ParseText(beforeContent, path: filePath, cancellationToken: cancellationToken);
-        SyntaxTree afterTree = CSharpSyntaxTree.ParseText(afterContent, path: filePath, cancellationToken: cancellationToken);
-
-        IReadOnlyList<Diagnostic> beforeDiagnostics = CompilationDiagnostics.GetDiagnostics(new[] { beforeTree }, cancellationToken);
-        IReadOnlyList<Diagnostic> afterDiagnostics = CompilationDiagnostics.GetDiagnostics(new[] { afterTree }, cancellationToken);
+        IReadOnlyList<Diagnostic> beforeDiagnostics = WorkspaceDiagnostics.GetDiagnosticsForCurrentFile(analysis, cancellationToken);
+        IReadOnlyList<Diagnostic> afterDiagnostics = usedProposedContent
+            ? WorkspaceDiagnostics.GetDiagnosticsForUpdatedSource(analysis, afterContent, cancellationToken)
+            : beforeDiagnostics;
 
         NormalizedDiagnostic[] beforeNormalized = CompilationDiagnostics.Normalize(beforeDiagnostics).Take(maxDiagnostics).ToArray();
         NormalizedDiagnostic[] afterNormalized = CompilationDiagnostics.Normalize(afterDiagnostics).Take(maxDiagnostics).ToArray();
@@ -74,7 +85,10 @@ public sealed class GetAfterEditDiagnosticsCommand : IAgentCommand
 
         object data = new
         {
-            file_path = filePath,
+            file_path = analysis.FilePath,
+            workspace_path = workspacePath,
+            require_workspace = requireWorkspace,
+            workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             used_proposed_content = usedProposedContent,
             before = new
             {
@@ -119,4 +133,3 @@ public sealed class GetAfterEditDiagnosticsCommand : IAgentCommand
 
     private sealed record DiagnosticDelta(int Introduced, int Resolved);
 }
-

@@ -1,4 +1,5 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
@@ -51,9 +52,12 @@ public sealed class FileOutlineCommand : IAgentCommand
         int maxTypes = InputParsing.GetOptionalInt(input, "max_types", defaultValue: 500, minValue: 1, maxValue: 10_000);
         int maxMembers = InputParsing.GetOptionalInt(input, "max_members", defaultValue: 2_000, minValue: 1, maxValue: 50_000);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
-        CompilationUnitSyntax? root = analysis.Root as CompilationUnitSyntax;
-        if (root is null)
+        string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+        SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
+        SyntaxNode rootNode = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+        SourceText sourceText = syntaxTree.GetText(cancellationToken);
+
+        if (rootNode is not CompilationUnitSyntax root)
         {
             return new CommandExecutionResult(
                 null,
@@ -76,7 +80,7 @@ public sealed class FileOutlineCommand : IAgentCommand
                      .Take(maxTypes))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            LinePosition position = analysis.SourceText.Lines.GetLinePosition(typeDeclaration.SpanStart);
+            LinePosition position = sourceText.Lines.GetLinePosition(typeDeclaration.SpanStart);
 
             List<MemberOutline> memberOutlines = new();
             if (includeMembers && remainingMembers > 0)
@@ -90,7 +94,7 @@ public sealed class FileOutlineCommand : IAgentCommand
                             break;
                         }
 
-                        memberOutlines.Add(CreateMemberOutline(member, analysis.SourceText));
+                        memberOutlines.Add(CreateMemberOutline(member, sourceText));
                         remainingMembers--;
                     }
                 }
@@ -103,7 +107,7 @@ public sealed class FileOutlineCommand : IAgentCommand
                             break;
                         }
 
-                        memberOutlines.Add(CreateEnumMemberOutline(enumMember, analysis.SourceText));
+                        memberOutlines.Add(CreateEnumMemberOutline(enumMember, sourceText));
                         remainingMembers--;
                     }
                 }
@@ -128,7 +132,7 @@ public sealed class FileOutlineCommand : IAgentCommand
         int globalStatementCount = root.Members.OfType<GlobalStatementSyntax>().Count();
         object data = new
         {
-            file_path = filePath,
+            file_path = Path.GetFullPath(filePath),
             summary = new
             {
                 using_count = usings.Length,
@@ -226,7 +230,7 @@ public sealed class FileOutlineCommand : IAgentCommand
             EventFieldDeclarationSyntax eventField => $"{eventField.Declaration.Type} {string.Join(", ", eventField.Declaration.Variables.Select(v => v.Identifier.ValueText))}",
             IndexerDeclarationSyntax indexer => $"{indexer.Type} this[{indexer.ParameterList.Parameters}]",
             OperatorDeclarationSyntax op => $"{op.ReturnType} operator {op.OperatorToken.ValueText}({op.ParameterList.Parameters})",
-            ConversionOperatorDeclarationSyntax conversion => $"{(conversion.ImplicitOrExplicitKeyword.ValueText)} operator {conversion.Type}({conversion.ParameterList.Parameters})",
+            ConversionOperatorDeclarationSyntax conversion => $"{conversion.ImplicitOrExplicitKeyword.ValueText} operator {conversion.Type}({conversion.ParameterList.Parameters})",
             BaseTypeDeclarationSyntax nestedType => $"{nestedType.Kind()} {GetTypeName(nestedType)}",
             DelegateDeclarationSyntax @delegate => $"delegate {@delegate.ReturnType} {@delegate.Identifier.ValueText}({@delegate.ParameterList.Parameters})",
             _ => member.Kind().ToString(),
@@ -264,4 +268,3 @@ public sealed class FileOutlineCommand : IAgentCommand
         int column,
         IReadOnlyList<string> modifiers);
 }
-

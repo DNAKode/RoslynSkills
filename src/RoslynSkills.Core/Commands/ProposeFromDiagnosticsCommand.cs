@@ -1,5 +1,4 @@
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
+﻿using Microsoft.CodeAnalysis;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -22,6 +21,9 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
             return errors;
         }
 
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+
         if (!File.Exists(filePath))
         {
             errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
@@ -39,19 +41,26 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
         }
 
         string filePath = input.GetProperty("file_path").GetString()!;
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         int maxProposals = InputParsing.GetOptionalInt(input, "max_proposals", defaultValue: 25, minValue: 1, maxValue: 500);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 200, minValue: 1, maxValue: 2_000);
 
-        string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-        SyntaxTree tree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
-        IReadOnlyList<Diagnostic> diagnostics = CompilationDiagnostics.GetDiagnostics(new[] { tree }, cancellationToken);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
+
+        IReadOnlyList<Diagnostic> diagnostics = WorkspaceDiagnostics.GetDiagnosticsForCurrentFile(analysis, cancellationToken);
         NormalizedDiagnostic[] normalized = CompilationDiagnostics.Normalize(diagnostics).Take(maxDiagnostics).ToArray();
 
         List<RepairProposal> proposals = new();
         foreach (NormalizedDiagnostic diagnostic in normalized)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RepairProposal? proposal = CreateProposal(filePath, diagnostic);
+            RepairProposal? proposal = CreateProposal(analysis.FilePath, diagnostic);
             if (proposal is null)
             {
                 continue;
@@ -70,7 +79,10 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
 
         object data = new
         {
-            file_path = filePath,
+            file_path = analysis.FilePath,
+            workspace_path = workspacePath,
+            require_workspace = requireWorkspace,
+            workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             diagnostic_count = normalized.Length,
             proposal_count = proposals.Count,
             proposals = proposals.Select(p => p.proposal).ToArray(),
@@ -144,4 +156,3 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
         string operation_id,
         object input);
 }
-

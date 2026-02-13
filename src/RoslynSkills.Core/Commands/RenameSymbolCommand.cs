@@ -1,7 +1,5 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -30,6 +28,9 @@ public sealed class RenameSymbolCommand : IAgentCommand
         {
             return errors;
         }
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!SyntaxFacts.IsValidIdentifier(newName))
         {
@@ -79,26 +80,30 @@ public sealed class RenameSymbolCommand : IAgentCommand
                 });
         }
 
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
         bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 500);
 
-        string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-        SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
-        SyntaxNode root = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-        SourceText sourceText = syntaxTree.GetText(cancellationToken);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
 
-        if (line > sourceText.Lines.Count)
+        if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
                 null,
                 new[]
                 {
-                    new CommandError("invalid_input", $"Requested line '{line}' exceeds file line count ({sourceText.Lines.Count})."),
+                    new CommandError("invalid_input", $"Requested line '{line}' exceeds file line count ({analysis.SourceText.Lines.Count})."),
                 });
         }
 
-        int position = GetPositionFromLineColumn(sourceText, line, column);
-        SyntaxToken anchorToken = FindAnchorToken(root, position);
+        SyntaxToken anchorToken = analysis.FindAnchorToken(line, column);
         if (!anchorToken.IsKind(SyntaxKind.IdentifierToken))
         {
             return new CommandExecutionResult(
@@ -109,14 +114,7 @@ public sealed class RenameSymbolCommand : IAgentCommand
                 });
         }
 
-        CSharpCompilation compilation = CSharpCompilation.Create(
-            assemblyName: "RoslynSkills.Rename",
-            syntaxTrees: new[] { syntaxTree },
-            references: CompilationReferenceBuilder.BuildMetadataReferences(),
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        SemanticModel semanticModel = compilation.GetSemanticModel(syntaxTree);
-
-        ISymbol? targetSymbol = SymbolResolution.GetSymbolForToken(anchorToken, semanticModel, cancellationToken);
+        ISymbol? targetSymbol = SymbolResolution.GetSymbolForToken(anchorToken, analysis.SemanticModel, cancellationToken);
         if (targetSymbol is null)
         {
             return new CommandExecutionResult(
@@ -127,10 +125,10 @@ public sealed class RenameSymbolCommand : IAgentCommand
                 });
         }
 
-        SyntaxToken[] renameTokens = root
+        SyntaxToken[] renameTokens = analysis.Root
             .DescendantTokens(descendIntoTrivia: false)
             .Where(t => t.IsKind(SyntaxKind.IdentifierToken))
-            .Where(t => ShouldRenameToken(t, semanticModel, targetSymbol, cancellationToken))
+            .Where(t => ShouldRenameToken(t, analysis.SemanticModel, targetSymbol, cancellationToken))
             .ToArray();
 
         if (renameTokens.Length == 0)
@@ -144,18 +142,17 @@ public sealed class RenameSymbolCommand : IAgentCommand
         }
 
         // Preserve existing trivia and only mutate identifier text.
-        SyntaxNode newRoot = root.ReplaceTokens(
+        SyntaxNode newRoot = analysis.Root.ReplaceTokens(
             renameTokens,
             (_, rewritten) => SyntaxFactory.Identifier(
                 rewritten.LeadingTrivia,
                 newName,
                 rewritten.TrailingTrivia));
 
-        bool changed = !string.Equals(root.ToFullString(), newRoot.ToFullString(), StringComparison.Ordinal);
+        bool changed = !string.Equals(analysis.Source, newRoot.ToFullString(), StringComparison.Ordinal);
         string updatedSource = newRoot.ToFullString();
 
-        SyntaxTree updatedTree = CSharpSyntaxTree.ParseText(updatedSource, path: filePath, cancellationToken: cancellationToken);
-        IReadOnlyList<Diagnostic> updatedDiagnostics = CompilationDiagnostics.GetDiagnostics(new[] { updatedTree }, cancellationToken);
+        IReadOnlyList<Diagnostic> updatedDiagnostics = WorkspaceDiagnostics.GetDiagnosticsForUpdatedSource(analysis, updatedSource, cancellationToken);
         NormalizedDiagnostic[] normalizedDiagnostics = CompilationDiagnostics.Normalize(updatedDiagnostics)
             .Take(maxDiagnostics)
             .ToArray();
@@ -168,19 +165,22 @@ public sealed class RenameSymbolCommand : IAgentCommand
         bool wroteFile = false;
         if (apply && changed)
         {
-            await File.WriteAllTextAsync(filePath, updatedSource, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(analysis.FilePath, updatedSource, cancellationToken).ConfigureAwait(false);
             wroteFile = true;
         }
 
         int[] changedLines = renameTokens
-            .Select(t => sourceText.Lines.GetLineFromPosition(t.SpanStart).LineNumber + 1)
+            .Select(t => analysis.SourceText.Lines.GetLineFromPosition(t.SpanStart).LineNumber + 1)
             .Distinct()
             .OrderBy(v => v)
             .ToArray();
 
         object data = new
         {
-            file_path = filePath,
+            file_path = analysis.FilePath,
+            workspace_path = workspacePath,
+            require_workspace = requireWorkspace,
+            workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             line,
             column,
             old_name = anchorToken.ValueText,
@@ -223,34 +223,4 @@ public sealed class RenameSymbolCommand : IAgentCommand
 
         return SymbolEqualityComparer.Default.Equals(symbol.OriginalDefinition, targetSymbol.OriginalDefinition);
     }
-
-    private static int GetPositionFromLineColumn(SourceText sourceText, int line, int column)
-    {
-        TextLine textLine = sourceText.Lines[line - 1];
-        int requestedOffset = Math.Max(0, column - 1);
-        int maxOffset = Math.Max(0, textLine.Span.Length - 1);
-        int clampedOffset = Math.Min(requestedOffset, maxOffset);
-        return textLine.Start + clampedOffset;
-    }
-
-    private static SyntaxToken FindAnchorToken(SyntaxNode root, int position)
-    {
-        SyntaxToken token = root.FindToken(position);
-        if (token.IsKind(SyntaxKind.IdentifierToken))
-        {
-            return token;
-        }
-
-        if (position > 0)
-        {
-            SyntaxToken previousToken = root.FindToken(position - 1);
-            if (previousToken.IsKind(SyntaxKind.IdentifierToken))
-            {
-                return previousToken;
-            }
-        }
-
-        return token;
-    }
 }
-

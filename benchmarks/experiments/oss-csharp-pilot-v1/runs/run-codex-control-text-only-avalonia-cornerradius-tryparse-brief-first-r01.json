@@ -1,0 +1,39 @@
+{
+    "run_id":  "run-codex-control-text-only-avalonia-cornerradius-tryparse-brief-first-r01",
+    "task_id":  "avalonia-cornerradius-tryparse",
+    "condition_id":  "control-text-only",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "gpt-5.3-codex-spark",
+    "model_reasoning_effort":  "low",
+    "succeeded":  true,
+    "setup_passed":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "exit_code":  0,
+    "timed_out":  false,
+    "duration_seconds":  39.114,
+    "prompt_tokens":  162698,
+    "completion_tokens":  3353,
+    "total_tokens":  166051,
+    "tool_calls":  [
+
+                   ],
+    "context":  {
+                    "task_title":  "Avalonia CornerRadius.TryParse additive API + tests",
+                    "repo":  "AvaloniaUI/Avalonia",
+                    "repo_url":  "https://github.com/AvaloniaUI/Avalonia.git",
+                    "commit":  "d9a6ae517fd59ffd2dbbc674e81d59a628c1458f",
+                    "setup_checks":  [
+                                         "git submodule update --init --recursive",
+                                         "dotnet restore tests/Avalonia.Base.UnitTests/Avalonia.Base.UnitTests.csproj"
+                                     ],
+                    "acceptance_checks":  [
+                                              "dotnet test --project tests/Avalonia.Base.UnitTests/Avalonia.Base.UnitTests.csproj"
+                                          ],
+                    "task_prompt_file":  "prompts/avalonia-cornerradius-tryparse.md",
+                    "roslyn_guidance_profile":  "brief-first",
+                    "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-080511-oss-csharp-pilot\\avalonia-cornerradius-tryparse\\control-text-only\\run-codex-control-text-only-avalonia-cornerradius-tryparse-brief-first-r01",
+                    "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-control-text-avalonia-cor-brief-first-r01-e53d1b52"
+                }
+}

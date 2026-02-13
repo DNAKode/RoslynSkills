@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using RoslynSkills.Contracts;
@@ -25,6 +25,9 @@ public sealed class SymbolEnvelopeCommand : IAgentCommand
 
         InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         if (!File.Exists(filePath))
         {
             errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
@@ -52,7 +55,15 @@ public sealed class SymbolEnvelopeCommand : IAgentCommand
 
         int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 3, minValue: 0, maxValue: 30);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
         if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
@@ -89,13 +100,23 @@ public sealed class SymbolEnvelopeCommand : IAgentCommand
 
         object data = new
         {
+            query = new
+            {
+                file_path = analysis.FilePath,
+                line,
+                column,
+                context_lines = contextLines,
+                workspace_path = workspacePath,
+                require_workspace = requireWorkspace,
+                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
+            },
             symbol_id = CommandTextFormatting.GetStableSymbolId(symbol),
             display_name = symbol.ToDisplayString(),
             kind = symbol.Kind.ToString(),
             qualified_name = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
             assembly = symbol.ContainingAssembly?.Name,
-            project = (string?)null,
-            document_path = filePath,
+            project = analysis.WorkspaceContext.project_path,
+            document_path = analysis.FilePath,
             span = new
             {
                 start = token.SpanStart,

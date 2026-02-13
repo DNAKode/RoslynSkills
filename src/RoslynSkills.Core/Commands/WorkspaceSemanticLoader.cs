@@ -1,8 +1,9 @@
-using Microsoft.Build.Locator;
+﻿using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
+using System.Xml.Linq;
 
 namespace RoslynSkills.Core.Commands;
 
@@ -198,10 +199,13 @@ internal static class WorkspaceSemanticLoader
                 {
                     TryAddCandidate(candidates, seen, requestedWorkspacePath, "project");
                 }
-                else if (string.Equals(extension, ".sln", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase))
+                else if (string.Equals(extension, ".sln", StringComparison.OrdinalIgnoreCase))
                 {
                     TryAddCandidate(candidates, seen, requestedWorkspacePath, "solution");
+                }
+                else if (string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase))
+                {
+                    TryAddCandidate(candidates, seen, requestedWorkspacePath, "slnx");
                 }
                 else
                 {
@@ -241,7 +245,12 @@ internal static class WorkspaceSemanticLoader
         }
 
         string? autoStop = FindNearestGitRoot(fileDirectory);
-        IReadOnlyList<string> autoAncestors = GetAncestorDirectories(fileDirectory, stopAtDirectoryInclusive: autoStop);
+        // If no git root is present, do not traverse arbitrarily to the filesystem root. In that case
+        // workspace inference is ambiguous and we should avoid accidentally binding to unrelated parent
+        // projects/solutions higher up the directory tree.
+        IReadOnlyList<string> autoAncestors = string.IsNullOrWhiteSpace(autoStop)
+            ? new[] { NormalizePath(fileDirectory) }
+            : GetAncestorDirectories(fileDirectory, stopAtDirectoryInclusive: autoStop);
         AddCandidatesFromAncestors(autoAncestors, candidates, seen);
         if (candidates.Count == 0)
         {
@@ -327,10 +336,17 @@ internal static class WorkspaceSemanticLoader
             return;
         }
 
+        string extension = Path.GetExtension(normalized);
+        if (string.Equals(kind, "solution", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = "slnx";
+        }
+
         candidates.Add(new WorkspaceCandidate(normalized, kind));
     }
 
-    private static bool TryEnsureMsBuildRegistered(out string? error)
+    internal static bool TryEnsureMsBuildRegistered(out string? error)
     {
         lock (MsBuildRegistrationLock)
         {
@@ -377,9 +393,72 @@ internal static class WorkspaceSemanticLoader
             return project.Solution;
         }
 
+        if (string.Equals(candidate.kind, "slnx", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Path.GetExtension(candidate.path), ".slnx", StringComparison.OrdinalIgnoreCase))
+        {
+            return await OpenSlnxAsSolutionAsync(workspace, candidate.path, cancellationToken).ConfigureAwait(false);
+        }
+
         return await workspace.OpenSolutionAsync(candidate.path, cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task<Solution> OpenSlnxAsSolutionAsync(
+        MSBuildWorkspace workspace,
+        string slnxPath,
+        CancellationToken cancellationToken)
+    {
+        string fullPath = NormalizePath(slnxPath);
+        string directory = Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory;
+
+        XDocument doc = XDocument.Load(fullPath);
+        string[] projectPaths = doc
+            .Descendants("Project")
+            .Select(e => (string?)e.Attribute("Path"))
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => NormalizePath(Path.GetFullPath(Path.Combine(directory, p!))))
+            .Distinct(PathComparer)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (projectPaths.Length == 0)
+        {
+            throw new InvalidOperationException($".slnx file '{fullPath}' did not contain any <Project Path=...> entries.");
+        }
+
+        Solution? last = null;
+        HashSet<string> loaded = workspace.CurrentSolution.Projects
+            .Select(p => p.FilePath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => NormalizePath(p!))
+            .ToHashSet(PathComparer);
+
+        foreach (string projectPath in projectPaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (loaded.Contains(projectPath))
+            {
+                continue;
+            }
+
+            try
+            {
+                Project project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken).ConfigureAwait(false);
+                last = project.Solution;
+                if (!string.IsNullOrWhiteSpace(project.FilePath))
+                {
+                    loaded.Add(NormalizePath(project.FilePath));
+                }
+            }
+            catch (Exception ex) when (ex.Message.Contains("already part of the workspace", StringComparison.OrdinalIgnoreCase))
+            {
+                // MSBuildWorkspace can load referenced projects transitively. If the .slnx lists those projects too,
+                // subsequent explicit opens can fail; treat that as non-fatal.
+            }
+        }
+
+        return last ?? workspace.CurrentSolution;
+    }
 
 
     private static string? FindNearestGitRoot(string startDirectory)
@@ -534,3 +613,6 @@ internal static class WorkspaceSemanticLoader
         string? plan_error,
         IReadOnlyList<WorkspaceCandidate> candidates);
 }
+
+
+

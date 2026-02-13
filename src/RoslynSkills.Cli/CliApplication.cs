@@ -654,12 +654,13 @@ Workflow:
                 break;
 
             case "diag.get_solution_snapshot":
+            case "diag.get_workspace_snapshot":
                 if (positionalArgs.Length > 1)
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "diag.get_solution_snapshot [directory-path] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, $"{commandId} [directory-path] [--option value ...]"));
                     return false;
                 }
 
@@ -812,6 +813,7 @@ Workflow:
             "ctx.member_source" => true,
             "diag.get_file_diagnostics" => true,
             "diag.get_solution_snapshot" => true,
+            "diag.get_workspace_snapshot" => true,
             "repair.propose_from_diagnostics" => true,
             "nav.find_symbol" => true,
             "edit.rename_symbol" => true,
@@ -1215,7 +1217,8 @@ Workflow:
             }
         }
 
-        if (string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "diag.get_workspace_snapshot", StringComparison.OrdinalIgnoreCase))
         {
             int files = TryGetInt(element, "total_files", out int tf) ? tf : -1;
             int diagnostics = TryGetInt(element, "total_diagnostics", out int td) ? td : -1;
@@ -1543,6 +1546,7 @@ Workflow:
                 ctx.member_source <file-path> <line> <column> [member|body]
                 diag.get_file_diagnostics <file-path>
                 diag.get_solution_snapshot [directory-path]
+                diag.get_workspace_snapshot [directory-path]
                 repair.propose_from_diagnostics <file-path>
                 nav.find_symbol <file-path> <symbol-name>
                 edit.rename_symbol <file-path> <line> <column> <new-name>

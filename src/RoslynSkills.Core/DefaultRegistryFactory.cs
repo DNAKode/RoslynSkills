@@ -22,6 +22,7 @@ public static class DefaultRegistryFactory
             new GetFileDiagnosticsCommand(),
             new GetAfterEditDiagnosticsCommand(),
             new GetSolutionSnapshotCommand(),
+            new GetWorkspaceSnapshotCommand(),
             new DiagnosticsDiffCommand(),
             new RenameSymbolCommand(),
             new ChangeSignatureCommand(),

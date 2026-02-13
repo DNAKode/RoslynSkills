@@ -34,7 +34,7 @@ Pit-of-success contract:
 - Orient: `quickstart`
 - Disambiguate args: `describe-command <command-id>`
 - Execute semantic-first: `nav.*`, `ctx.*`, `diag.*` before text fallback
-- Verify workspace binding: inspect `workspace_context.mode` on nav/diag file commands (use `--require-workspace true` for fail-closed checks)
+- Verify workspace binding: inspect `workspace_context.mode` on semantic file commands (nav/ctx/diag) and use `--require-workspace true` for fail-closed checks
 - Verify before finalize: diagnostics + build/tests
 
 Prefer Roslyn commands for navigation, context, diagnostics, repair, and structured edits before text-only fallbacks.
@@ -99,6 +99,8 @@ scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 
 scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 25 --mode body --include-source-text true --context-lines-before 2
 scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs
 scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs --workspace-path src/RoslynSkills.Core/RoslynSkills.Core.csproj --require-workspace true
+scripts\roscli.cmd diag.get_workspace_snapshot src --brief true --require-workspace true
+scripts\roscli.cmd diag.get_workspace_snapshot src --require-workspace true --workspace-path RoslynSkills.slnx
 scripts\roscli.cmd diag.get_solution_snapshot src --brief true
 scripts\roscli.cmd diag.get_solution_snapshot src --mode compact --severity-filter Error --severity-filter Warning
 scripts\roscli.cmd nav.find_symbol src/RoslynSkills.Cli/CliApplication.cs TryGetCommandAndInputAsync --brief true --max-results 200
@@ -144,11 +146,21 @@ Also supported:
 
 ## Diagnostic triage workflow
 
+Prefer workspace-backed triage for project code:
+
+```powershell
+scripts\roscli.cmd diag.get_workspace_snapshot src --brief true --require-workspace true
+```
+
+Use `diag.get_solution_snapshot` only for ad-hoc file set compilation (it may report false missing-reference/type errors for real projects when no .csproj/.sln context is loaded).
+
 Use `diag.get_solution_snapshot` in progressive detail:
 
 1. Brief triage (lowest payload):
 
 ```powershell
+scripts\roscli.cmd diag.get_workspace_snapshot src --brief true --require-workspace true
+scripts\roscli.cmd diag.get_workspace_snapshot src --require-workspace true --workspace-path RoslynSkills.slnx
 scripts\roscli.cmd diag.get_solution_snapshot src --brief true
 ```
 

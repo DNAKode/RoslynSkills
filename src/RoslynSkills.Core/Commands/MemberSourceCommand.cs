@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
@@ -26,6 +26,9 @@ public sealed class MemberSourceCommand : IAgentCommand
 
         InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
         {
@@ -85,7 +88,15 @@ public sealed class MemberSourceCommand : IAgentCommand
         int contextAfter = InputParsing.GetOptionalInt(input, "context_lines_after", defaultValue: 0, minValue: 0, maxValue: 500);
         int maxChars = InputParsing.GetOptionalInt(input, "max_chars", defaultValue: 8_000, minValue: 200, maxValue: 200_000);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
         if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
@@ -145,7 +156,7 @@ public sealed class MemberSourceCommand : IAgentCommand
         {
             ["query"] = new
             {
-                file_path = filePath,
+                file_path = analysis.FilePath,
                 line,
                 column,
                 mode = modeRaw,
@@ -156,6 +167,9 @@ public sealed class MemberSourceCommand : IAgentCommand
                 context_lines_before = contextBefore,
                 context_lines_after = contextAfter,
                 max_chars = maxChars,
+                workspace_path = workspacePath,
+                require_workspace = requireWorkspace,
+                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             },
             ["member"] = new
             {
