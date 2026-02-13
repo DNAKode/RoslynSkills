@@ -1,6 +1,7 @@
-﻿# Approach Matrix (v0.1.6-preview.13)
+﻿# Approach Matrix (v0.1.6-preview.14)
 
-Date: 2026-02-13  
+Date: 2026-02-13
+Published: v0.1.6-preview.14  
 Purpose: consolidate current evidence across approaches/scenarios and separate experimental confounds from Roslyn-tooling learnings.
 
 ## Sources
