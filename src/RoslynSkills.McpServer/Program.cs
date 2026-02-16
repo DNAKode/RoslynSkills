@@ -867,6 +867,38 @@ internal static class Program
             return;
         }
 
+        if (string.Equals(commandId, "ctx.file_outline", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["include_usings"] = BoolProperty("Include using/import directives in response.");
+            properties["include_members"] = BoolProperty("Include member outlines for each type.");
+            properties["max_types"] = IntProperty("Maximum type declarations returned.", 1);
+            properties["max_members"] = IntProperty("Maximum member declarations returned.", 1);
+            required.Add("file_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "ctx.member_source", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["line"] = IntProperty("1-based line number for member anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for member anchor.", 1);
+            properties["mode"] = StringProperty("member or body.");
+            properties["brief"] = BoolProperty("Compact output; omits source text by default.");
+            properties["include_source_text"] = BoolProperty("Include extracted source snippet.");
+            properties["include_line_numbers"] = BoolProperty("Prefix snippet lines with line numbers.");
+            properties["include_trivia"] = BoolProperty("Include leading/trailing trivia when computing spans.");
+            properties["context_lines_before"] = IntProperty("Additional lines before extracted span.", 0);
+            properties["context_lines_after"] = IntProperty("Additional lines after extracted span.", 0);
+            properties["max_chars"] = IntProperty("Maximum characters returned for source text.", 1);
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            return;
+        }
+
         if (string.Equals(commandId, "query.batch", StringComparison.OrdinalIgnoreCase))
         {
             properties["queries"] = new JsonObject
@@ -1024,6 +1056,8 @@ internal static class Program
             {
                 "roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true",
                 "roslyn://command/ctx.search_text?pattern=RemoteUserAction&roots=src&mode=literal&max_results=100",
+                "roslyn://command/ctx.file_outline?file_path=Target.vb&include_members=true&max_members=80",
+                "roslyn://command/ctx.member_source?file_path=Target.vb&line=22&column=17&mode=body&brief=true",
                 "roslyn://command/nav.find_invocations?file_path=Target.cs&line=12&column=15&brief=true",
                 "roslyn://command/nav.call_hierarchy?file_path=Target.cs&line=12&column=15&direction=both&max_depth=2&brief=true",
                 "roslyn://command/nav.call_path?source_file_path=Caller.cs&source_line=12&source_column=15&target_file_path=Target.cs&target_line=48&target_column=18&max_depth=8&brief=true",

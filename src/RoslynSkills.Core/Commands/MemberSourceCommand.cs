@@ -1,9 +1,10 @@
-﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
 using System.Text;
 using System.Text.Json;
+using CSharpSyntax = Microsoft.CodeAnalysis.CSharp.Syntax;
+using VbSyntax = Microsoft.CodeAnalysis.VisualBasic.Syntax;
 
 namespace RoslynSkills.Core.Commands;
 
@@ -97,6 +98,7 @@ public sealed class MemberSourceCommand : IAgentCommand
         {
             return workspaceError;
         }
+
         if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
@@ -113,21 +115,48 @@ public sealed class MemberSourceCommand : IAgentCommand
                 new[] { new CommandError("invalid_target", "No syntax node exists at the provided location.") });
         }
 
-        MemberDeclarationSyntax? member = anchorNode
-            .AncestorsAndSelf()
-            .OfType<MemberDeclarationSyntax>()
-            .FirstOrDefault(m => m is not BaseNamespaceDeclarationSyntax);
+        SyntaxNode memberNode;
+        TextSpan targetSpan;
+        ISymbol? symbol;
+        string memberName;
 
-        if (member is null)
+        if (string.Equals(analysis.Language, LanguageNames.VisualBasic, StringComparison.Ordinal))
         {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("invalid_target", "The provided line/column does not resolve to a member declaration.") });
+            SyntaxNode? vbMemberNode = FindVbMemberNode(anchorNode, preferBodyContainer: mode == SourceMode.Body);
+            if (vbMemberNode is null)
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("invalid_target", "The provided line/column does not resolve to a member declaration.") });
+            }
+
+            memberNode = vbMemberNode;
+            targetSpan = ResolveVbTargetSpan(memberNode, mode, includeTrivia);
+            symbol = GetVbMemberSymbol(memberNode, analysis.SemanticModel, cancellationToken);
+            memberName = GetVbMemberName(memberNode, symbol);
+        }
+        else
+        {
+            CSharpSyntax.MemberDeclarationSyntax? csharpMember = anchorNode
+                .AncestorsAndSelf()
+                .OfType<CSharpSyntax.MemberDeclarationSyntax>()
+                .FirstOrDefault(m => m is not CSharpSyntax.BaseNamespaceDeclarationSyntax);
+
+            if (csharpMember is null)
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("invalid_target", "The provided line/column does not resolve to a member declaration.") });
+            }
+
+            memberNode = csharpMember;
+            SyntaxNode targetNode = ResolveCSharpTargetNode(csharpMember, mode);
+            targetSpan = includeTrivia ? targetNode.FullSpan : targetNode.Span;
+            symbol = analysis.SemanticModel.GetDeclaredSymbol(csharpMember, cancellationToken);
+            memberName = GetCSharpMemberName(csharpMember);
         }
 
-        SyntaxNode targetNode = ResolveTargetNode(member, mode);
-        TextSpan memberSpan = includeTrivia ? member.FullSpan : member.Span;
-        TextSpan targetSpan = includeTrivia ? targetNode.FullSpan : targetNode.Span;
+        TextSpan memberSpan = includeTrivia ? memberNode.FullSpan : memberNode.Span;
         LinePositionSpan memberLineSpan = analysis.SourceText.Lines.GetLinePositionSpan(memberSpan);
         LinePositionSpan targetLineSpan = analysis.SourceText.Lines.GetLinePositionSpan(targetSpan);
 
@@ -151,7 +180,6 @@ public sealed class MemberSourceCommand : IAgentCommand
             sourceCharacterCount = source.Length;
         }
 
-        ISymbol? declaredSymbol = analysis.SemanticModel.GetDeclaredSymbol(member, cancellationToken);
         Dictionary<string, object?> data = new()
         {
             ["query"] = new
@@ -173,10 +201,10 @@ public sealed class MemberSourceCommand : IAgentCommand
             },
             ["member"] = new
             {
-                member_kind = member.Kind().ToString(),
-                member_name = GetMemberName(member),
-                symbol_display = declaredSymbol?.ToDisplayString(),
-                symbol_id = declaredSymbol is null ? null : CommandTextFormatting.GetStableSymbolId(declaredSymbol),
+                member_kind = CommandLanguageServices.GetSyntaxKindName(memberNode),
+                member_name = memberName,
+                symbol_display = symbol?.ToDisplayString(),
+                symbol_id = symbol is null ? null : CommandTextFormatting.GetStableSymbolId(symbol),
                 declaration_start_line = memberLineSpan.Start.Line + 1,
                 declaration_end_line = Math.Max(memberLineSpan.Start.Line + 1, memberLineSpan.End.Line + 1),
                 source_start_line = snippetStartLine,
@@ -191,11 +219,11 @@ public sealed class MemberSourceCommand : IAgentCommand
                     character_count = sourceCharacterCount,
                 }
                 : new
-            {
-                omitted = true,
-                truncated = false,
-                character_count = sourceCharacterCount,
-            },
+                {
+                    omitted = true,
+                    truncated = false,
+                    character_count = sourceCharacterCount,
+                },
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
@@ -219,7 +247,7 @@ public sealed class MemberSourceCommand : IAgentCommand
         return false;
     }
 
-    private static SyntaxNode ResolveTargetNode(MemberDeclarationSyntax member, SourceMode mode)
+    private static SyntaxNode ResolveCSharpTargetNode(CSharpSyntax.MemberDeclarationSyntax member, SourceMode mode)
     {
         if (mode != SourceMode.Body)
         {
@@ -228,14 +256,183 @@ public sealed class MemberSourceCommand : IAgentCommand
 
         return member switch
         {
-            BaseMethodDeclarationSyntax method when method.Body is not null => method.Body,
-            BaseMethodDeclarationSyntax method when method.ExpressionBody is not null => method.ExpressionBody.Expression,
-            PropertyDeclarationSyntax property when property.AccessorList is not null => property.AccessorList,
-            PropertyDeclarationSyntax property when property.ExpressionBody is not null => property.ExpressionBody.Expression,
-            IndexerDeclarationSyntax indexer when indexer.AccessorList is not null => indexer.AccessorList,
-            IndexerDeclarationSyntax indexer when indexer.ExpressionBody is not null => indexer.ExpressionBody.Expression,
-            EventDeclarationSyntax eventDeclaration when eventDeclaration.AccessorList is not null => eventDeclaration.AccessorList,
+            CSharpSyntax.BaseMethodDeclarationSyntax method when method.Body is not null => method.Body,
+            CSharpSyntax.BaseMethodDeclarationSyntax method when method.ExpressionBody is not null => method.ExpressionBody.Expression,
+            CSharpSyntax.PropertyDeclarationSyntax property when property.AccessorList is not null => property.AccessorList,
+            CSharpSyntax.PropertyDeclarationSyntax property when property.ExpressionBody is not null => property.ExpressionBody.Expression,
+            CSharpSyntax.IndexerDeclarationSyntax indexer when indexer.AccessorList is not null => indexer.AccessorList,
+            CSharpSyntax.IndexerDeclarationSyntax indexer when indexer.ExpressionBody is not null => indexer.ExpressionBody.Expression,
+            CSharpSyntax.EventDeclarationSyntax eventDeclaration when eventDeclaration.AccessorList is not null => eventDeclaration.AccessorList,
             _ => member,
+        };
+    }
+
+    private static SyntaxNode? FindVbMemberNode(SyntaxNode anchorNode, bool preferBodyContainer)
+    {
+        SyntaxNode? firstMatch = null;
+        foreach (SyntaxNode candidate in anchorNode.AncestorsAndSelf())
+        {
+            if (candidate is VbSyntax.NamespaceBlockSyntax)
+            {
+                continue;
+            }
+
+            if (!IsVbMemberNode(candidate))
+            {
+                continue;
+            }
+
+            firstMatch ??= candidate;
+            if (preferBodyContainer && IsVbBodyContainer(candidate))
+            {
+                return candidate;
+            }
+
+            if (!preferBodyContainer)
+            {
+                return candidate;
+            }
+        }
+
+        return firstMatch;
+    }
+
+    private static bool IsVbBodyContainer(SyntaxNode node)
+    {
+        return node is VbSyntax.MethodBlockBaseSyntax
+            or VbSyntax.PropertyBlockSyntax
+            or VbSyntax.EventBlockSyntax;
+    }
+
+    private static bool IsVbMemberNode(SyntaxNode node)
+    {
+        return node is VbSyntax.MethodBlockBaseSyntax
+            or VbSyntax.MethodStatementSyntax
+            or VbSyntax.PropertyBlockSyntax
+            or VbSyntax.PropertyStatementSyntax
+            or VbSyntax.FieldDeclarationSyntax
+            or VbSyntax.EventBlockSyntax
+            or VbSyntax.EventStatementSyntax
+            or VbSyntax.EnumMemberDeclarationSyntax
+            or VbSyntax.DelegateStatementSyntax
+            or VbSyntax.ClassBlockSyntax
+            or VbSyntax.StructureBlockSyntax
+            or VbSyntax.InterfaceBlockSyntax
+            or VbSyntax.ModuleBlockSyntax
+            or VbSyntax.EnumBlockSyntax;
+    }
+
+    private static TextSpan ResolveVbTargetSpan(SyntaxNode memberNode, SourceMode mode, bool includeTrivia)
+    {
+        if (mode != SourceMode.Body)
+        {
+            return includeTrivia ? memberNode.FullSpan : memberNode.Span;
+        }
+
+        return memberNode switch
+        {
+            VbSyntax.MethodBlockBaseSyntax methodBlock => BuildBodySpan(methodBlock.Statements, methodBlock, includeTrivia),
+            VbSyntax.PropertyBlockSyntax propertyBlock => BuildBodySpan(propertyBlock.Accessors, propertyBlock, includeTrivia),
+            VbSyntax.EventBlockSyntax eventBlock => BuildBodySpan(eventBlock.Accessors, eventBlock, includeTrivia),
+            _ => includeTrivia ? memberNode.FullSpan : memberNode.Span,
+        };
+    }
+
+    private static TextSpan BuildBodySpan<TNode>(SyntaxList<TNode> nodes, SyntaxNode fallback, bool includeTrivia)
+        where TNode : SyntaxNode
+    {
+        if (nodes.Count == 0)
+        {
+            return includeTrivia ? fallback.FullSpan : fallback.Span;
+        }
+
+        TNode first = nodes[0];
+        TNode last = nodes[nodes.Count - 1];
+        int start = includeTrivia ? first.FullSpan.Start : first.Span.Start;
+        int end = includeTrivia ? last.FullSpan.End : last.Span.End;
+        return TextSpan.FromBounds(start, end);
+    }
+
+    private static string GetVbMemberName(SyntaxNode memberNode, ISymbol? symbol)
+    {
+        if (!string.IsNullOrWhiteSpace(symbol?.Name))
+        {
+            return symbol!.Name;
+        }
+
+        return memberNode switch
+        {
+            VbSyntax.MethodBlockBaseSyntax methodBlock => GetVbMethodBaseName(methodBlock.BlockStatement),
+            VbSyntax.MethodStatementSyntax methodStatement => methodStatement.Identifier.ValueText,
+            VbSyntax.SubNewStatementSyntax => "New",
+            VbSyntax.OperatorStatementSyntax => "Operator",
+            VbSyntax.PropertyBlockSyntax propertyBlock => propertyBlock.PropertyStatement.Identifier.ValueText,
+            VbSyntax.PropertyStatementSyntax propertyStatement => propertyStatement.Identifier.ValueText,
+            VbSyntax.FieldDeclarationSyntax field => string.Join(", ", field.Declarators.SelectMany(d => d.Names).Select(n => n.Identifier.ValueText)),
+            VbSyntax.EventBlockSyntax eventBlock => eventBlock.EventStatement.Identifier.ValueText,
+            VbSyntax.EventStatementSyntax eventStatement => eventStatement.Identifier.ValueText,
+            VbSyntax.EnumMemberDeclarationSyntax enumMember => enumMember.Identifier.ValueText,
+            VbSyntax.DelegateStatementSyntax delegateStatement => delegateStatement.Identifier.ValueText,
+            VbSyntax.ClassBlockSyntax classBlock => classBlock.ClassStatement.Identifier.ValueText,
+            VbSyntax.StructureBlockSyntax structureBlock => structureBlock.StructureStatement.Identifier.ValueText,
+            VbSyntax.InterfaceBlockSyntax interfaceBlock => interfaceBlock.InterfaceStatement.Identifier.ValueText,
+            VbSyntax.ModuleBlockSyntax moduleBlock => moduleBlock.ModuleStatement.Identifier.ValueText,
+            VbSyntax.EnumBlockSyntax enumBlock => enumBlock.EnumStatement.Identifier.ValueText,
+            _ => CommandLanguageServices.GetSyntaxKindName(memberNode),
+        };
+    }
+
+    private static string GetVbMethodBaseName(VbSyntax.MethodBaseSyntax methodBase)
+    {
+        return methodBase switch
+        {
+            VbSyntax.MethodStatementSyntax methodStatement => methodStatement.Identifier.ValueText,
+            VbSyntax.SubNewStatementSyntax => "New",
+            VbSyntax.OperatorStatementSyntax => "Operator",
+            _ => methodBase.Kind().ToString(),
+        };
+    }
+
+    private static ISymbol? GetVbMemberSymbol(
+        SyntaxNode memberNode,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        SyntaxToken token = memberNode switch
+        {
+            VbSyntax.MethodBlockBaseSyntax methodBlock => GetVbMethodBaseIdentifierToken(methodBlock.BlockStatement),
+            VbSyntax.MethodStatementSyntax methodStatement => methodStatement.Identifier,
+            VbSyntax.PropertyBlockSyntax propertyBlock => propertyBlock.PropertyStatement.Identifier,
+            VbSyntax.PropertyStatementSyntax propertyStatement => propertyStatement.Identifier,
+            VbSyntax.FieldDeclarationSyntax field => field.Declarators.SelectMany(d => d.Names).FirstOrDefault()?.Identifier ?? default,
+            VbSyntax.EventBlockSyntax eventBlock => eventBlock.EventStatement.Identifier,
+            VbSyntax.EventStatementSyntax eventStatement => eventStatement.Identifier,
+            VbSyntax.EnumMemberDeclarationSyntax enumMember => enumMember.Identifier,
+            VbSyntax.DelegateStatementSyntax delegateStatement => delegateStatement.Identifier,
+            VbSyntax.ClassBlockSyntax classBlock => classBlock.ClassStatement.Identifier,
+            VbSyntax.StructureBlockSyntax structureBlock => structureBlock.StructureStatement.Identifier,
+            VbSyntax.InterfaceBlockSyntax interfaceBlock => interfaceBlock.InterfaceStatement.Identifier,
+            VbSyntax.ModuleBlockSyntax moduleBlock => moduleBlock.ModuleStatement.Identifier,
+            VbSyntax.EnumBlockSyntax enumBlock => enumBlock.EnumStatement.Identifier,
+            _ => memberNode.GetFirstToken(),
+        };
+
+        if (token.RawKind == 0)
+        {
+            return null;
+        }
+
+        return SymbolResolution.GetSymbolForToken(token, semanticModel, cancellationToken);
+    }
+
+    private static SyntaxToken GetVbMethodBaseIdentifierToken(VbSyntax.MethodBaseSyntax methodBase)
+    {
+        return methodBase switch
+        {
+            VbSyntax.MethodStatementSyntax methodStatement => methodStatement.Identifier,
+            VbSyntax.SubNewStatementSyntax ctor => ctor.NewKeyword,
+            VbSyntax.OperatorStatementSyntax op => op.OperatorToken,
+            _ => default,
         };
     }
 
@@ -261,23 +458,23 @@ public sealed class MemberSourceCommand : IAgentCommand
         return builder.ToString();
     }
 
-    private static string GetMemberName(MemberDeclarationSyntax member)
+    private static string GetCSharpMemberName(CSharpSyntax.MemberDeclarationSyntax member)
     {
         return member switch
         {
-            MethodDeclarationSyntax method => method.Identifier.ValueText,
-            ConstructorDeclarationSyntax constructor => constructor.Identifier.ValueText,
-            DestructorDeclarationSyntax destructor => destructor.Identifier.ValueText,
-            PropertyDeclarationSyntax property => property.Identifier.ValueText,
-            FieldDeclarationSyntax field => string.Join(", ", field.Declaration.Variables.Select(v => v.Identifier.ValueText)),
-            EventDeclarationSyntax @event => @event.Identifier.ValueText,
-            EventFieldDeclarationSyntax eventField => string.Join(", ", eventField.Declaration.Variables.Select(v => v.Identifier.ValueText)),
-            IndexerDeclarationSyntax => "this[]",
-            OperatorDeclarationSyntax op => $"operator {op.OperatorToken.ValueText}",
-            ConversionOperatorDeclarationSyntax conversion => conversion.Type.ToString(),
-            BaseTypeDeclarationSyntax typeDeclaration => typeDeclaration.Identifier.ValueText,
-            DelegateDeclarationSyntax @delegate => @delegate.Identifier.ValueText,
-            GlobalStatementSyntax => "<global>",
+            CSharpSyntax.MethodDeclarationSyntax method => method.Identifier.ValueText,
+            CSharpSyntax.ConstructorDeclarationSyntax constructor => constructor.Identifier.ValueText,
+            CSharpSyntax.DestructorDeclarationSyntax destructor => destructor.Identifier.ValueText,
+            CSharpSyntax.PropertyDeclarationSyntax property => property.Identifier.ValueText,
+            CSharpSyntax.FieldDeclarationSyntax field => string.Join(", ", field.Declaration.Variables.Select(v => v.Identifier.ValueText)),
+            CSharpSyntax.EventDeclarationSyntax @event => @event.Identifier.ValueText,
+            CSharpSyntax.EventFieldDeclarationSyntax eventField => string.Join(", ", eventField.Declaration.Variables.Select(v => v.Identifier.ValueText)),
+            CSharpSyntax.IndexerDeclarationSyntax => "this[]",
+            CSharpSyntax.OperatorDeclarationSyntax op => $"operator {op.OperatorToken.ValueText}",
+            CSharpSyntax.ConversionOperatorDeclarationSyntax conversion => conversion.Type.ToString(),
+            CSharpSyntax.BaseTypeDeclarationSyntax typeDeclaration => typeDeclaration.Identifier.ValueText,
+            CSharpSyntax.DelegateDeclarationSyntax @delegate => @delegate.Identifier.ValueText,
+            CSharpSyntax.GlobalStatementSyntax => "<global>",
             _ => member.Kind().ToString(),
         };
     }
@@ -288,4 +485,3 @@ public sealed class MemberSourceCommand : IAgentCommand
         Body = 1,
     }
 }
-

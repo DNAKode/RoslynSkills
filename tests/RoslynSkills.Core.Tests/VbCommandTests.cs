@@ -325,6 +325,126 @@ public sealed class VbCommandTests
     }
 
     [Fact]
+    public async Task FileOutlineCommand_ReturnsTypeAndMemberStructureInVb()
+    {
+        string filePath = WriteTempFile(
+            """
+            Imports System
+
+            Namespace Demo.Tools
+                Public Class Worker
+                    Public Property Value As Integer
+
+                    Public Sub Run()
+                        Console.WriteLine(Value)
+                    End Sub
+                End Class
+            End Namespace
+            """,
+            ".vb");
+
+        try
+        {
+            FileOutlineCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"type_name\":\"Worker\"", json);
+            Assert.Contains("\"member_name\":\"Run\"", json);
+            Assert.Contains("\"using_count\":1", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task MemberSourceCommand_ReturnsBodySnippetForAnchoredVbMethod()
+    {
+        string filePath = WriteTempFile(
+            """
+            Public Class Calculator
+                Public Function Add(left As Integer, right As Integer) As Integer
+                    Return left + right
+                End Function
+            End Class
+            """,
+            ".vb");
+
+        try
+        {
+            MemberSourceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 2,
+                column = 25,
+                mode = "body",
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"member_name\":\"Add\"", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task MemberSourceCommand_BriefMode_OmitsSourceTextByDefaultInVb()
+    {
+        string filePath = WriteTempFile(
+            """
+            Public Class Calculator
+                Public Function Add(left As Integer, right As Integer) As Integer
+                    Return left + right
+                End Function
+            End Class
+            """,
+            ".vb");
+
+        try
+        {
+            MemberSourceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 2,
+                column = 25,
+                mode = "body",
+                brief = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement query = doc.RootElement.GetProperty("query");
+            Assert.True(query.GetProperty("brief").GetBoolean());
+            Assert.False(query.GetProperty("include_source_text").GetBoolean());
+
+            JsonElement source = doc.RootElement.GetProperty("source");
+            Assert.True(source.GetProperty("omitted").GetBoolean());
+            Assert.False(source.TryGetProperty("text", out _));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task FindImplementationsAndOverrides_WorkForVbMembers()
     {
         string filePath = WriteTempFile(
