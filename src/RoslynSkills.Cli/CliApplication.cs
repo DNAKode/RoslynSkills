@@ -833,6 +833,42 @@ Workflow:
                 input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
+            case "analyze.cfg":
+                if (positionalArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
+                    !int.TryParse(positionalArgs[1], out int cfgLine) ||
+                    !int.TryParse(positionalArgs[2], out int cfgColumn))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "analyze.cfg <file-path> <line> <column> [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["line"] = cfgLine;
+                input["column"] = cfgColumn;
+                break;
+
+            case "analyze.dataflow_slice":
+                if (positionalArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
+                    !int.TryParse(positionalArgs[1], out int dataflowLine) ||
+                    !int.TryParse(positionalArgs[2], out int dataflowColumn))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "analyze.dataflow_slice <file-path> <line> <column> [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["line"] = dataflowLine;
+                input["column"] = dataflowColumn;
+                break;
+
             case "analyze.dependency_violations":
                 if (positionalArgs.Length < 3 || string.IsNullOrWhiteSpace(positionalArgs[0]))
                 {
@@ -1043,6 +1079,8 @@ Workflow:
             "nav.call_hierarchy" => true,
             "nav.call_path" => true,
             "analyze.unused_private_symbols" => true,
+            "analyze.cfg" => true,
+            "analyze.dataflow_slice" => true,
             "analyze.dependency_violations" => true,
             "analyze.impact_slice" => true,
             "analyze.override_coverage" => true,
@@ -1512,6 +1550,26 @@ Workflow:
             }
         }
 
+        if (string.Equals(commandId, "analyze.cfg", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetObject(element, "cfg_summary", out JsonElement cfgSummary) &&
+                TryGetInt(cfgSummary, "total_blocks", out int blocks) &&
+                TryGetInt(cfgSummary, "total_edges", out int edges))
+            {
+                return $"blocks={blocks}, edges={edges}";
+            }
+        }
+
+        if (string.Equals(commandId, "analyze.dataflow_slice", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetObject(element, "counts", out JsonElement counts) &&
+                TryGetInt(counts, "read_inside", out int readInside) &&
+                TryGetInt(counts, "written_inside", out int writtenInside))
+            {
+                return $"read_inside={readInside}, written_inside={writtenInside}";
+            }
+        }
+
         if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
         {
             if (TryGetObject(element, "analysis_scope", out JsonElement scope) &&
@@ -1901,6 +1959,38 @@ Workflow:
             };
         }
 
+        if (string.Equals(commandId, "analyze.cfg", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "analyze.cfg <file-path> <line> <column> [--option value ...]",
+                run = "run analyze.cfg --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true,\"max_blocks\":200,\"max_edges\":500}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "brief", "max_blocks", "max_edges", "workspace_path", "require_workspace" },
+                notes = new[]
+                {
+                    "Stable flow-analysis command backed by Roslyn ControlFlowGraph APIs.",
+                    "For project-backed files, set require_workspace=true to fail closed if context falls back to ad_hoc.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "analyze.dataflow_slice", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "analyze.dataflow_slice <file-path> <line> <column> [--option value ...]",
+                run = "run analyze.dataflow_slice --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true,\"max_symbols\":200}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "brief", "max_symbols", "workspace_path", "require_workspace" },
+                notes = new[]
+                {
+                    "Advanced flow-analysis command backed by Roslyn AnalyzeDataFlow APIs.",
+                    "Region selection is anchor-based and may expand to an enclosing executable node.",
+                },
+            };
+        }
+
         if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
         {
             return new
@@ -2115,6 +2205,8 @@ Workflow:
                 nav.call_hierarchy <file-path> <line> <column>
                 nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column>
                 analyze.unused_private_symbols <workspace-path>
+                analyze.cfg <file-path> <line> <column>
+                analyze.dataflow_slice <file-path> <line> <column>
                 analyze.dependency_violations <workspace-path> <layer1> <layer2> [layerN ...]
                 analyze.impact_slice <file-path> <line> <column>
                 analyze.override_coverage <workspace-path>
@@ -2136,6 +2228,8 @@ Workflow:
                 nav.call_hierarchy <file-path> <line> <column> --direction both --max-depth 2 --brief true
                 nav.call_path <source-file> <source-line> <source-column> <target-file> <target-line> <target-column> --max-depth 8 --brief true
                 analyze.unused_private_symbols src --brief true --max-symbols 100
+                analyze.cfg <file-path> <line> <column> --brief true --max-blocks 120 --max-edges 260
+                analyze.dataflow_slice <file-path> <line> <column> --brief true --max-symbols 120
                 analyze.dependency_violations src MyApp.Web MyApp.Application MyApp.Domain --direction toward_end --brief true
                 analyze.impact_slice <file-path> <line> <column> --brief true --include-callers true --include-callees true
                 analyze.override_coverage src --coverage-threshold 0.6 --brief true

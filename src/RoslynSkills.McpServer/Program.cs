@@ -722,6 +722,37 @@ internal static class Program
             return;
         }
 
+        if (string.Equals(commandId, "analyze.cfg", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["line"] = IntProperty("1-based line number for executable region anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for executable region anchor.", 1);
+            properties["brief"] = BoolProperty("Return compact CFG payload.");
+            properties["max_blocks"] = IntProperty("Maximum CFG blocks returned.", 1);
+            properties["max_edges"] = IntProperty("Maximum CFG edges returned.", 1);
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            return;
+        }
+
+        if (string.Equals(commandId, "analyze.dataflow_slice", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["line"] = IntProperty("1-based line number for data-flow anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for data-flow anchor.", 1);
+            properties["brief"] = BoolProperty("Return compact symbol sets.");
+            properties["max_symbols"] = IntProperty("Maximum symbols returned per set.", 1);
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            return;
+        }
+
         if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
         {
             properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
@@ -997,6 +1028,8 @@ internal static class Program
                 "roslyn://command/nav.call_hierarchy?file_path=Target.cs&line=12&column=15&direction=both&max_depth=2&brief=true",
                 "roslyn://command/nav.call_path?source_file_path=Caller.cs&source_line=12&source_column=15&target_file_path=Target.cs&target_line=48&target_column=18&max_depth=8&brief=true",
                 "roslyn://command/analyze.unused_private_symbols?workspace_path=src&brief=true&max_symbols=100",
+                "roslyn://command/analyze.cfg?file_path=Target.cs&line=12&column=15&brief=true&max_blocks=120&max_edges=260",
+                "roslyn://command/analyze.dataflow_slice?file_path=Target.cs&line=12&column=15&brief=true&max_symbols=120",
                 "roslyn://command/analyze.impact_slice?file_path=Target.cs&line=12&column=15&include_references=true&include_callers=true&brief=true",
                 "roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true",
                 "roslyn://command/diag.get_file_diagnostics?file_path=Target.cs",

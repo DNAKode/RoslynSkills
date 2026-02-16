@@ -355,6 +355,7 @@ Parallelization notes:
 `R-016` Add Codex CLI and Claude Code runner logging for tool offered/used events (P6)  
 `R-017` Implement scorer for adoption metrics and post-run agent self-report fields (P6/P8)  
 `R-018` Build first realistic A/B trial pack on public OSS tasks (P8)
+`R-019` Read and reflect on arXiv:2602.12670; extract actionable implications for RoslynSkills benchmark/task design and command-surface evolution (P8/P10)
 
 ## 6. Command Language Design Work (Deep Focus)
 

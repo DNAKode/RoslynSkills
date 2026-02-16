@@ -126,6 +126,34 @@ internal static class InputParsing
             $"Property '{propertyName}' must be a boolean when provided."));
     }
 
+    public static void ValidateOptionalInt(
+        JsonElement input,
+        string propertyName,
+        List<CommandError> errors,
+        int minValue,
+        int maxValue)
+    {
+        if (!input.TryGetProperty(propertyName, out JsonElement property))
+        {
+            return;
+        }
+
+        if (property.ValueKind != JsonValueKind.Number || !property.TryGetInt32(out int value))
+        {
+            errors.Add(new CommandError(
+                "invalid_input",
+                $"Property '{propertyName}' must be a 32-bit integer when provided."));
+            return;
+        }
+
+        if (value < minValue || value > maxValue)
+        {
+            errors.Add(new CommandError(
+                "invalid_input",
+                $"Property '{propertyName}' must be between {minValue} and {maxValue} when provided."));
+        }
+    }
+
     public static string[] GetOptionalStringArray(JsonElement input, string propertyName)
     {
         if (!input.TryGetProperty(propertyName, out JsonElement property) || property.ValueKind != JsonValueKind.Array)

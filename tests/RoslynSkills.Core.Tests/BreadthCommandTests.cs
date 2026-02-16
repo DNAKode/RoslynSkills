@@ -262,6 +262,16 @@ public sealed class BreadthCommandTests
             public class BatchSample
             {
                 private int _unused = 1;
+
+                public int Run(int value)
+                {
+                    if (value > 0)
+                    {
+                        return value + 1;
+                    }
+
+                    return value - 1;
+                }
             }
             """);
 
@@ -293,6 +303,19 @@ public sealed class BreadthCommandTests
                             max_findings = 20,
                         },
                     },
+                    new
+                    {
+                        command_id = "analyze.cfg",
+                        input = new
+                        {
+                            file_path = filePath,
+                            line = 5,
+                            column = 21,
+                            brief = true,
+                            max_blocks = 40,
+                            max_edges = 80,
+                        },
+                    },
                 },
             });
 
@@ -300,9 +323,10 @@ public sealed class BreadthCommandTests
 
             Assert.True(result.Ok);
             string json = JsonSerializer.Serialize(result.Data);
-            Assert.Contains("\"total_executed\":2", json);
+            Assert.Contains("\"total_executed\":3", json);
             Assert.Contains("\"command_id\":\"analyze.unused_private_symbols\"", json);
             Assert.Contains("\"command_id\":\"analyze.async_risk_scan\"", json);
+            Assert.Contains("\"command_id\":\"analyze.cfg\"", json);
         }
         finally
         {
@@ -407,6 +431,102 @@ public sealed class BreadthCommandTests
             {
                 Directory.Delete(root, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public async Task CfgCommand_ReturnsBlockAndEdgeSummary()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class FlowSample
+            {
+                public int Compute(int value)
+                {
+                    if (value > 0)
+                    {
+                        return value + 1;
+                    }
+
+                    return value - 1;
+                }
+            }
+            """);
+
+        try
+        {
+            CfgCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 3,
+                column = 20,
+                brief = true,
+                max_blocks = 50,
+                max_edges = 100,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"cfg_summary\":", json);
+            Assert.Contains("\"total_blocks\":", json);
+            Assert.Contains("\"total_edges\":", json);
+            Assert.Contains("\"blocks\":", json);
+            Assert.Contains("\"edges\":", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DataflowSliceCommand_ReturnsDataFlowSetsForAnchoredRegion()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class DataflowSample
+            {
+                public int Compute(int input)
+                {
+                    int value = input;
+                    if (value > 0)
+                    {
+                        value = value + 1;
+                    }
+
+                    return value;
+                }
+            }
+            """);
+
+        try
+        {
+            DataflowSliceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 7,
+                column = 25,
+                brief = true,
+                max_symbols = 50,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"dataflow\":", json);
+            Assert.Contains("\"read_inside\":", json);
+            Assert.Contains("\"written_inside\":", json);
+            Assert.Contains("\"anchor_symbol\":", json);
+            Assert.Contains("value", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
         }
     }
 

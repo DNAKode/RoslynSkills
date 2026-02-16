@@ -234,6 +234,97 @@ public sealed class VbCommandTests
     }
 
     [Fact]
+    public async Task CfgCommand_ReturnsBlockAndEdgeSummaryInVb()
+    {
+        string filePath = WriteTempFile(
+            """
+            Public Class FlowSample
+                Public Function Compute(value As Integer) As Integer
+                    If value > 0 Then
+                        Return value + 1
+                    End If
+
+                    Return value - 1
+                End Function
+            End Class
+            """,
+            ".vb");
+
+        try
+        {
+            CfgCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 2,
+                column = 25,
+                brief = true,
+                max_blocks = 50,
+                max_edges = 100,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"cfg_summary\":", json);
+            Assert.Contains("\"total_blocks\":", json);
+            Assert.Contains("\"total_edges\":", json);
+            Assert.Contains("\"language\":\"Visual Basic\"", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DataflowSliceCommand_ReturnsDataFlowSetsInVb()
+    {
+        string filePath = WriteTempFile(
+            """
+            Public Class DataflowSample
+                Public Function Compute(input As Integer) As Integer
+                    Dim value As Integer = input
+                    If value > 0 Then
+                        value = value + 1
+                    End If
+
+                    Return value
+                End Function
+            End Class
+            """,
+            ".vb");
+
+        try
+        {
+            DataflowSliceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 5,
+                column = 25,
+                brief = true,
+                max_symbols = 50,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"dataflow\":", json);
+            Assert.Contains("\"read_inside\":", json);
+            Assert.Contains("\"written_inside\":", json);
+            Assert.Contains("\"anchor_symbol\":", json);
+            Assert.Contains("value", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task FindImplementationsAndOverrides_WorkForVbMembers()
     {
         string filePath = WriteTempFile(

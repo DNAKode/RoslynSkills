@@ -15,6 +15,8 @@ public static class DefaultRegistryFactory
             new FindInvocationsCommand(),
             new CallHierarchyCommand(),
             new CallPathCommand(),
+            new CfgCommand(),
+            new DataflowSliceCommand(),
             new UnusedPrivateSymbolsCommand(),
             new DependencyViolationsCommand(),
             new ImpactSliceCommand(),
