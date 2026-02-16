@@ -62,6 +62,7 @@ public sealed class CliApplication
     {
         bool compact = HasOption(args, "--compact");
         bool idsOnly = HasOption(args, "--ids-only");
+        bool stableOnly = HasOption(args, "--stable-only");
         object pitOfSuccessHints = BuildPitOfSuccessHints();
 
         if (idsOnly)
@@ -79,11 +80,12 @@ public sealed class CliApplication
                     Version: EnvelopeVersion,
                     Data: new
                     {
-                        usage = "list-commands [--compact] [--ids-only]",
+                        usage = "list-commands [--compact] [--ids-only] [--stable-only]",
                         options = new[]
                         {
-                            new { name = "--compact", summary = "Return compact descriptors only (id + mutates_state)." },
+                            new { name = "--compact", summary = "Return compact descriptors only (id + mutates_state + maturity + traits)." },
                             new { name = "--ids-only", summary = "Return command ids only." },
+                            new { name = "--stable-only", summary = "Filter to commands with maturity=stable." },
                         },
                     },
                     Errors: Array.Empty<CommandError>(),
@@ -91,7 +93,17 @@ public sealed class CliApplication
             return 0;
         }
 
-        IReadOnlyList<CommandDescriptor> commands = _registry.ListCommands();
+        IReadOnlyList<CommandDescriptor> allCommands = _registry.ListCommands();
+        IReadOnlyList<CommandDescriptor> commands = stableOnly
+            ? allCommands.Where(c => string.Equals(c.Maturity, CommandMaturity.Stable, StringComparison.OrdinalIgnoreCase)).ToArray()
+            : allCommands;
+
+        object metadata = new
+        {
+            filter = stableOnly ? "stable_only" : "all",
+            maturity_counts = BuildMaturityCounts(allCommands),
+        };
+
         object data = idsOnly
             ? new
             {
@@ -100,6 +112,7 @@ public sealed class CliApplication
                     .Select(c => c.Id)
                     .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
+                metadata,
                 pit_of_success = pitOfSuccessHints,
             }
             : compact
@@ -111,15 +124,19 @@ public sealed class CliApplication
                         {
                             c.Id,
                             c.MutatesState,
+                            c.Maturity,
+                            traits = c.Traits ?? Array.Empty<string>(),
                         })
                         .OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase)
                         .ToArray(),
+                    metadata,
                     pit_of_success = pitOfSuccessHints,
                 }
                 : new
                 {
                     total = commands.Count,
                     commands,
+                    metadata,
                     pit_of_success = pitOfSuccessHints,
                 };
         await WriteEnvelopeAsync(
@@ -207,18 +224,20 @@ public sealed class CliApplication
                     pit_of_success = new[]
                     {
                         "Start with: roscli list-commands --ids-only",
+                        "Use roscli list-commands --stable-only --ids-only for strict/default-safe command selection.",
                         "If arguments are unclear: roscli describe-command <command-id>",
                         "If you need agent-facing defaults quickly: copy the prompt block below.",
                         "Use nav.* / ctx.* / diag.* before text fallback.",
                         "Keep payloads brief-first (for example --brief true) before expanding detail.",
                         "For file diagnostics/symbol queries, confirm workspace_context.mode is 'workspace'.",
-                        "If workspace_context.mode is 'ad_hoc', rerun with --workspace-path <.csproj|.sln|.slnx|dir>.",
+                        "If workspace_context.mode is 'ad_hoc', rerun with --workspace-path <.csproj|.vbproj|.sln|.slnx|dir>.",
                         "For project-backed files, prefer --require-workspace true to fail closed instead of silently using ad_hoc.",
                         "Validate with diagnostics and build/tests before finalizing.",
                     },
                     first_minute_sequence = new[]
                     {
                         "roscli list-commands --ids-only",
+                        "roscli list-commands --stable-only --ids-only",
                         "roscli describe-command session.open",
                         "roscli describe-command edit.create_file",
                         "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --require-workspace true",
@@ -262,13 +281,14 @@ public sealed class CliApplication
                         },
                     },
                     agent_intro_prompt = """
-Use roscli for C# work in this session.
+Use roscli for C# and VB.NET work in this session.
 Workflow:
 1) run "roscli list-commands --ids-only" once.
-2) run "roscli quickstart" and follow its recipes.
-3) if argument shape is unclear, run "roscli describe-command <command-id>".
-4) prefer nav.* / ctx.* / diag.* before text-only fallback.
-5) run diagnostics/build/tests before finalizing.
+2) run "roscli list-commands --stable-only --ids-only" when task constraints are unclear.
+3) run "roscli quickstart" and follow its recipes.
+4) if argument shape is unclear, run "roscli describe-command <command-id>".
+5) prefer nav.* / ctx.* / diag.* before text-only fallback.
+6) run diagnostics/build/tests before finalizing.
 """,
                     complementary_tools = new[]
                     {
@@ -279,6 +299,7 @@ Workflow:
                     {
                         "session.open only supports .cs/.csx files.",
                         "Do not use session.open on .sln/.slnx/.csproj files.",
+                        "Maturity policy: default to stable commands; use advanced/experimental only when needed and after describe-command.",
                         "diag/nav file commands auto-resolve nearest workspace; check workspace_context.mode in responses.",
                         "If workspace_context.mode is ad_hoc for a project file, pass --workspace-path explicitly.",
                         "For project-backed files where ad_hoc is unacceptable, set --require-workspace true.",
@@ -634,6 +655,36 @@ Workflow:
             TryPromoteOptionToPositional(options, "symbol_name", ref positionalArgs, 1);
         }
 
+        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "line", ref positionalArgs, 1);
+            TryPromoteOptionToPositional(options, "column", ref positionalArgs, 2);
+        }
+
+        if (string.Equals(commandId, "nav.call_hierarchy", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "line", ref positionalArgs, 1);
+            TryPromoteOptionToPositional(options, "column", ref positionalArgs, 2);
+        }
+
+        if (string.Equals(commandId, "nav.call_path", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "source_file_path", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "source_line", ref positionalArgs, 1);
+            TryPromoteOptionToPositional(options, "source_column", ref positionalArgs, 2);
+            TryPromoteOptionToPositional(options, "target_file_path", ref positionalArgs, 3);
+            TryPromoteOptionToPositional(options, "target_line", ref positionalArgs, 4);
+            TryPromoteOptionToPositional(options, "target_column", ref positionalArgs, 5);
+        }
+
+        if (string.Equals(commandId, "ctx.search_text", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "pattern", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "root", ref positionalArgs, 1);
+        }
+
         Dictionary<string, object?> input = new(StringComparer.OrdinalIgnoreCase);
 
         switch (commandId)
@@ -707,6 +758,164 @@ Workflow:
 
                 input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 input["symbol_name"] = positionalArgs[1];
+                break;
+
+            case "nav.find_invocations":
+                if (positionalArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
+                    !int.TryParse(positionalArgs[1], out int invocationLine) ||
+                    !int.TryParse(positionalArgs[2], out int invocationColumn))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "nav.find_invocations <file-path> <line> <column> [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["line"] = invocationLine;
+                input["column"] = invocationColumn;
+                break;
+
+            case "nav.call_hierarchy":
+                if (positionalArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
+                    !int.TryParse(positionalArgs[1], out int callHierarchyLine) ||
+                    !int.TryParse(positionalArgs[2], out int callHierarchyColumn))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> <line> <column> [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["line"] = callHierarchyLine;
+                input["column"] = callHierarchyColumn;
+                break;
+
+            case "nav.call_path":
+                if (positionalArgs.Length != 6 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
+                    !int.TryParse(positionalArgs[1], out int sourceLine) ||
+                    !int.TryParse(positionalArgs[2], out int sourceColumn) ||
+                    string.IsNullOrWhiteSpace(positionalArgs[3]) ||
+                    !int.TryParse(positionalArgs[4], out int targetLine) ||
+                    !int.TryParse(positionalArgs[5], out int targetColumn))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column> [--option value ...]"));
+                    return false;
+                }
+
+                input["source_file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["source_line"] = sourceLine;
+                input["source_column"] = sourceColumn;
+                input["target_file_path"] = NormalizeCliPathValue(positionalArgs[3]);
+                input["target_line"] = targetLine;
+                input["target_column"] = targetColumn;
+                break;
+
+            case "analyze.unused_private_symbols":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "analyze.unused_private_symbols <workspace-path> [--option value ...]"));
+                    return false;
+                }
+
+                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                break;
+
+            case "analyze.dependency_violations":
+                if (positionalArgs.Length < 3 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "analyze.dependency_violations <workspace-path> <layer1> <layer2> [layerN ...] [--option value ...]"));
+                    return false;
+                }
+
+                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["layers"] = positionalArgs.Skip(1).ToArray();
+                break;
+
+            case "analyze.impact_slice":
+                if (positionalArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
+                    !int.TryParse(positionalArgs[1], out int impactLine) ||
+                    !int.TryParse(positionalArgs[2], out int impactColumn))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "analyze.impact_slice <file-path> <line> <column> [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["line"] = impactLine;
+                input["column"] = impactColumn;
+                break;
+
+            case "analyze.override_coverage":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "analyze.override_coverage <workspace-path> [--option value ...]"));
+                    return false;
+                }
+
+                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                break;
+
+            case "analyze.async_risk_scan":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "analyze.async_risk_scan <workspace-path> [--option value ...]"));
+                    return false;
+                }
+
+                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                break;
+
+            case "ctx.search_text":
+                if (positionalArgs.Length < 1 ||
+                    positionalArgs.Length > 2 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "ctx.search_text <pattern> [root-or-file] [--option value ...]"));
+                    return false;
+                }
+
+                input["patterns"] = new[] { positionalArgs[0] };
+                if (positionalArgs.Length == 2 && !string.IsNullOrWhiteSpace(positionalArgs[1]))
+                {
+                    string normalizedPath = NormalizeCliPathValue(positionalArgs[1]);
+                    if (File.Exists(normalizedPath))
+                    {
+                        input["file_path"] = normalizedPath;
+                    }
+                    else
+                    {
+                        input["roots"] = new[] { normalizedPath };
+                    }
+                }
                 break;
 
             case "edit.rename_symbol":
@@ -791,6 +1000,20 @@ Workflow:
 
         foreach ((string key, object? value) in options)
         {
+            if (string.Equals(key, "roots", StringComparison.OrdinalIgnoreCase))
+            {
+                if (TryConvertOptionToStringArray(value, out string[] roots))
+                {
+                    input[key] = roots.Select(NormalizeCliPathValue).ToArray();
+                }
+                else
+                {
+                    input[key] = value;
+                }
+
+                continue;
+            }
+
             if (value is string pathValue && IsPathLikeOptionName(key))
             {
                 input[key] = NormalizeCliPathValue(pathValue);
@@ -816,6 +1039,15 @@ Workflow:
             "diag.get_workspace_snapshot" => true,
             "repair.propose_from_diagnostics" => true,
             "nav.find_symbol" => true,
+            "nav.find_invocations" => true,
+            "nav.call_hierarchy" => true,
+            "nav.call_path" => true,
+            "analyze.unused_private_symbols" => true,
+            "analyze.dependency_violations" => true,
+            "analyze.impact_slice" => true,
+            "analyze.override_coverage" => true,
+            "analyze.async_risk_scan" => true,
+            "ctx.search_text" => true,
             "edit.rename_symbol" => true,
             "edit.create_file" => true,
             "session.open" => true,
@@ -1062,6 +1294,45 @@ Workflow:
         return false;
     }
 
+    private static bool TryConvertOptionToStringArray(object? optionValue, out string[] values)
+    {
+        switch (optionValue)
+        {
+            case string stringValue when !string.IsNullOrWhiteSpace(stringValue):
+                values = [stringValue];
+                return true;
+
+            case string[] stringArray:
+                values = stringArray.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
+                return values.Length > 0;
+
+            case List<object?> list:
+                List<string> collected = new();
+                foreach (object? item in list)
+                {
+                    if (TryConvertOptionToSingleString(item, out string candidate) &&
+                        !string.IsNullOrWhiteSpace(candidate))
+                    {
+                        collected.Add(candidate);
+                    }
+                }
+
+                values = collected.ToArray();
+                return values.Length > 0;
+
+            case JsonElement element when element.ValueKind == JsonValueKind.Array:
+                values = element.EnumerateArray()
+                    .Where(item => item.ValueKind == JsonValueKind.String)
+                    .Select(item => item.GetString() ?? string.Empty)
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .ToArray();
+                return values.Length > 0;
+        }
+
+        values = Array.Empty<string>();
+        return false;
+    }
+
     private static object? AppendOptionValue(object? existing, object? incoming)
     {
         if (existing is List<object?> existingList)
@@ -1188,6 +1459,115 @@ Workflow:
                 return string.IsNullOrWhiteSpace(workspaceMode)
                     ? $"matches={totalMatches}"
                     : $"matches={totalMatches}, workspace={workspaceMode}";
+            }
+        }
+
+        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalMatches = TryGetInt(element, "total_matches", out int matches) ? matches : -1;
+            string workspaceMode = ResolveWorkspaceMode(element);
+            if (totalMatches >= 0)
+            {
+                return string.IsNullOrWhiteSpace(workspaceMode)
+                    ? $"matches={totalMatches}"
+                    : $"matches={totalMatches}, workspace={workspaceMode}";
+            }
+        }
+
+        if (string.Equals(commandId, "nav.call_hierarchy", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalNodes = TryGetInt(element, "total_nodes", out int nodes) ? nodes : -1;
+            int totalEdges = TryGetInt(element, "total_edges", out int edges) ? edges : -1;
+            string workspaceMode = ResolveWorkspaceMode(element);
+            if (totalNodes >= 0 || totalEdges >= 0)
+            {
+                string summary = $"nodes={Math.Max(totalNodes, 0)}, edges={Math.Max(totalEdges, 0)}";
+                return string.IsNullOrWhiteSpace(workspaceMode)
+                    ? summary
+                    : $"{summary}, workspace={workspaceMode}";
+            }
+        }
+
+        if (string.Equals(commandId, "nav.call_path", StringComparison.OrdinalIgnoreCase))
+        {
+            bool pathFound = TryGetBool(element, "path_found", out bool found) && found;
+            int pathEdgeLength = TryGetInt(element, "path_edge_length", out int edgeLength) ? edgeLength : -1;
+            string workspaceMode = ResolveWorkspaceMode(element);
+            if (pathEdgeLength >= 0 || pathFound)
+            {
+                string summary = $"path_found={pathFound.ToString().ToLowerInvariant()}, edges={Math.Max(pathEdgeLength, 0)}";
+                return string.IsNullOrWhiteSpace(workspaceMode)
+                    ? summary
+                    : $"{summary}, workspace={workspaceMode}";
+            }
+        }
+
+        if (string.Equals(commandId, "analyze.unused_private_symbols", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetObject(element, "analysis_scope", out JsonElement scope) &&
+                TryGetInt(scope, "unused_candidates", out int unused) &&
+                TryGetInt(scope, "total_candidates", out int total))
+            {
+                return $"unused={unused}, candidates={total}";
+            }
+        }
+
+        if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetObject(element, "analysis_scope", out JsonElement scope) &&
+                TryGetInt(scope, "total_violations", out int violations))
+            {
+                return $"violations={violations}";
+            }
+        }
+
+        if (string.Equals(commandId, "analyze.impact_slice", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetObject(element, "impact_counts", out JsonElement counts) &&
+                TryGetInt(counts, "total", out int total))
+            {
+                return $"impact_total={total}";
+            }
+        }
+
+        if (string.Equals(commandId, "analyze.override_coverage", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetObject(element, "analysis_scope", out JsonElement scope) &&
+                TryGetInt(scope, "findings", out int findings))
+            {
+                return $"findings={findings}";
+            }
+        }
+
+        if (string.Equals(commandId, "analyze.async_risk_scan", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetObject(element, "summary", out JsonElement summaryElement) &&
+                TryGetInt(summaryElement, "total_findings", out int findings))
+            {
+                return $"findings={findings}";
+            }
+        }
+
+        if (string.Equals(commandId, "ctx.search_text", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalMatches = TryGetInt(element, "total_matches", out int matches) ? matches : -1;
+            int filesScanned = TryGetInt(element, "files_scanned", out int scanned) ? scanned : -1;
+            if (totalMatches >= 0)
+            {
+                return filesScanned >= 0
+                    ? $"matches={totalMatches}, files={filesScanned}"
+                    : $"matches={totalMatches}";
+            }
+        }
+
+        if (string.Equals(commandId, "query.batch", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalExecuted = TryGetInt(element, "total_executed", out int executed) ? executed : -1;
+            int succeeded = TryGetInt(element, "succeeded", out int ok) ? ok : -1;
+            int failed = TryGetInt(element, "failed", out int fail) ? fail : -1;
+            if (totalExecuted >= 0)
+            {
+                return $"executed={totalExecuted}, ok={Math.Max(succeeded, 0)}, failed={Math.Max(failed, 0)}";
             }
         }
 
@@ -1447,9 +1827,169 @@ Workflow:
                 optional_properties = new[] { "brief", "max_results", "context_lines", "workspace_path", "require_workspace" },
                 notes = new[]
                 {
-                    "By default, roscli auto-resolves nearest .csproj/.sln/.slnx from file path.",
+                    "By default, roscli auto-resolves nearest .csproj/.vbproj/.sln/.slnx from file path.",
                     "If workspace_context.mode is 'ad_hoc', pass workspace_path explicitly.",
                     "Set require_workspace=true for project-backed files when ad_hoc fallback should fail closed.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.find_invocations <file-path> <line> <column> [--option value ...]",
+                run = "run nav.find_invocations --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "brief", "max_results", "context_lines", "include_object_creations", "workspace_path", "require_workspace" },
+                notes = new[]
+                {
+                    "Use line/column anchored on a method declaration or method reference token.",
+                    "For project-backed files, set require_workspace=true to fail closed if context falls back to ad_hoc.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.call_hierarchy", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.call_hierarchy <file-path> <line> <column> [--option value ...]",
+                run = "run nav.call_hierarchy --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"direction\":\"both\",\"max_depth\":2,\"brief\":true}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "direction", "max_depth", "max_nodes", "max_edges", "context_lines", "brief", "include_object_creations", "include_external", "include_generated", "workspace_path", "require_workspace" },
+                notes = new[]
+                {
+                    "nav.call_hierarchy is the canonical Roslyn-style call graph command.",
+                    "direction accepts incoming, outgoing, or both.",
+                    "Call hierarchy is recursive by depth and returns nodes+edges, unlike flat call-site queries.",
+                    "Advanced/heuristic command: may omit dynamic/reflection/DI dispatch paths.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.call_path", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column> [--option value ...]",
+                run = "run nav.call_path --input '{\"source_file_path\":\"src/Source.cs\",\"source_line\":12,\"source_column\":15,\"target_file_path\":\"src/Target.cs\",\"target_line\":40,\"target_column\":18,\"max_depth\":8,\"brief\":true}'",
+                required_properties = new[] { "source_file_path", "source_line", "source_column", "target_file_path", "target_line", "target_column" },
+                optional_properties = new[] { "max_depth", "max_nodes", "max_graph_edges", "context_lines", "brief", "include_object_creations", "include_external", "include_generated", "workspace_path", "require_workspace" },
+                notes = new[]
+                {
+                    "Finds a shortest outgoing call path from source method to target method.",
+                    "Experimental/heuristic command: dynamic dispatch, reflection, or DI-only edges may be missed.",
+                    "For project-backed files, set require_workspace=true to fail closed if context falls back to ad_hoc.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "analyze.unused_private_symbols", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "analyze.unused_private_symbols <workspace-path> [--option value ...]",
+                run = "run analyze.unused_private_symbols --input '{\"workspace_path\":\"src\",\"brief\":true,\"max_symbols\":200}'",
+                required_properties = new[] { "workspace_path" },
+                optional_properties = new[] { "include_generated", "max_files", "max_symbols", "brief" },
+                notes = new[]
+                {
+                    "Advanced/heuristic command: reflection and source-generated usage can be missed.",
+                    "Use max_symbols to keep output bounded in large repositories.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "analyze.dependency_violations <workspace-path> <layer1> <layer2> [layerN ...] [--option value ...]",
+                run = "run analyze.dependency_violations --input '{\"workspace_path\":\"src\",\"layers\":[\"MyApp.Web\",\"MyApp.Application\",\"MyApp.Domain\"],\"direction\":\"toward_end\",\"brief\":true}'",
+                required_properties = new[] { "workspace_path", "layers" },
+                optional_properties = new[] { "direction", "ignore_same_namespace", "include_generated", "max_files", "max_violations", "brief" },
+                notes = new[]
+                {
+                    "Experimental command: layer matching is namespace-prefix based.",
+                    "direction=toward_end means earlier layers cannot depend on later-disallowed direction (clean-architecture style ordering).",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "analyze.impact_slice", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "analyze.impact_slice <file-path> <line> <column> [--option value ...]",
+                run = "run analyze.impact_slice --input '{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":17,\"include_references\":true,\"include_callers\":true,\"include_callees\":true,\"brief\":true}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "workspace_path", "require_workspace", "include_references", "include_callers", "include_callees", "include_overrides", "include_implementations", "max_references", "max_callers", "max_callees", "max_related", "brief" },
+                notes = new[]
+                {
+                    "Impact slice is bounded and heuristic; dynamic dispatch/reflection edges can be missed.",
+                    "For project-backed files, set require_workspace=true to fail closed if context falls back to ad_hoc.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "analyze.override_coverage", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "analyze.override_coverage <workspace-path> [--option value ...]",
+                run = "run analyze.override_coverage --input '{\"workspace_path\":\"src\",\"coverage_threshold\":0.6,\"min_derived_types\":1,\"brief\":true}'",
+                required_properties = new[] { "workspace_path" },
+                optional_properties = new[] { "coverage_threshold", "min_derived_types", "include_generated", "max_files", "max_members", "brief" },
+                notes = new[]
+                {
+                    "Coverage is source-only and intended for hotspot triage.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "analyze.async_risk_scan", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "analyze.async_risk_scan <workspace-path> [--option value ...]",
+                run = "run analyze.async_risk_scan --input '{\"workspace_path\":\"src\",\"max_findings\":300,\"severity_filter\":[\"warning\",\"info\"],\"brief\":true}'",
+                required_properties = new[] { "workspace_path" },
+                optional_properties = new[] { "severity_filter", "include_generated", "max_files", "max_findings", "brief" },
+                notes = new[]
+                {
+                    "Experimental/heuristic command: review findings before changing behavior.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "ctx.search_text", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "ctx.search_text <pattern> [root-or-file] [--option value ...]",
+                run = "run ctx.search_text --input '{\"patterns\":[\"RemoteUserAction\",\"ReplicationUpdate\"],\"mode\":\"literal\",\"roots\":[\"src\"],\"max_results\":200}'",
+                required_properties = new[] { "pattern|patterns", "file_path|roots|workspace_path" },
+                optional_properties = new[] { "mode", "case_sensitive", "include_globs", "exclude_globs", "max_results", "max_files", "context_lines", "brief" },
+                notes = new[]
+                {
+                    "Scope is mandatory: set file_path, roots, or workspace_path.",
+                    "Use mode=regex for advanced matching; invalid regex patterns fail fast.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "query.batch", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                run = "run query.batch --input '{\"queries\":[{\"command_id\":\"ctx.search_text\",\"input\":{\"patterns\":[\"RemoteUserAction\"],\"roots\":[\"src\"]}},{\"command_id\":\"nav.find_invocations\",\"input\":{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":15}}],\"continue_on_error\":true}'",
+                required_properties = new[] { "queries" },
+                optional_properties = new[] { "continue_on_error" },
+                notes = new[]
+                {
+                    "query.batch supports read-only investigative commands only.",
+                    "Each query item must provide command_id and input.",
                 },
             };
         }
@@ -1464,7 +2004,7 @@ Workflow:
                 optional_properties = new[] { "workspace_path", "require_workspace" },
                 notes = new[]
                 {
-                    "By default, roscli auto-resolves nearest .csproj/.sln/.slnx from file path.",
+                    "By default, roscli auto-resolves nearest .csproj/.vbproj/.sln/.slnx from file path.",
                     "Response includes workspace_context.mode = workspace|ad_hoc.",
                     "Set require_workspace=true to fail closed when workspace resolution falls back to ad_hoc.",
                 },
@@ -1501,7 +2041,29 @@ Workflow:
                 "Use --workspace-path when auto workspace resolution falls back to ad_hoc.",
                 "Use --require-workspace true when ad_hoc fallback is unacceptable.",
                 "Prefer --input-stdin for complex JSON payloads.",
+                "Prefer stable commands by default; use advanced/experimental commands intentionally.",
             },
+            maturity = new
+            {
+                stable = "Default path: expected deterministic behavior and primary support.",
+                advanced = "Useful for deeper analysis; may be slower and/or partially heuristic.",
+                experimental = "Evolving contract; useful signals but lower stability guarantees.",
+            },
+        };
+    }
+
+    private static object BuildMaturityCounts(IReadOnlyList<CommandDescriptor> commands)
+    {
+        int stable = commands.Count(c => string.Equals(c.Maturity, CommandMaturity.Stable, StringComparison.OrdinalIgnoreCase));
+        int advanced = commands.Count(c => string.Equals(c.Maturity, CommandMaturity.Advanced, StringComparison.OrdinalIgnoreCase));
+        int experimental = commands.Count(c => string.Equals(c.Maturity, CommandMaturity.Experimental, StringComparison.OrdinalIgnoreCase));
+
+        return new
+        {
+            stable,
+            advanced,
+            experimental,
+            unknown = commands.Count - stable - advanced - experimental,
         };
     }
 
@@ -1525,7 +2087,7 @@ Workflow:
 
             Commands:
               version
-              list-commands [--compact] [--ids-only]
+              list-commands [--compact] [--ids-only] [--stable-only]
               describe-command <command-id>
               quickstart
               validate-input <command-id> [--input <json>|@<file>|-] [--input-stdin]
@@ -1549,6 +2111,15 @@ Workflow:
                 diag.get_workspace_snapshot [directory-path]
                 repair.propose_from_diagnostics <file-path>
                 nav.find_symbol <file-path> <symbol-name>
+                nav.find_invocations <file-path> <line> <column>
+                nav.call_hierarchy <file-path> <line> <column>
+                nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column>
+                analyze.unused_private_symbols <workspace-path>
+                analyze.dependency_violations <workspace-path> <layer1> <layer2> [layerN ...]
+                analyze.impact_slice <file-path> <line> <column>
+                analyze.override_coverage <workspace-path>
+                analyze.async_risk_scan <workspace-path>
+                ctx.search_text <pattern> [root-or-file]
                 edit.rename_symbol <file-path> <line> <column> <new-name>
                 edit.create_file <file-path> [--content <text>]
                 session.open <file-path> [session-id]
@@ -1560,6 +2131,15 @@ Workflow:
               - Direct shorthand also accepts command options:
                 ctx.file_outline <file-path> --include-members false --max-members 50
                 diag.get_file_diagnostics <file-path> --workspace-path src/MyProject/MyProject.csproj --require-workspace true
+                ctx.search_text "RemoteUserAction" src --mode literal --max-results 100
+                nav.find_invocations <file-path> <line> <column> --brief true --require-workspace true
+                nav.call_hierarchy <file-path> <line> <column> --direction both --max-depth 2 --brief true
+                nav.call_path <source-file> <source-line> <source-column> <target-file> <target-line> <target-column> --max-depth 8 --brief true
+                analyze.unused_private_symbols src --brief true --max-symbols 100
+                analyze.dependency_violations src MyApp.Web MyApp.Application MyApp.Domain --direction toward_end --brief true
+                analyze.impact_slice <file-path> <line> <column> --brief true --include-callers true --include-callees true
+                analyze.override_coverage src --coverage-threshold 0.6 --brief true
+                analyze.async_risk_scan src --max-findings 200 --severity-filter warning --severity-filter info
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - For nav/diag file commands, check response workspace_context.mode.
@@ -1567,6 +2147,8 @@ Workflow:
               - list-commands supports compact response modes:
                 list-commands --compact
                 list-commands --ids-only
+                list-commands --stable-only --ids-only
+              - Command maturity: stable (default-safe), advanced (deeper/slower or partially heuristic), experimental (evolving contract).
               - Use session.apply_text_edits with --input/--input-stdin for structured span edits.
               - Use session.apply_and_commit with --input/--input-stdin for one-shot edit+commit.
               - Use describe-command <command-id> when an agent is unsure about command arguments.

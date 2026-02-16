@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
 namespace RoslynSkills.Core.Commands;
@@ -25,25 +24,22 @@ internal static class CommandTextFormatting
         return string.Join(Environment.NewLine, lines);
     }
 
-    public static bool IsDeclarationToken(SyntaxToken token)
-        => token.Parent switch
+    public static bool IsDeclarationToken(
+        SyntaxToken token,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        ISymbol? symbol = SymbolResolution.GetSymbolForToken(token, semanticModel, cancellationToken);
+        if (symbol is null)
         {
-            ClassDeclarationSyntax classDecl => classDecl.Identifier == token,
-            StructDeclarationSyntax structDecl => structDecl.Identifier == token,
-            InterfaceDeclarationSyntax interfaceDecl => interfaceDecl.Identifier == token,
-            EnumDeclarationSyntax enumDecl => enumDecl.Identifier == token,
-            RecordDeclarationSyntax recordDecl => recordDecl.Identifier == token,
-            MethodDeclarationSyntax methodDecl => methodDecl.Identifier == token,
-            ConstructorDeclarationSyntax ctorDecl => ctorDecl.Identifier == token,
-            PropertyDeclarationSyntax propertyDecl => propertyDecl.Identifier == token,
-            VariableDeclaratorSyntax variableDecl => variableDecl.Identifier == token,
-            ParameterSyntax parameter => parameter.Identifier == token,
-            DelegateDeclarationSyntax delegateDecl => delegateDecl.Identifier == token,
-            EventDeclarationSyntax eventDecl => eventDecl.Identifier == token,
-            NamespaceDeclarationSyntax namespaceDecl => namespaceDecl.Name.ToString().EndsWith(token.ValueText, StringComparison.Ordinal),
-            FileScopedNamespaceDeclarationSyntax fileNamespaceDecl => fileNamespaceDecl.Name.ToString().EndsWith(token.ValueText, StringComparison.Ordinal),
-            _ => false,
-        };
+            return false;
+        }
+
+        return symbol.Locations.Any(location =>
+            location.IsInSource &&
+            location.SourceTree == token.SyntaxTree &&
+            location.SourceSpan.IntersectsWith(token.Span));
+    }
 
     public static string? GetStableSymbolId(ISymbol symbol)
     {
@@ -57,12 +53,27 @@ internal static class CommandTextFormatting
         return string.IsNullOrWhiteSpace(fallback) ? null : fallback;
     }
 
-    public static string[] GetContainingTypes(SyntaxToken token)
-        => token.Parent?
-            .Ancestors()
-            .OfType<BaseTypeDeclarationSyntax>()
-            .Select(t => t.Identifier.ValueText)
-            .Reverse()
-            .ToArray() ?? Array.Empty<string>();
+    public static string[] GetContainingTypes(
+        SyntaxToken token,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        ISymbol? symbol = SymbolResolution.GetSymbolForToken(token, semanticModel, cancellationToken);
+        if (symbol is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        List<string> containingTypes = new();
+        INamedTypeSymbol? current = symbol.ContainingType;
+        while (current is not null)
+        {
+            containingTypes.Add(current.Name);
+            current = current.ContainingType;
+        }
+
+        containingTypes.Reverse();
+        return containingTypes.ToArray();
+    }
 }
 

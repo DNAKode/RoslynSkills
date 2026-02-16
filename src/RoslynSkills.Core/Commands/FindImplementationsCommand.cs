@@ -1,5 +1,4 @@
 ﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -126,7 +125,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
         int maxResults,
         CancellationToken cancellationToken)
     {
-        foreach (BaseTypeDeclarationSyntax typeDeclaration in analysis.Root.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
+        foreach (SyntaxNode typeDeclaration in analysis.Root.DescendantNodes())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (matches.Count >= maxResults)
@@ -158,7 +157,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
 
             FileLinePositionSpan lineSpan = typeDeclaration.GetLocation().GetLineSpan();
             matches.Add(new ImplementationMatch(
-                kind: "TypeDeclaration",
+                kind: typeDeclaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
                 column: lineSpan.StartLinePosition.Character + 1,
                 symbol_display: candidate.ToDisplayString(),
@@ -173,7 +172,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
         int maxResults,
         CancellationToken cancellationToken)
     {
-        foreach (MethodDeclarationSyntax declaration in analysis.Root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+        foreach (SyntaxNode declaration in analysis.Root.DescendantNodes())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (matches.Count >= maxResults)
@@ -206,7 +205,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
 
             FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
             matches.Add(new ImplementationMatch(
-                kind: "MethodDeclaration",
+                kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
                 column: lineSpan.StartLinePosition.Character + 1,
                 symbol_display: candidate.ToDisplayString(),
@@ -221,7 +220,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
         int maxResults,
         CancellationToken cancellationToken)
     {
-        foreach (PropertyDeclarationSyntax declaration in analysis.Root.DescendantNodes().OfType<PropertyDeclarationSyntax>())
+        foreach (SyntaxNode declaration in analysis.Root.DescendantNodes())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (matches.Count >= maxResults)
@@ -252,7 +251,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
 
             FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
             matches.Add(new ImplementationMatch(
-                kind: "PropertyDeclaration",
+                kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
                 column: lineSpan.StartLinePosition.Character + 1,
                 symbol_display: candidate.ToDisplayString(),
@@ -267,7 +266,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
         int maxResults,
         CancellationToken cancellationToken)
     {
-        foreach (EventDeclarationSyntax declaration in analysis.Root.DescendantNodes().OfType<EventDeclarationSyntax>())
+        foreach (SyntaxNode declaration in analysis.Root.DescendantNodes())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (matches.Count >= maxResults)
@@ -298,7 +297,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
 
             FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
             matches.Add(new ImplementationMatch(
-                kind: "EventDeclaration",
+                kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
                 column: lineSpan.StartLinePosition.Character + 1,
                 symbol_display: candidate.ToDisplayString(),

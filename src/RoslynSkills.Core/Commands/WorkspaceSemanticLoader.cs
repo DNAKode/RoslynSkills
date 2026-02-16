@@ -1,6 +1,5 @@
 ﻿using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
 using System.Xml.Linq;
@@ -23,8 +22,9 @@ internal sealed record WorkspaceSemanticLoadResult(
     SyntaxTree syntax_tree,
     SyntaxNode root,
     SourceText source_text,
-    CSharpCompilation compilation,
+    Compilation compilation,
     SemanticModel semantic_model,
+    string language,
     WorkspaceContextInfo workspace_context);
 
 internal static class WorkspaceSemanticLoader
@@ -93,16 +93,12 @@ internal static class WorkspaceSemanticLoader
                             continue;
                         }
 
-                        CSharpCompilation? compilation = semanticModel.Compilation as CSharpCompilation;
-                        if (compilation is null)
-                        {
-                            Compilation? projectCompilation = await document.Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
-                            compilation = projectCompilation as CSharpCompilation;
-                        }
+                        Compilation? compilation = semanticModel.Compilation;
+                        compilation ??= await document.Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
 
                         if (compilation is null)
                         {
-                            fallbackReason = $"Workspace candidate '{candidate.path}' returned a non-C# compilation for '{normalizedFilePath}'.";
+                            fallbackReason = $"Workspace candidate '{candidate.path}' returned no compilation for '{normalizedFilePath}'.";
                             AddDistinctLimited(workspaceDiagnostics, candidateDiagnostics, maxCount: 30);
                             continue;
                         }
@@ -130,6 +126,7 @@ internal static class WorkspaceSemanticLoader
                             source_text: sourceText,
                             compilation: compilation,
                             semantic_model: semanticModel,
+                            language: document.Project.Language,
                             workspace_context: workspaceContext);
                     }
                     catch (Exception ex)
@@ -147,16 +144,24 @@ internal static class WorkspaceSemanticLoader
         }
 
         string source = await File.ReadAllTextAsync(normalizedFilePath, cancellationToken).ConfigureAwait(false);
-        SyntaxTree fallbackTree = CSharpSyntaxTree.ParseText(source, path: normalizedFilePath, cancellationToken: cancellationToken);
+        string fallbackLanguage = CommandLanguageServices.DetectLanguageFromFilePath(normalizedFilePath);
+        SyntaxTree fallbackTree = CommandLanguageServices.ParseSyntaxTree(
+            source,
+            normalizedFilePath,
+            fallbackLanguage,
+            cancellationToken);
         SyntaxNode fallbackRoot = await fallbackTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
         SourceText fallbackSourceText = fallbackTree.GetText(cancellationToken);
-        CSharpCompilation fallbackCompilation = CommandFileAnalysis.CreateCompilation("RoslynSkills.Command", new[] { fallbackTree });
+        Compilation fallbackCompilation = CommandFileAnalysis.CreateCompilation(
+            "RoslynSkills.Command",
+            new[] { fallbackTree },
+            fallbackLanguage);
         SemanticModel fallbackSemanticModel = fallbackCompilation.GetSemanticModel(fallbackTree);
 
         if (string.IsNullOrWhiteSpace(fallbackReason))
         {
             fallbackReason = candidatePlan.candidates.Count == 0
-                ? "No workspace candidate (.csproj/.sln/.slnx) could be inferred for this file path."
+                ? "No workspace candidate (.csproj/.vbproj/.sln/.slnx) could be inferred for this file path."
                 : "Workspace resolution failed; using ad-hoc file compilation.";
         }
 
@@ -178,6 +183,7 @@ internal static class WorkspaceSemanticLoader
             source_text: fallbackSourceText,
             compilation: fallbackCompilation,
             semantic_model: fallbackSemanticModel,
+            language: fallbackLanguage,
             workspace_context: fallbackContext);
     }
 
@@ -195,7 +201,8 @@ internal static class WorkspaceSemanticLoader
             if (File.Exists(requestedWorkspacePath))
             {
                 string extension = Path.GetExtension(requestedWorkspacePath);
-                if (string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(extension, ".vbproj", StringComparison.OrdinalIgnoreCase))
                 {
                     TryAddCandidate(candidates, seen, requestedWorkspacePath, "project");
                 }
@@ -209,7 +216,7 @@ internal static class WorkspaceSemanticLoader
                 }
                 else
                 {
-                    planError = $"Explicit workspace_path '{requestedWorkspacePath}' is not a .csproj/.sln/.slnx file.";
+                    planError = $"Explicit workspace_path '{requestedWorkspacePath}' is not a .csproj/.vbproj/.sln/.slnx file.";
                 }
             }
             else if (Directory.Exists(requestedWorkspacePath))
@@ -233,7 +240,7 @@ internal static class WorkspaceSemanticLoader
 
                 if (candidates.Count == 0)
                 {
-                    planError = $"No .csproj/.sln/.slnx files were found under explicit workspace_path '{requestedWorkspacePath}'.";
+                    planError = $"No .csproj/.vbproj/.sln/.slnx files were found under explicit workspace_path '{requestedWorkspacePath}'.";
                 }
             }
             else
@@ -254,7 +261,7 @@ internal static class WorkspaceSemanticLoader
         AddCandidatesFromAncestors(autoAncestors, candidates, seen);
         if (candidates.Count == 0)
         {
-            planError = $"No .csproj/.sln/.slnx files were found while traversing parent directories from '{fileDirectory}'.";
+            planError = $"No .csproj/.vbproj/.sln/.slnx files were found while traversing parent directories from '{fileDirectory}'.";
         }
 
         return new WorkspaceCandidatePlan(resolutionSource, requestedWorkspacePath, planError, candidates);
@@ -267,8 +274,7 @@ internal static class WorkspaceSemanticLoader
     {
         foreach (string directory in ancestors)
         {
-            foreach (string projectPath in Directory.EnumerateFiles(directory, "*.csproj", SearchOption.TopDirectoryOnly)
-                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            foreach (string projectPath in EnumerateProjectFiles(directory, SearchOption.TopDirectoryOnly))
             {
                 TryAddCandidate(candidates, seen, projectPath, "project");
             }
@@ -288,8 +294,7 @@ internal static class WorkspaceSemanticLoader
         List<WorkspaceCandidate> candidates,
         HashSet<string> seen)
     {
-        foreach (string projectPath in Directory.EnumerateFiles(directoryPath, "*.csproj", SearchOption.TopDirectoryOnly)
-                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        foreach (string projectPath in EnumerateProjectFiles(directoryPath, SearchOption.TopDirectoryOnly))
         {
             TryAddCandidate(candidates, seen, projectPath, "project");
         }
@@ -305,8 +310,7 @@ internal static class WorkspaceSemanticLoader
         List<WorkspaceCandidate> candidates,
         HashSet<string> seen)
     {
-        foreach (string projectPath in Directory.EnumerateFiles(directoryPath, "*.csproj", SearchOption.AllDirectories)
-                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        foreach (string projectPath in EnumerateProjectFiles(directoryPath, SearchOption.AllDirectories))
         {
             TryAddCandidate(candidates, seen, projectPath, "project");
         }
@@ -321,6 +325,13 @@ internal static class WorkspaceSemanticLoader
     {
         return Directory.EnumerateFiles(directoryPath, "*.sln", searchOption)
             .Concat(Directory.EnumerateFiles(directoryPath, "*.slnx", searchOption))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> EnumerateProjectFiles(string directoryPath, SearchOption searchOption)
+    {
+        return Directory.EnumerateFiles(directoryPath, "*.csproj", searchOption)
+            .Concat(Directory.EnumerateFiles(directoryPath, "*.vbproj", searchOption))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
     }
 
@@ -487,7 +498,7 @@ internal static class WorkspaceSemanticLoader
     private static Document? FindDocument(Solution solution, string filePath)
     {
         string normalizedFilePath = NormalizePath(filePath);
-        foreach (Project project in solution.Projects.Where(p => string.Equals(p.Language, LanguageNames.CSharp, StringComparison.Ordinal)))
+        foreach (Project project in solution.Projects)
         {
             foreach (Document document in project.Documents)
             {

@@ -22,13 +22,22 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("nav.find_symbol", output);
         Assert.Contains("nav.find_references", output);
+        Assert.Contains("nav.find_invocations", output);
+        Assert.Contains("nav.call_hierarchy", output);
         Assert.Contains("nav.find_implementations", output);
         Assert.Contains("nav.find_overrides", output);
         Assert.Contains("ctx.symbol_envelope", output);
         Assert.Contains("ctx.file_outline", output);
         Assert.Contains("ctx.member_source", output);
+        Assert.Contains("ctx.search_text", output);
         Assert.Contains("ctx.call_chain_slice", output);
         Assert.Contains("ctx.dependency_slice", output);
+        Assert.Contains("analyze.unused_private_symbols", output);
+        Assert.Contains("analyze.dependency_violations", output);
+        Assert.Contains("analyze.impact_slice", output);
+        Assert.Contains("analyze.override_coverage", output);
+        Assert.Contains("analyze.async_risk_scan", output);
+        Assert.Contains("query.batch", output);
         Assert.Contains("diag.get_file_diagnostics", output);
         Assert.Contains("diag.get_after_edit", output);
         Assert.Contains("diag.get_solution_snapshot", output);
@@ -75,6 +84,47 @@ public sealed class CliApplicationTests
         Assert.Contains("\"session.apply_and_commit\"", output);
         Assert.Contains("\"pit_of_success\": {", output);
         Assert.DoesNotContain("\"InputSchemaVersion\"", output);
+    }
+
+    [Fact]
+    public async Task ListCommands_CompactMode_IncludesMaturityMetadata()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "list-commands", "--compact" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"Maturity\":", output);
+        Assert.Contains("\"metadata\": {", output);
+        Assert.Contains("\"maturity_counts\": {", output);
+    }
+
+    [Fact]
+    public async Task ListCommands_StableOnly_FiltersAdvancedCommands()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "list-commands", "--stable-only", "--ids-only" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"filter\": \"stable_only\"", output);
+        Assert.Contains("\"nav.find_symbol\"", output);
+        Assert.DoesNotContain("\"ctx.call_chain_slice\"", output);
+        Assert.DoesNotContain("\"diag.get_workspace_snapshot\"", output);
     }
 
     [Fact]
@@ -319,6 +369,178 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_SearchText_AcceptsPositionalShorthand()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Target.cs");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Remote
+                {
+                    public string Action => "RemoteUserAction";
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.search_text", "RemoteUserAction", tempDir, "--mode", "literal", "--max-results", "10" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"ctx.search_text\"", output);
+            Assert.Contains("\"total_matches\": 1", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_FindInvocations_AcceptsPositionalShorthand()
+    {
+        string filePath = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public int Add(int left, int right)
+                    {
+                        return left + right;
+                    }
+
+                    public int Run()
+                    {
+                        return Add(1, 2);
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "nav.find_invocations", filePath, "3", "16", "--brief", "true", "--max-results", "10" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"nav.find_invocations\"", output);
+            Assert.Contains("\"total_matches\": 1", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_CallHierarchy_AcceptsPositionalShorthand()
+    {
+        string filePath = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public int Add(int left, int right)
+                    {
+                        return left + right;
+                    }
+
+                    public int Run()
+                    {
+                        return Add(1, 2);
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "nav.call_hierarchy", filePath, "3", "16", "--direction", "incoming", "--max-depth", "1", "--brief", "true" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"nav.call_hierarchy\"", output);
+            Assert.Contains("\"direction\": \"incoming\"", output);
+            Assert.Contains("\"total_nodes\":", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_AnalyzeUnusedPrivateSymbols_AcceptsPositionalShorthand()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-analyze-unused-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string filePath = Path.Combine(root, "Unused.cs");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            public class Demo
+            {
+                private int _unused = 1;
+            }
+            """);
+
+        try
+        {
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "analyze.unused_private_symbols", root, "--brief", "true", "--max-symbols", "20" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"analyze.unused_private_symbols\"", output);
+            Assert.Contains("\"unused_symbols\":", output);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_RenameSymbol_AcceptsPositionalShorthand()
     {
         string filePath = Path.GetTempFileName();
@@ -442,6 +664,44 @@ public sealed class CliApplicationTests
         Assert.Contains("\"workspace_path\"", output);
         Assert.Contains("\"require_workspace\"", output);
         Assert.Contains("workspace_context.mode", output);
+    }
+
+    [Fact]
+    public async Task DescribeCommand_CallHierarchy_IndicatesAdvancedHeuristic()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "nav.call_hierarchy" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"Maturity\": \"advanced\"", output);
+        Assert.Contains("\"heuristic\"", output);
+    }
+
+    [Fact]
+    public async Task DescribeCommand_AsyncRiskScan_IndicatesExperimentalHeuristic()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "analyze.async_risk_scan" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"Maturity\": \"experimental\"", output);
+        Assert.Contains("\"heuristic\"", output);
     }
 
     [Fact]

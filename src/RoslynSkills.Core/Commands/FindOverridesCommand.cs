@@ -1,5 +1,4 @@
 ﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -122,7 +121,7 @@ public sealed class FindOverridesCommand : IAgentCommand
         CancellationToken cancellationToken)
     {
         IMethodSymbol baseMethod = anchorMethod.OverriddenMethod ?? anchorMethod;
-        foreach (MethodDeclarationSyntax declaration in analysis.Root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+        foreach (SyntaxNode declaration in analysis.Root.DescendantNodes())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (matches.Count >= maxResults)
@@ -144,7 +143,7 @@ public sealed class FindOverridesCommand : IAgentCommand
 
             FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
             matches.Add(new OverrideMatch(
-                kind: "MethodDeclaration",
+                kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
                 column: lineSpan.StartLinePosition.Character + 1,
                 symbol_display: candidate.ToDisplayString()));
@@ -159,7 +158,7 @@ public sealed class FindOverridesCommand : IAgentCommand
         CancellationToken cancellationToken)
     {
         IPropertySymbol baseProperty = anchorProperty.OverriddenProperty ?? anchorProperty;
-        foreach (PropertyDeclarationSyntax declaration in analysis.Root.DescendantNodes().OfType<PropertyDeclarationSyntax>())
+        foreach (SyntaxNode declaration in analysis.Root.DescendantNodes())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (matches.Count >= maxResults)
@@ -181,7 +180,7 @@ public sealed class FindOverridesCommand : IAgentCommand
 
             FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
             matches.Add(new OverrideMatch(
-                kind: "PropertyDeclaration",
+                kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
                 column: lineSpan.StartLinePosition.Character + 1,
                 symbol_display: candidate.ToDisplayString()));
@@ -196,7 +195,7 @@ public sealed class FindOverridesCommand : IAgentCommand
         CancellationToken cancellationToken)
     {
         IEventSymbol baseEvent = anchorEvent.OverriddenEvent ?? anchorEvent;
-        foreach (EventDeclarationSyntax declaration in analysis.Root.DescendantNodes().OfType<EventDeclarationSyntax>())
+        foreach (SyntaxNode declaration in analysis.Root.DescendantNodes())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (matches.Count >= maxResults)
@@ -218,7 +217,7 @@ public sealed class FindOverridesCommand : IAgentCommand
 
             FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
             matches.Add(new OverrideMatch(
-                kind: "EventDeclaration",
+                kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
                 column: lineSpan.StartLinePosition.Character + 1,
                 symbol_display: candidate.ToDisplayString()));

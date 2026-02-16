@@ -1,6 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
 using System.Text.Json;
@@ -11,7 +9,7 @@ public sealed class FindSymbolCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "nav.find_symbol",
-        Summary: "Find identifier occurrences in a C# file with structured hierarchical context.",
+        Summary: "Find identifier occurrences in a C#/VB file with structured hierarchical context.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false);
@@ -85,13 +83,14 @@ public sealed class FindSymbolCommand : IAgentCommand
                 {
                     new CommandError(
                         "workspace_required",
-                        $"Command '{Descriptor.Id}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.sln/.slnx or containing directory) and retry."),
+                        $"Command '{Descriptor.Id}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.vbproj/.sln/.slnx or containing directory) and retry."),
                 });
         }
 
         IEnumerable<SyntaxToken> matches = analysis.Root
             .DescendantTokens(descendIntoTrivia: false)
-            .Where(t => t.IsKind(SyntaxKind.IdentifierToken) && string.Equals(t.ValueText, symbolName, StringComparison.Ordinal))
+            .Where(t => CommandLanguageServices.IsIdentifierToken(t, analysis.Language) &&
+                        string.Equals(t.ValueText, symbolName, StringComparison.Ordinal))
             .Take(maxResults);
 
         List<SymbolMatch> resultMatches = new();
@@ -147,36 +146,22 @@ public sealed class FindSymbolCommand : IAgentCommand
         int line = linePositionSpan.Start.Line + 1;
         int column = linePositionSpan.Start.Character + 1;
 
-        string? namespaceName = token.Parent?
-            .AncestorsAndSelf()
-            .OfType<BaseNamespaceDeclarationSyntax>()
-            .FirstOrDefault()?
-            .Name
-            .ToString();
-
-        string[] containingTypes = token.Parent?
-            .Ancestors()
-            .OfType<BaseTypeDeclarationSyntax>()
-            .Select(t => t.Identifier.ValueText)
-            .Reverse()
-            .ToArray() ?? Array.Empty<string>();
-
-        string? containingMember = token.Parent?
-            .Ancestors()
-            .OfType<MemberDeclarationSyntax>()
-            .FirstOrDefault(m => m is not BaseTypeDeclarationSyntax)?
-            .Kind()
-            .ToString();
+        ISymbol? symbol = SymbolResolution.GetSymbolForToken(token, semanticModel, cancellationToken);
+        string? namespaceName = symbol?.ContainingNamespace is { IsGlobalNamespace: false } namespaceSymbol
+            ? namespaceSymbol.ToDisplayString()
+            : null;
+        string[] containingTypes = CommandTextFormatting.GetContainingTypes(token, semanticModel, cancellationToken);
+        string? containingMember = symbol?.ContainingSymbol?.Kind.ToString();
 
         int startLine = Math.Max(line - contextLines, 1);
         int endLine = Math.Min(line + contextLines, sourceText.Lines.Count);
         string snippet = BuildSnippet(sourceText, startLine, endLine);
-        SymbolSemanticInfo semantic = CreateSemanticInfo(token, semanticModel, cancellationToken);
+        SymbolSemanticInfo semantic = CreateSemanticInfo(symbol);
 
         return new SymbolMatch(
             text: token.ValueText,
-            syntax_kind: token.Parent?.Kind().ToString() ?? "Unknown",
-            is_declaration: IsDeclarationToken(token),
+            syntax_kind: CommandLanguageServices.GetSyntaxKindName(token.Parent),
+            is_declaration: CommandTextFormatting.IsDeclarationToken(token, semanticModel, cancellationToken),
             line: line,
             column: column,
             hierarchy: new SymbolHierarchy(
@@ -186,26 +171,6 @@ public sealed class FindSymbolCommand : IAgentCommand
             context: new ContextWindow(startLine, endLine, snippet),
             semantic: semantic);
     }
-
-    private static bool IsDeclarationToken(SyntaxToken token)
-        => token.Parent switch
-        {
-            ClassDeclarationSyntax classDecl => classDecl.Identifier == token,
-            StructDeclarationSyntax structDecl => structDecl.Identifier == token,
-            InterfaceDeclarationSyntax interfaceDecl => interfaceDecl.Identifier == token,
-            EnumDeclarationSyntax enumDecl => enumDecl.Identifier == token,
-            RecordDeclarationSyntax recordDecl => recordDecl.Identifier == token,
-            MethodDeclarationSyntax methodDecl => methodDecl.Identifier == token,
-            ConstructorDeclarationSyntax ctorDecl => ctorDecl.Identifier == token,
-            PropertyDeclarationSyntax propertyDecl => propertyDecl.Identifier == token,
-            VariableDeclaratorSyntax variableDecl => variableDecl.Identifier == token,
-            ParameterSyntax parameter => parameter.Identifier == token,
-            DelegateDeclarationSyntax delegateDecl => delegateDecl.Identifier == token,
-            EventDeclarationSyntax eventDecl => eventDecl.Identifier == token,
-            NamespaceDeclarationSyntax namespaceDecl => namespaceDecl.Name.ToString().EndsWith(token.ValueText, StringComparison.Ordinal),
-            FileScopedNamespaceDeclarationSyntax fileNamespaceDecl => fileNamespaceDecl.Name.ToString().EndsWith(token.ValueText, StringComparison.Ordinal),
-            _ => false,
-        };
 
     private static string BuildSnippet(SourceText sourceText, int startLine, int endLine)
     {
@@ -219,12 +184,8 @@ public sealed class FindSymbolCommand : IAgentCommand
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static SymbolSemanticInfo CreateSemanticInfo(
-        SyntaxToken token,
-        SemanticModel semanticModel,
-        CancellationToken cancellationToken)
+    private static SymbolSemanticInfo CreateSemanticInfo(ISymbol? symbol)
     {
-        ISymbol? symbol = SymbolResolution.GetSymbolForToken(token, semanticModel, cancellationToken);
         if (symbol is null)
         {
             return new SymbolSemanticInfo(

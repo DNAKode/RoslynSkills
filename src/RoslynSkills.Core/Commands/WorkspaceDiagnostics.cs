@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 
 namespace RoslynSkills.Core.Commands;
 
@@ -25,18 +24,22 @@ internal static class WorkspaceDiagnostics
         CancellationToken cancellationToken)
     {
         string filePath = Path.GetFullPath(analysis.FilePath);
-        SyntaxTree updatedTree = CSharpSyntaxTree.ParseText(updatedSource, path: filePath, cancellationToken: cancellationToken);
+        SyntaxTree updatedTree = CommandLanguageServices.ParseSyntaxTree(
+            updatedSource,
+            filePath,
+            analysis.Language,
+            cancellationToken);
 
         if (!string.Equals(analysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase))
         {
-            return CompilationDiagnostics.GetDiagnostics(new[] { updatedTree }, cancellationToken);
+            return CompilationDiagnostics.GetDiagnostics(new[] { updatedTree }, cancellationToken, analysis.Language);
         }
 
         try
         {
             // Replace the document syntax tree in the project compilation. This preserves project references,
             // NuGet restore state, and language version settings where MSBuildWorkspace was successfully loaded.
-            CSharpCompilation updatedCompilation = analysis.Compilation.ReplaceSyntaxTree(analysis.SyntaxTree, updatedTree);
+            Compilation updatedCompilation = analysis.Compilation.ReplaceSyntaxTree(analysis.SyntaxTree, updatedTree);
             return updatedCompilation
                 .GetDiagnostics(cancellationToken)
                 .Where(diagnostic => IsDiagnosticForFile(diagnostic, filePath))
@@ -45,7 +48,7 @@ internal static class WorkspaceDiagnostics
         catch
         {
             // Fallback to ad-hoc diagnostics if the compilation cannot be safely updated in-place.
-            return CompilationDiagnostics.GetDiagnostics(new[] { updatedTree }, cancellationToken);
+            return CompilationDiagnostics.GetDiagnostics(new[] { updatedTree }, cancellationToken, analysis.Language);
         }
     }
 

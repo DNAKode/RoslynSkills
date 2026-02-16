@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
 
 namespace RoslynSkills.Core.Commands;
@@ -11,8 +10,9 @@ internal sealed class CommandFileAnalysis
     public SyntaxTree SyntaxTree { get; }
     public SyntaxNode Root { get; }
     public SourceText SourceText { get; }
-    public CSharpCompilation Compilation { get; }
+    public Compilation Compilation { get; }
     public SemanticModel SemanticModel { get; }
+    public string Language { get; }
     public WorkspaceContextInfo WorkspaceContext { get; }
 
     private CommandFileAnalysis(
@@ -21,8 +21,9 @@ internal sealed class CommandFileAnalysis
         SyntaxTree syntaxTree,
         SyntaxNode root,
         SourceText sourceText,
-        CSharpCompilation compilation,
+        Compilation compilation,
         SemanticModel semanticModel,
+        string language,
         WorkspaceContextInfo workspaceContext)
     {
         FilePath = filePath;
@@ -32,6 +33,7 @@ internal sealed class CommandFileAnalysis
         SourceText = sourceText;
         Compilation = compilation;
         SemanticModel = semanticModel;
+        Language = language;
         WorkspaceContext = workspaceContext;
     }
 
@@ -53,16 +55,21 @@ internal sealed class CommandFileAnalysis
             result.source_text,
             result.compilation,
             result.semantic_model,
+            result.language,
             result.workspace_context);
     }
 
-    public static CSharpCompilation CreateCompilation(string assemblyName, IReadOnlyList<SyntaxTree> syntaxTrees)
+    public static Compilation CreateCompilation(string assemblyName, IReadOnlyList<SyntaxTree> syntaxTrees, string language)
     {
-        return CSharpCompilation.Create(
-            assemblyName: assemblyName,
-            syntaxTrees: syntaxTrees,
-            references: CompilationReferenceBuilder.BuildMetadataReferences(),
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        return CommandLanguageServices.CreateCompilation(assemblyName, syntaxTrees, language);
+    }
+
+    public static Microsoft.CodeAnalysis.CSharp.CSharpCompilation CreateCompilation(string assemblyName, IReadOnlyList<SyntaxTree> syntaxTrees)
+    {
+        return (Microsoft.CodeAnalysis.CSharp.CSharpCompilation)CommandLanguageServices.CreateCompilation(
+            assemblyName,
+            syntaxTrees,
+            LanguageNames.CSharp);
     }
 
     public int GetPositionFromLineColumn(int line, int column)
@@ -83,7 +90,7 @@ internal sealed class CommandFileAnalysis
     public static SyntaxToken FindAnchorToken(SyntaxNode root, int position)
     {
         SyntaxToken token = root.FindToken(position);
-        if (!token.IsKind(SyntaxKind.None))
+        if (token.RawKind != 0)
         {
             return token;
         }

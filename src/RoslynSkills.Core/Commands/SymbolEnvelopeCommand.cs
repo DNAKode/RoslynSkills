@@ -90,7 +90,7 @@ public sealed class SymbolEnvelopeCommand : IAgentCommand
             .FirstOrDefault()?
             .Name
             .ToString();
-        string[] containingTypes = CommandTextFormatting.GetContainingTypes(token);
+        string[] containingTypes = CommandTextFormatting.GetContainingTypes(token, analysis.SemanticModel, cancellationToken);
         string? containingMember = token.Parent?
             .Ancestors()
             .OfType<MemberDeclarationSyntax>()
@@ -136,7 +136,7 @@ public sealed class SymbolEnvelopeCommand : IAgentCommand
             },
             relations = new
             {
-                declaration = CommandTextFormatting.IsDeclarationToken(token),
+                declaration = CommandTextFormatting.IsDeclarationToken(token, analysis.SemanticModel, cancellationToken),
                 reference_count_hint = referenceCountHint,
                 implementation_count_hint = implementationCountHint,
             },
@@ -151,7 +151,7 @@ public sealed class SymbolEnvelopeCommand : IAgentCommand
         foreach (SyntaxToken token in analysis.Root.DescendantTokens(descendIntoTrivia: false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!token.IsKind(SyntaxKind.IdentifierToken))
+            if (!CommandLanguageServices.IsIdentifierToken(token, analysis.Language))
             {
                 continue;
             }

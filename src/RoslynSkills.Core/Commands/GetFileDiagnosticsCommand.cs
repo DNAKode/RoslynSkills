@@ -8,7 +8,7 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "diag.get_file_diagnostics",
-        Summary: "Compile a C# file in-memory and return normalized diagnostics.",
+        Summary: "Compile a C#/VB file in-memory and return normalized diagnostics.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false);
@@ -71,7 +71,7 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
                 {
                     new CommandError(
                         "workspace_required",
-                        $"Command '{Descriptor.Id}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.sln/.slnx or containing directory) and retry."),
+                        $"Command '{Descriptor.Id}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.vbproj/.sln/.slnx or containing directory) and retry."),
                 });
         }
 

@@ -27,9 +27,9 @@ internal static class WorkspaceGuard
             null,
             new[]
             {
-                new CommandError(
-                    "workspace_required",
-                    $"Command '{commandId}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.sln/.slnx or containing directory) and retry."),
+                    new CommandError(
+                        "workspace_required",
+                    $"Command '{commandId}' requires workspace context for '{analysis.FilePath}', but mode was '{analysis.WorkspaceContext.mode}'. {fallbackReason} Pass workspace_path (.csproj/.vbproj/.sln/.slnx or containing directory) and retry."),
             });
     }
 }

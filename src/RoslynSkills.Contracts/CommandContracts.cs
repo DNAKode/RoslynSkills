@@ -8,7 +8,24 @@ public sealed record CommandDescriptor(
     string Summary,
     string InputSchemaVersion,
     string OutputSchemaVersion,
-    bool MutatesState);
+    bool MutatesState,
+    string Maturity = CommandMaturity.Stable,
+    IReadOnlyList<string>? Traits = null);
+
+public static class CommandMaturity
+{
+    public const string Stable = "stable";
+    public const string Advanced = "advanced";
+    public const string Experimental = "experimental";
+}
+
+public static class CommandTrait
+{
+    public const string Heuristic = "heuristic";
+    public const string PotentiallySlow = "potentially_slow";
+    public const string DerivedAnalysis = "derived_analysis";
+    public const string BatchOrchestration = "batch_orchestration";
+}
 
 public sealed record CommandError(
     string Code,

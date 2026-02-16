@@ -12,7 +12,9 @@ public sealed class CallChainSliceCommand : IAgentCommand
         Summary: "Return a call-chain slice around a method symbol with bounded depth.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        Maturity: CommandMaturity.Advanced,
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

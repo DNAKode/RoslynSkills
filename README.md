@@ -34,31 +34,39 @@ Verify install:
 ```powershell
 roscli --version
 roscli list-commands --ids-only
+roscli list-commands --stable-only --ids-only
 roscli quickstart
 ```
 
-You should see command ids like `nav.find_symbol`, `ctx.member_source`, `diag.get_file_diagnostics`, `edit.rename_symbol`, and `session.*`.
+You should see command ids like `nav.find_symbol`, `ctx.member_source`, `ctx.search_text`, `nav.find_invocations`, `nav.call_hierarchy`, `analyze.unused_private_symbols`, `analyze.impact_slice`, `query.batch`, `diag.get_file_diagnostics`, `edit.rename_symbol`, and `session.*`.
 You should also get an explicit pit-of-success brief from `roscli quickstart`.
+
+Command maturity model:
+
+- `stable`: default-safe contract for normal agent workflows.
+- `advanced`: deeper analysis/orchestration; can be slower or partially heuristic.
+- `experimental`: evolving contract; helpful signals with lower stability guarantees.
 
 ## Tell Your Agent About `roscli`
 
 Paste this at the start of an agentic coding session:
 
 ```text
-Use roscli for C# work in this session.
+Use roscli for C# and VB.NET work in this session.
 Command: roscli
 
 Workflow:
 1) Run "roscli list-commands --ids-only" once.
-2) Run "roscli quickstart" to load the built-in pit-of-success brief.
-3) If command arguments are unclear, run "roscli describe-command <command-id>".
-4) Prefer direct command shorthand for common calls; use "run ... --input" for complex JSON payloads.
-5) Prefer nav.* / ctx.* / diag.* before text-only fallback.
-6) For external package/API questions, use "dnx dotnet-inspect -y -- ..." before editing local code.
-7) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
-8) For nav/diag file commands, check response "workspace_context.mode". If it is "ad_hoc" for project code, rerun with "--workspace-path <.csproj|.sln|.slnx|dir>" and prefer "--require-workspace true" for fail-closed behavior.
-9) Run build/tests before finalizing changes.
-10) If roscli cannot answer a C# query, state why before falling back.
+2) Prefer stable commands first via "roscli list-commands --stable-only --ids-only" when uncertainty is high.
+3) Run "roscli quickstart" to load the built-in pit-of-success brief.
+4) If command arguments are unclear, run "roscli describe-command <command-id>".
+5) Prefer direct command shorthand for common calls; use "run ... --input" for complex JSON payloads.
+6) Prefer nav.* / ctx.* / diag.* before text-only fallback.
+7) For external package/API questions, use "dnx dotnet-inspect -y -- ..." before editing local code.
+8) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
+9) For nav/diag file commands, check response "workspace_context.mode". If it is "ad_hoc" for project code, rerun with "--workspace-path <.csproj|.vbproj|.sln|.slnx|dir>" and prefer "--require-workspace true" for fail-closed behavior.
+10) Run build/tests before finalizing changes.
+11) If roscli cannot answer a C# query, state why before falling back.
 ```
 
 First useful commands:
@@ -66,6 +74,13 @@ First useful commands:
 ```powershell
 roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20 --require-workspace true
 roscli ctx.member_source src/MyProject/File.cs 120 10 body --brief true
+roscli ctx.search_text "RemoteUserAction" src --mode literal --max-results 100
+roscli nav.find_invocations src/MyProject/File.cs 120 10 --brief true --require-workspace true
+roscli nav.call_hierarchy src/MyProject/File.cs 120 10 --direction both --max-depth 2 --brief true --require-workspace true
+roscli analyze.unused_private_symbols src --brief true --max-symbols 100
+roscli analyze.impact_slice src/MyProject/File.cs 120 10 --brief true --include-callers true --include-callees true
+roscli analyze.override_coverage src --coverage-threshold 0.6 --brief true
+roscli analyze.async_risk_scan src --max-findings 200 --severity-filter warning --severity-filter info
 roscli diag.get_file_diagnostics src/MyProject/File.cs
 roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path src/MyProject/MyProject.csproj --require-workspace true
 roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType { }"
@@ -74,6 +89,7 @@ roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType
 Note: `session.open` is for C# source files (`.cs`/`.csx`) only. Do not use `session.open` on `.sln`, `.slnx`, or `.csproj`.
 Note: `nav.find_symbol` and `diag.get_file_diagnostics` return `workspace_context` metadata; treat `mode=workspace` as the expected state for project-backed files. Use `--require-workspace true` when ad-hoc fallback should fail closed.
 Tip: for simple rename/fix tasks, start with a minimal flow (`edit.rename_symbol` then `diag.get_file_diagnostics`) before broader exploration.
+Tip: when you need multiple read-only lookups, use `query.batch` to reduce round-trips.
 If command arguments are unclear in-session, run:
 
 ```powershell
@@ -85,10 +101,11 @@ Deep guidance reference: `docs/PIT_OF_SUCCESS.md`
 
 ## What You Get
 
-`roscli` currently exposes 33 commands across:
+`roscli` currently exposes 44 commands across:
 
 - `nav.*`: semantic symbol/references/implementations/overrides
 - `ctx.*`: file/member/call-chain/dependency context
+- `analyze.*`: lightweight static analysis (unused private symbols, dependency violations, impact slices, override coverage, async risk scan)
 - `diag.*`: diagnostics snapshots/diffs/after-edit checks
 - `edit.*`: structured semantic edits and transactions
 - `repair.*`: diagnostics-driven repair planning/application
@@ -159,6 +176,7 @@ Main artifacts:
 - `roslynskills-bundle-<version>.zip`
 - `DNAKode.RoslynSkills.Cli.<version>.nupkg`
 - `roslynskills-research-skill-<version>.zip`
+- `roslynskills-tight-skill-<version>.zip`
 
 Bundle contents include:
 
@@ -167,6 +185,20 @@ Bundle contents include:
 - `transport/RoslynSkills.TransportServer.dll`
 - `PIT_OF_SUCCESS.md`
 - `skills/roslynskills-research/SKILL.md`
+- `skills/roslynskills-research/references/`
+- `skills/roslynskills-tight/SKILL.md`
+
+### Install Skills (Claude.ai / Claude Code)
+
+The `roslynskills-*-skill-<version>.zip` artifacts are uploadable "Claude skills" (a folder with `SKILL.md` and optional `references/`).
+
+- Claude.ai: Settings -> Capabilities -> Skills -> Upload the skill zip.
+- Claude Code: unzip the folder into your Claude Code skills directory (see Claude Code docs), then restart Claude Code.
+
+Recommended:
+
+- `roslynskills-tight-skill-<version>.zip`: minimal-call, low-churn guidance.
+- `roslynskills-research-skill-<version>.zip`: deeper workflows + progressive disclosure via `references/`.
 
 ## Troubleshooting
 
@@ -212,6 +244,11 @@ Example `claude-mcp.json`:
 }
 ```
 
+For Claude users, MCP works best paired with a skill:
+
+- Connect the MCP server (above) so Claude has the tools.
+- Install `roslynskills-tight-skill-<version>.zip` so Claude reliably uses the tools with a low-churn, minimal-call workflow.
+
 ## For Maintainers
 
 Release/build pipelines:
@@ -244,6 +281,34 @@ Local validation baseline:
 dotnet test RoslynSkills.slnx -c Release
 ```
 
+Claude skill validation (load + adoption smoke):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/skills/Validate-Skills.ps1
+powershell -ExecutionPolicy Bypass -File scripts/skills/SmokeTest-ClaudeSkillLoad.ps1 -SkillName roslynskills-tight
+
+# Produces artifacts/*/skill-trigger-summary.md and transcripts.
+powershell -ExecutionPolicy Bypass -Command "& benchmarks/scripts/Test-ClaudeSkillTriggering.ps1 `
+  -OutputRoot artifacts/skill-tests/checkpoint-skill-trigger `
+  -ClaudeModel sonnet `
+  -Replicates 1 `
+  -TaskId @('rename-overload-collision-nested-v1') `
+  -IncludeExplicitInvocation `
+  -ClaudeTimeoutSeconds 180 `
+  -IncludeDotnetBuildGate"
+
+# Wider operation scope:
+powershell -ExecutionPolicy Bypass -Command "& benchmarks/scripts/Test-ClaudeSkillTriggering.ps1 `
+  -OutputRoot artifacts/skill-tests/wide-scope-v1 `
+  -ClaudeModel sonnet `
+  -Replicates 1 `
+  -TaskId @('change-signature-named-args-v1','update-usings-cleanup-v1','add-member-threshold-v1','replace-member-body-guard-v1','create-file-audit-log-v1','rename-multifile-collision-v1') `
+  -ClaudeTimeoutSeconds 180 `
+  -IncludeDotnetBuildGate"
+```
+
+`Test-ClaudeSkillTriggering.ps1` fails closed on Claude authentication/access errors by default to prevent misleading all-zero summaries. Use `-IgnoreAuthenticationError` only for fixture/build validation.
+
 LSP comparator research lane (Claude `csharp-lsp` vs RoslynSkills):
 
 ```powershell
@@ -257,6 +322,20 @@ Design notes: `benchmarks/LSP_COMPARATOR_PLAN.md`.
 
 ## For Contributors (Developing RoslynSkills)
 
+Dual-lane local launcher flow (dogfooding while evolving roscli):
+
+- Stable lane (pinned published cache): `scripts\roscli-stable.cmd ...`
+- Dev lane (current source via `dotnet run`): `scripts\roscli-dev.cmd ...`
+- Stable cache location defaults to `artifacts\roscli-stable-cache`.
+- Refresh stable cache explicitly when desired:
+  - one call: `set ROSCLI_STABLE_REFRESH=1 && scripts\roscli-stable.cmd list-commands --ids-only`
+  - then reset/omit `ROSCLI_STABLE_REFRESH`.
+
+Generic wrapper envs now support custom cache roots:
+
+- `ROSCLI_CACHE_DIR` for `scripts/roscli(.cmd)` and `scripts/roscli-warm(.cmd)`.
+- Keep `ROSCLI_USE_PUBLISHED`, `ROSCLI_REFRESH_PUBLISHED`, and `ROSCLI_STALE_CHECK` behavior unchanged.
+
 Repository layout:
 
 - `src/`: contracts, core commands, CLI, benchmark tooling
@@ -264,6 +343,7 @@ Repository layout:
 - `benchmarks/`: manifests, scripts, prompts, scoring, reports
 - `docs/PIT_OF_SUCCESS.md`: canonical pit-of-success guidance for agents
 - `skills/roslynskills-research/`: Roslyn-first operating guidance
+- `skills/roslynskills-tight/`: a tighter, low-churn Roslyn usage skill (minimal calls, progressive disclosure)
 - `AGENTS.md`: execution doctrine and meta-learning log
 - `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md`: research design and gates
 

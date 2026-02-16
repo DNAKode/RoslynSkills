@@ -353,7 +353,7 @@ public sealed class ImpactSliceCommand : IAgentCommand
 
     private static void AddCalleeMatches(
         IMethodSymbol anchorMethod,
-        CSharpCompilation compilation,
+        Compilation compilation,
         List<ImpactCallee> results,
         int maxResults,
         CancellationToken cancellationToken)

@@ -392,6 +392,8 @@ internal static class Program
                 ["summary"] = metaBinding.Summary,
                 ["inputSchemaVersion"] = metaBinding.InputSchemaVersion,
                 ["mutatesState"] = metaBinding.MutatesState,
+                ["maturity"] = metaBinding.Maturity,
+                ["traits"] = ToJsonArray(metaBinding.Traits),
                 ["invocationTemplate"] = CommandResourceTemplate,
             };
 
@@ -543,6 +545,8 @@ internal static class Program
                 ["annotations"] = new JsonObject
                 {
                     ["readOnlyHint"] = !binding.MutatesState,
+                    ["maturityHint"] = binding.Maturity,
+                    ["traits"] = ToJsonArray(binding.Traits),
                 },
             };
 
@@ -639,21 +643,229 @@ internal static class Program
 
         if (string.Equals(commandId, "nav.find_symbol", StringComparison.OrdinalIgnoreCase))
         {
-            properties["file_path"] = StringProperty("Path to a C# source file.");
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
             properties["symbol_name"] = StringProperty("Symbol name to search for.");
             properties["brief"] = BoolProperty("Return compact result payload.");
             properties["max_results"] = IntProperty("Maximum matches to return.", 1);
-            properties["workspace_path"] = StringProperty("Optional .csproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("symbol_name");
             return;
         }
 
+        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["line"] = IntProperty("1-based line number for method anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for method anchor.", 1);
+            properties["brief"] = BoolProperty("Return compact match payload.");
+            properties["max_results"] = IntProperty("Maximum invocation matches to return.", 1);
+            properties["include_object_creations"] = BoolProperty("Include object creation calls for constructor targets.");
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            return;
+        }
+
+        if (string.Equals(commandId, "nav.call_hierarchy", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["line"] = IntProperty("1-based line number for method anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for method anchor.", 1);
+            properties["direction"] = StringProperty("Hierarchy direction: incoming, outgoing, or both.");
+            properties["max_depth"] = IntProperty("Maximum recursive depth.", 1);
+            properties["max_nodes"] = IntProperty("Maximum nodes returned.", 1);
+            properties["max_edges"] = IntProperty("Maximum edges returned.", 1);
+            properties["brief"] = BoolProperty("Return compact node/edge payload.");
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            return;
+        }
+
+        if (string.Equals(commandId, "nav.call_path", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["source_file_path"] = StringProperty("Path to a C# or VB source file containing the source method anchor.");
+            properties["source_line"] = IntProperty("1-based line number for source method anchor.", 1);
+            properties["source_column"] = IntProperty("1-based column number for source method anchor.", 1);
+            properties["target_file_path"] = StringProperty("Path to a C# or VB source file containing the target method anchor.");
+            properties["target_line"] = IntProperty("1-based line number for target method anchor.", 1);
+            properties["target_column"] = IntProperty("1-based column number for target method anchor.", 1);
+            properties["max_depth"] = IntProperty("Maximum BFS depth for path search.", 1);
+            properties["max_nodes"] = IntProperty("Maximum visited nodes during path search.", 1);
+            properties["max_graph_edges"] = IntProperty("Maximum edges collected for graph construction.", 1);
+            properties["brief"] = BoolProperty("Return compact path payload.");
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("source_file_path");
+            required.Add("source_line");
+            required.Add("source_column");
+            required.Add("target_file_path");
+            required.Add("target_line");
+            required.Add("target_column");
+            return;
+        }
+
+        if (string.Equals(commandId, "analyze.unused_private_symbols", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["include_generated"] = BoolProperty("Include generated source files.");
+            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
+            properties["max_symbols"] = IntProperty("Maximum unused-symbol results returned.", 1);
+            properties["brief"] = BoolProperty("Return compact result payload.");
+            required.Add("workspace_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["layers"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Ordered namespace layer prefixes (minimum two).",
+            };
+            properties["direction"] = StringProperty("Layer direction rule: toward_end or toward_start.");
+            properties["ignore_same_namespace"] = BoolProperty("Ignore dependencies that stay in the same namespace.");
+            properties["include_generated"] = BoolProperty("Include generated source files.");
+            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
+            properties["max_violations"] = IntProperty("Maximum violation results returned.", 1);
+            properties["brief"] = BoolProperty("Return compact result payload.");
+            required.Add("workspace_path");
+            required.Add("layers");
+            return;
+        }
+
+        if (string.Equals(commandId, "analyze.impact_slice", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            properties["include_references"] = BoolProperty("Include reference locations for the anchor symbol.");
+            properties["include_callers"] = BoolProperty("Include caller sites for method anchors.");
+            properties["include_callees"] = BoolProperty("Include callee sites from anchored method body.");
+            properties["include_overrides"] = BoolProperty("Include override relationships.");
+            properties["include_implementations"] = BoolProperty("Include interface/type implementation matches.");
+            properties["max_references"] = IntProperty("Maximum reference matches returned.", 1);
+            properties["max_callers"] = IntProperty("Maximum caller matches returned.", 1);
+            properties["max_callees"] = IntProperty("Maximum callee matches returned.", 1);
+            properties["max_related"] = IntProperty("Maximum override/implementation matches returned.", 1);
+            properties["brief"] = BoolProperty("Return compact result payload.");
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            return;
+        }
+
+        if (string.Equals(commandId, "analyze.override_coverage", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["coverage_threshold"] = new JsonObject
+            {
+                ["type"] = "number",
+                ["minimum"] = 0,
+                ["maximum"] = 1,
+                ["description"] = "Minimum override coverage ratio before a virtual member is flagged.",
+            };
+            properties["min_derived_types"] = IntProperty("Minimum derived-type count before coverage analysis applies.", 1);
+            properties["include_generated"] = BoolProperty("Include generated source files.");
+            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
+            properties["max_members"] = IntProperty("Maximum finding entries returned.", 1);
+            properties["brief"] = BoolProperty("Return compact result payload.");
+            required.Add("workspace_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "analyze.async_risk_scan", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["severity_filter"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Optional severities to include (for example warning, info).",
+            };
+            properties["include_generated"] = BoolProperty("Include generated source files.");
+            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
+            properties["max_findings"] = IntProperty("Maximum findings returned.", 1);
+            properties["brief"] = BoolProperty("Return compact result payload.");
+            required.Add("workspace_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "ctx.search_text", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["pattern"] = StringProperty("Single search pattern (literal or regex).");
+            properties["patterns"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Multiple search patterns.",
+            };
+            properties["mode"] = StringProperty("Search mode: literal or regex.");
+            properties["file_path"] = StringProperty("Optional single-file search scope.");
+            properties["roots"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Directory/file search roots.",
+            };
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory anchor used as search scope.");
+            properties["include_globs"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Include glob filters.",
+            };
+            properties["exclude_globs"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Exclude glob filters.",
+            };
+            properties["max_results"] = IntProperty("Maximum matches to return.", 1);
+            properties["max_files"] = IntProperty("Maximum files to scan.", 1);
+            return;
+        }
+
+        if (string.Equals(commandId, "query.batch", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["queries"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["description"] = "Array of query objects with command_id and input payload.",
+                ["items"] = new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["command_id"] = StringProperty("Read-only command id to run."),
+                        ["input"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["description"] = "Input payload for the command.",
+                        },
+                    },
+                    ["required"] = new JsonArray { "command_id", "input" },
+                },
+            };
+            properties["continue_on_error"] = BoolProperty("Continue remaining queries after an error.");
+            required.Add("queries");
+            return;
+        }
+
         if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
         {
-            properties["file_path"] = StringProperty("Path to a C# source file.");
-            properties["workspace_path"] = StringProperty("Optional .csproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             return;
@@ -745,7 +957,9 @@ internal static class Program
                 CommandId: descriptor.Id,
                 Summary: $"{descriptor.Summary} (command: {descriptor.Id})",
                 InputSchemaVersion: descriptor.InputSchemaVersion,
-                MutatesState: descriptor.MutatesState);
+                MutatesState: descriptor.MutatesState,
+                Maturity: descriptor.Maturity,
+                Traits: descriptor.Traits ?? Array.Empty<string>());
             bindings.Add(binding);
             byToolName[toolName] = binding;
             byCommandId[descriptor.Id] = binding;
@@ -765,6 +979,8 @@ internal static class Program
                 ["toolName"] = binding.ToolName,
                 ["summary"] = binding.Summary,
                 ["mutatesState"] = binding.MutatesState,
+                ["maturity"] = binding.Maturity,
+                ["traits"] = ToJsonArray(binding.Traits),
                 ["inputSchemaVersion"] = binding.InputSchemaVersion,
             });
         }
@@ -776,6 +992,12 @@ internal static class Program
             ["invocationExamples"] = new JsonArray
             {
                 "roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true",
+                "roslyn://command/ctx.search_text?pattern=RemoteUserAction&roots=src&mode=literal&max_results=100",
+                "roslyn://command/nav.find_invocations?file_path=Target.cs&line=12&column=15&brief=true",
+                "roslyn://command/nav.call_hierarchy?file_path=Target.cs&line=12&column=15&direction=both&max_depth=2&brief=true",
+                "roslyn://command/nav.call_path?source_file_path=Caller.cs&source_line=12&source_column=15&target_file_path=Target.cs&target_line=48&target_column=18&max_depth=8&brief=true",
+                "roslyn://command/analyze.unused_private_symbols?workspace_path=src&brief=true&max_symbols=100",
+                "roslyn://command/analyze.impact_slice?file_path=Target.cs&line=12&column=15&include_references=true&include_callers=true&brief=true",
                 "roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true",
                 "roslyn://command/diag.get_file_diagnostics?file_path=Target.cs",
             },
@@ -818,6 +1040,17 @@ internal static class Program
         }
 
         return JsonSerializer.SerializeToElement(new { });
+    }
+
+    private static JsonArray ToJsonArray(IReadOnlyList<string> values)
+    {
+        JsonArray array = new();
+        foreach (string value in values)
+        {
+            array.Add(value);
+        }
+
+        return array;
     }
 
     private static JsonElement GetArguments(JsonElement @params)
@@ -1315,7 +1548,9 @@ internal static class Program
         string CommandId,
         string Summary,
         string InputSchemaVersion,
-        bool MutatesState);
+        bool MutatesState,
+        string Maturity,
+        IReadOnlyList<string> Traits);
 
     private sealed record ToolMap(
         IReadOnlyList<ToolBinding> OrderedBindings,

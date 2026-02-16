@@ -1,5 +1,4 @@
 ﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
 using System.Text.Json;
@@ -91,7 +90,7 @@ public sealed class FindReferencesCommand : IAgentCommand
         foreach (SyntaxToken token in analysis.Root.DescendantTokens(descendIntoTrivia: false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!token.IsKind(SyntaxKind.IdentifierToken))
+            if (!CommandLanguageServices.IsIdentifierToken(token, analysis.Language))
             {
                 continue;
             }
@@ -102,7 +101,7 @@ public sealed class FindReferencesCommand : IAgentCommand
                 continue;
             }
 
-            bool isDeclaration = CommandTextFormatting.IsDeclarationToken(token);
+            bool isDeclaration = CommandTextFormatting.IsDeclarationToken(token, analysis.SemanticModel, cancellationToken);
             if (!includeDeclaration && isDeclaration)
             {
                 continue;
@@ -116,7 +115,7 @@ public sealed class FindReferencesCommand : IAgentCommand
             matches.Add(new ReferenceMatch(
                 line: tokenLine,
                 column: tokenColumn,
-                syntax_kind: token.Parent?.Kind().ToString() ?? "Unknown",
+                syntax_kind: CommandLanguageServices.GetSyntaxKindName(token.Parent),
                 is_declaration: isDeclaration,
                 snippet: snippet));
 

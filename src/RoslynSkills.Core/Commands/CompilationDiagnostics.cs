@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using System.Collections.Immutable;
 
 namespace RoslynSkills.Core.Commands;
@@ -8,15 +7,30 @@ internal static class CompilationDiagnostics
 {
     public static ImmutableArray<Diagnostic> GetDiagnostics(
         IReadOnlyList<SyntaxTree> syntaxTrees,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? language = null)
     {
-        CSharpCompilation compilation = CSharpCompilation.Create(
+        if (syntaxTrees.Count == 0)
+        {
+            return ImmutableArray<Diagnostic>.Empty;
+        }
+
+        string resolvedLanguage = language
+            ?? syntaxTrees[0].Options.Language
+            ?? LanguageNames.CSharp;
+        Compilation compilation = CommandLanguageServices.CreateCompilation(
             assemblyName: "RoslynSkills.InMemory",
             syntaxTrees: syntaxTrees,
-            references: CompilationReferenceBuilder.BuildMetadataReferences(),
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            language: resolvedLanguage);
 
         return compilation.GetDiagnostics(cancellationToken);
+    }
+
+    public static ImmutableArray<Diagnostic> GetDiagnostics(
+        IReadOnlyList<SyntaxTree> syntaxTrees,
+        CancellationToken cancellationToken)
+    {
+        return GetDiagnostics(syntaxTrees, cancellationToken, language: null);
     }
 
     public static NormalizedDiagnostic[] Normalize(IReadOnlyList<Diagnostic> diagnostics)

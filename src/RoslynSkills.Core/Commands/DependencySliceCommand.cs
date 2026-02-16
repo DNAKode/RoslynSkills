@@ -13,7 +13,9 @@ public sealed class DependencySliceCommand : IAgentCommand
         Summary: "Return semantic dependencies referenced from the containing member.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        Maturity: CommandMaturity.Advanced,
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis]);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

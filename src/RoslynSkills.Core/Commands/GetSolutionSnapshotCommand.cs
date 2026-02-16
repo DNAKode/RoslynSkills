@@ -17,7 +17,9 @@ public sealed class GetSolutionSnapshotCommand : IAgentCommand
         Summary: "Analyze C# diagnostics for a file set with filtered raw/compact/guided output modes.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        Maturity: CommandMaturity.Advanced,
+        Traits: [CommandTrait.PotentiallySlow]);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
