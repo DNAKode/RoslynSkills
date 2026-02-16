@@ -48,6 +48,731 @@ public sealed class BreadthCommandTests
     }
 
     [Fact]
+    public async Task SearchTextCommand_FindsLiteralMatchesAcrossScopedRoots()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-search-{Guid.NewGuid():N}");
+        string sourceDir = Path.Combine(root, "src");
+        string objDir = Path.Combine(root, "obj");
+        Directory.CreateDirectory(sourceDir);
+        Directory.CreateDirectory(objDir);
+
+        string firstPath = Path.Combine(sourceDir, "First.cs");
+        string secondPath = Path.Combine(sourceDir, "Second.cs");
+        string generatedPath = Path.Combine(objDir, "Generated.g.cs");
+
+        await File.WriteAllTextAsync(firstPath, "public class First { public string Name => \"RemoteUserAction\"; }");
+        await File.WriteAllTextAsync(secondPath, "public class Second { public string Name => \"ReplicationUpdate\"; }");
+        await File.WriteAllTextAsync(generatedPath, "public class Generated { public string Name => \"RemoteUserAction\"; }");
+
+        try
+        {
+            SearchTextCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                patterns = new[] { "RemoteUserAction", "ReplicationUpdate" },
+                mode = "literal",
+                roots = new[] { root },
+                max_results = 50,
+                include_globs = new[] { "**/*.cs" },
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_matches\":2", json);
+            Assert.Contains("First.cs", json);
+            Assert.Contains("Second.cs", json);
+            Assert.DoesNotContain("Generated.g.cs", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task FindInvocationsCommand_FindsCrossFileCallsInWorkspace()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-invocations-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string projectPath = Path.Combine(root, "TargetHarness.csproj");
+        string servicePath = Path.Combine(root, "Service.cs");
+        string consumerPath = Path.Combine(root, "Consumer.cs");
+        string programPath = Path.Combine(root, "Program.cs");
+
+        await File.WriteAllTextAsync(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        await File.WriteAllTextAsync(
+            servicePath,
+            """
+            public class Service
+            {
+                public int Transform(int value)
+                {
+                    return value * 2;
+                }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            consumerPath,
+            """
+            public class Consumer
+            {
+                public int Use(Service service)
+                {
+                    return service.Transform(2);
+                }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            programPath,
+            """
+            public static class Program
+            {
+                public static int Main()
+                {
+                    var service = new Service();
+                    return service.Transform(3);
+                }
+            }
+            """);
+
+        try
+        {
+            FindInvocationsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = servicePath,
+                line = 3,
+                column = 16,
+                workspace_path = projectPath,
+                require_workspace = true,
+                brief = true,
+                max_results = 20,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_matches\":2", json);
+            Assert.Contains("Consumer.cs", json);
+            Assert.Contains("Program.cs", json);
+            Assert.Contains("\"workspace_context\":{\"mode\":\"workspace\"", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task QueryBatchCommand_ExecutesMultipleQueries()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Demo
+            {
+                public int Add(int left, int right)
+                {
+                    return left + right;
+                }
+
+                public int Run()
+                {
+                    return Add(1, 2);
+                }
+            }
+            """);
+
+        try
+        {
+            QueryBatchCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                continue_on_error = true,
+                queries = new object[]
+                {
+                    new
+                    {
+                        command_id = "ctx.search_text",
+                        input = new
+                        {
+                            patterns = new[] { "Add(" },
+                            mode = "literal",
+                            file_path = filePath,
+                        },
+                    },
+                    new
+                    {
+                        command_id = "nav.find_invocations",
+                        input = new
+                        {
+                            file_path = filePath,
+                            line = 3,
+                            column = 16,
+                            brief = true,
+                            max_results = 10,
+                        },
+                    },
+                },
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_executed\":2", json);
+            Assert.Contains("\"succeeded\":2", json);
+            Assert.Contains("\"command_id\":\"ctx.search_text\"", json);
+            Assert.Contains("\"command_id\":\"nav.find_invocations\"", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task QueryBatchCommand_SupportsAnalyzeCommands()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-batch-analyze-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string filePath = Path.Combine(root, "BatchSample.cs");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            public class BatchSample
+            {
+                private int _unused = 1;
+            }
+            """);
+
+        try
+        {
+            QueryBatchCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                continue_on_error = true,
+                queries = new object[]
+                {
+                    new
+                    {
+                        command_id = "analyze.unused_private_symbols",
+                        input = new
+                        {
+                            workspace_path = root,
+                            brief = true,
+                            max_symbols = 20,
+                        },
+                    },
+                    new
+                    {
+                        command_id = "analyze.async_risk_scan",
+                        input = new
+                        {
+                            workspace_path = root,
+                            brief = true,
+                            max_findings = 20,
+                        },
+                    },
+                },
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_executed\":2", json);
+            Assert.Contains("\"command_id\":\"analyze.unused_private_symbols\"", json);
+            Assert.Contains("\"command_id\":\"analyze.async_risk_scan\"", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task CallHierarchyCommand_ReturnsIncomingAndOutgoingEdgesAcrossWorkspace()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-call-hierarchy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string projectPath = Path.Combine(root, "TargetHarness.csproj");
+        string servicePath = Path.Combine(root, "Service.cs");
+        string callerPath = Path.Combine(root, "Caller.cs");
+        string programPath = Path.Combine(root, "Program.cs");
+
+        await File.WriteAllTextAsync(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        await File.WriteAllTextAsync(
+            servicePath,
+            """
+            public class Service
+            {
+                public int Step2(int value)
+                {
+                    return Step3(value) + 1;
+                }
+
+                public int Step3(int value)
+                {
+                    return value * 2;
+                }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            callerPath,
+            """
+            public class Caller
+            {
+                public int Run(Service service)
+                {
+                    return service.Step2(2);
+                }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            programPath,
+            """
+            public static class Program
+            {
+                public static int Main()
+                {
+                    return new Caller().Run(new Service());
+                }
+            }
+            """);
+
+        try
+        {
+            CallHierarchyCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = servicePath,
+                line = 3,
+                column = 16,
+                direction = "both",
+                max_depth = 2,
+                max_nodes = 20,
+                max_edges = 40,
+                workspace_path = projectPath,
+                require_workspace = true,
+                brief = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_nodes\":", json);
+            Assert.Contains("\"total_edges\":", json);
+            Assert.Contains("Caller.Run", json);
+            Assert.Contains("Service.Step3", json);
+            Assert.Contains("\"direction\":\"both\"", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task UnusedPrivateSymbolsCommand_FindsLikelyUnusedMembers()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-unused-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string filePath = Path.Combine(root, "Sample.cs");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            public class Sample
+            {
+                private int _unusedField = 1;
+                private int _usedField = 2;
+
+                private int UnusedMethod() => 42;
+                private int UsedMethod() => _usedField;
+
+                public int Run()
+                {
+                    return UsedMethod();
+                }
+            }
+            """);
+
+        try
+        {
+            UnusedPrivateSymbolsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                workspace_path = root,
+                brief = true,
+                max_symbols = 50,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"unused_candidates\":", json);
+            Assert.Contains("_unusedField", json);
+            Assert.Contains("UnusedMethod", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DependencyViolationsCommand_FindsLayerDirectionViolations()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-layer-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string filePath = Path.Combine(root, "LayerSample.cs");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            namespace App.Web;
+            public class WebType { }
+
+            namespace App.Domain;
+            public class DomainType
+            {
+                private readonly App.Web.WebType _badDependency = new();
+            }
+            """);
+
+        try
+        {
+            DependencyViolationsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                workspace_path = root,
+                layers = new[] { "App.Web", "App.Application", "App.Domain" },
+                direction = "toward_end",
+                brief = true,
+                max_violations = 20,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_violations\":", json);
+            Assert.Contains("App.Domain", json);
+            Assert.Contains("App.Web", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ImpactSliceCommand_ReturnsCallersAndCallees()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class SliceDemo
+            {
+                public int A(int value)
+                {
+                    return B(value) + 1;
+                }
+
+                public int B(int value) => value * 2;
+
+                public int C()
+                {
+                    return A(2);
+                }
+            }
+            """);
+
+        try
+        {
+            ImpactSliceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 3,
+                column = 16,
+                include_references = true,
+                include_callers = true,
+                include_callees = true,
+                include_overrides = false,
+                include_implementations = false,
+                brief = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"impact_counts\":", json);
+            Assert.Contains("\"callers\":", json);
+            Assert.Contains("\"callees\":", json);
+            Assert.Contains("SliceDemo.C()", json);
+            Assert.Contains("SliceDemo.B(int)", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task OverrideCoverageCommand_FindsLowCoverageVirtualMembers()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-override-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string filePath = Path.Combine(root, "CoverageSample.cs");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            public abstract class BaseType
+            {
+                public abstract void Required();
+                public virtual void Optional() { }
+            }
+
+            public class ChildOne : BaseType
+            {
+                public override void Required() { }
+            }
+
+            public class ChildTwo : BaseType
+            {
+                public override void Required() { }
+                public override void Optional() { }
+            }
+            """);
+
+        try
+        {
+            OverrideCoverageCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                workspace_path = root,
+                coverage_threshold = 0.8,
+                min_derived_types = 1,
+                brief = true,
+                max_members = 20,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"findings\":", json);
+            Assert.Contains("Optional()", json);
+            Assert.DoesNotContain("Required()", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AsyncRiskScanCommand_FindsBlockingPatterns()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-async-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string filePath = Path.Combine(root, "AsyncSample.cs");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            using System.Threading;
+            using System.Threading.Tasks;
+
+            public class AsyncSample
+            {
+                public async void BadHandler()
+                {
+                    await Task.Delay(1);
+                }
+
+                public int Blocking()
+                {
+                    Task.Delay(1).Wait();
+                    int value = Task.FromResult(2).Result;
+                    Thread.Sleep(1);
+                    return value;
+                }
+            }
+            """);
+
+        try
+        {
+            AsyncRiskScanCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                workspace_path = root,
+                brief = true,
+                max_findings = 100,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_findings\":", json);
+            Assert.Contains("\"async_void\"", json);
+            Assert.Contains("\"task_wait\"", json);
+            Assert.Contains("\"task_result\"", json);
+            Assert.Contains("\"thread_sleep\"", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task UnusedPrivateSymbolsCommand_DoesNotFlagPrivateCtorUsedByTargetTypedNew()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-unused-ctor-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string filePath = Path.Combine(root, "CtorSample.cs");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            public sealed class CtorSample
+            {
+                private CtorSample() { }
+                private int _unused = 1;
+
+                public static CtorSample Create()
+                {
+                    CtorSample value = new();
+                    return value;
+                }
+            }
+            """);
+
+        try
+        {
+            UnusedPrivateSymbolsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                workspace_path = root,
+                brief = true,
+                max_symbols = 50,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("_unused", json);
+            Assert.DoesNotContain("CtorSample.CtorSample()", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ImpactSliceCommand_FindsCtorImpactForTargetTypedNew()
+    {
+        string filePath = WriteTempFile(
+            """
+            public sealed class ImpactCtor
+            {
+                private ImpactCtor() { }
+
+                public static ImpactCtor Create()
+                {
+                    ImpactCtor value = new();
+                    return value;
+                }
+            }
+            """);
+
+        try
+        {
+            ImpactSliceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 3,
+                column = 20,
+                include_references = true,
+                include_callers = true,
+                include_callees = false,
+                include_overrides = false,
+                include_implementations = false,
+                brief = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement counts = doc.RootElement.GetProperty("impact_counts");
+            int references = counts.GetProperty("references").GetInt32();
+            int callers = counts.GetProperty("callers").GetInt32();
+            Assert.True(references > 0 || callers > 0);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task FindImplementationsAndOverridesCommands_ReturnExpectedMembers()
     {
         string filePath = WriteTempFile(

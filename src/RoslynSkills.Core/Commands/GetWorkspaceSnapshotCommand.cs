@@ -1,6 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -17,7 +15,9 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         Summary: "Analyze project/workspace-backed C# diagnostics for a file set (single resolved .csproj workspace).",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        Maturity: CommandMaturity.Advanced,
+        Traits: [CommandTrait.PotentiallySlow]);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -742,76 +742,6 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
             string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(segment, ".vs", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(segment, "node_modules", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static CSharpCompilation CreateCompilation(
-        string assemblyName,
-        IReadOnlyList<SyntaxTree> syntaxTrees,
-        bool useSdkDefaults,
-        bool hasTopLevelStatements)
-    {
-        CSharpCompilationOptions options = new(hasTopLevelStatements
-            ? OutputKind.ConsoleApplication
-            : OutputKind.DynamicallyLinkedLibrary);
-
-        if (useSdkDefaults)
-        {
-            options = options.WithNullableContextOptions(NullableContextOptions.Enable);
-        }
-
-        return CSharpCompilation.Create(
-            assemblyName: assemblyName,
-            syntaxTrees: syntaxTrees,
-            references: CompilationReferenceBuilder.BuildMetadataReferences(),
-            options: options);
-    }
-
-    private static SyntaxTree BuildGlobalUsingsTree(
-        bool includeSdkDefaults,
-        IReadOnlyList<string> additionalGlobalUsings,
-        CancellationToken cancellationToken)
-    {
-        HashSet<string> namespaces = new(StringComparer.OrdinalIgnoreCase);
-        if (includeSdkDefaults)
-        {
-            foreach (string ns in GetSdkDefaultGlobalUsings())
-            {
-                namespaces.Add(ns);
-            }
-        }
-
-        foreach (string ns in additionalGlobalUsings)
-        {
-            if (!string.IsNullOrWhiteSpace(ns))
-            {
-                namespaces.Add(ns.Trim());
-            }
-        }
-
-        string source = string.Join(
-            Environment.NewLine,
-            namespaces
-                .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
-                .Select(ns => $"global using {ns};"));
-
-        return CSharpSyntaxTree.ParseText(
-            source,
-            path: "<roslynskills-global-usings>",
-            cancellationToken: cancellationToken);
-    }
-
-    private static IReadOnlyList<string> GetSdkDefaultGlobalUsings()
-    {
-        return
-        [
-            "System",
-            "System.Collections.Generic",
-            "System.IO",
-            "System.Linq",
-            "System.Net.Http",
-            "System.Threading",
-            "System.Threading.Tasks",
-        ];
     }
 
     private static GuidanceSuggestion[] BuildGuidance(
