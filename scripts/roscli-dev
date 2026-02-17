@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export ROSCLI_USE_PUBLISHED=0
+export ROSCLI_REFRESH_PUBLISHED=0
+
+"$script_dir/roscli" "$@"

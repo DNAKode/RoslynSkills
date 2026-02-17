@@ -305,7 +305,7 @@ public sealed class BreadthCommandTests
                     },
                     new
                     {
-                        command_id = "analyze.cfg",
+                        command_id = "analyze.control_flow_graph",
                         input = new
                         {
                             file_path = filePath,
@@ -326,7 +326,7 @@ public sealed class BreadthCommandTests
             Assert.Contains("\"total_executed\":3", json);
             Assert.Contains("\"command_id\":\"analyze.unused_private_symbols\"", json);
             Assert.Contains("\"command_id\":\"analyze.async_risk_scan\"", json);
-            Assert.Contains("\"command_id\":\"analyze.cfg\"", json);
+            Assert.Contains("\"command_id\":\"analyze.control_flow_graph\"", json);
         }
         finally
         {

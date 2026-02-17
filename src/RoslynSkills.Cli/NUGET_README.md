@@ -25,6 +25,8 @@ dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-
 ```bash
 roscli --version
 roscli list-commands --ids-only
+roscli list-commands --stable-only --ids-only
+roscli list-commands --experimental-only --ids-only
 roscli quickstart
 roscli describe-command session.open
 ```
@@ -32,9 +34,10 @@ roscli describe-command session.open
 Recommended first minute:
 
 1. `roscli list-commands --ids-only`
-2. `roscli quickstart`
-3. `roscli describe-command session.open`
-4. `roscli describe-command edit.create_file`
+2. `roscli list-commands --stable-only --ids-only`
+3. `roscli quickstart`
+4. `roscli describe-command session.open`
+5. `roscli describe-command edit.create_file`
 
 ## Typical usage
 

@@ -20,12 +20,25 @@ Run this sequence at session start:
 
 ```text
 roscli list-commands --ids-only
+roscli list-commands --stable-only --ids-only
 roscli quickstart
 roscli describe-command session.open
 roscli describe-command edit.create_file
 ```
 
 This gives command discovery, guardrails, and two high-traffic argument schemas up front.
+
+## Command Tiers
+
+- `stable`: default path for production agent loops.
+- `advanced`: deeper analysis/orchestration; may be slower and/or partially heuristic.
+- `experimental`: evolving contract for useful but less-stable outputs.
+
+Default policy:
+
+- Start with `stable` commands.
+- Use `advanced`/`experimental` only when the task needs them.
+- For non-stable commands, run `describe-command <id>` first and cap scope (`--brief`, small limits).
 
 ## Golden Paths
 
@@ -106,17 +119,38 @@ Workflow:
 - Text edits for multi-file semantic changes before trying Roslyn primitives.
 - Treating an LSP lane as valid evidence when tools were not actually available.
 
+## Advanced/Experimental Analyzer Set
+
+Current non-stable analysis commands (use intentionally with bounded scope):
+
+1. `nav.call_path` (`experimental`, `heuristic`, `potentially_slow`)
+Bounded shortest-path search between source and target methods.
+2. `analyze.unused_private_symbols` (`advanced`, `heuristic`, `derived_analysis`)
+Likely-unused private symbol detection for cleanup triage.
+3. `analyze.dependency_violations` (`experimental`, `heuristic`, `derived_analysis`)
+Namespace-layer rule checks from ordered layer prefixes.
+4. `analyze.impact_slice` (`advanced`, `heuristic`, `derived_analysis`)
+Bounded impact slice around an anchored symbol.
+5. `analyze.override_coverage` (`advanced`, `derived_analysis`)
+Override/derived-type coverage hotspot detection for virtual/abstract members.
+6. `analyze.async_risk_scan` (`experimental`, `heuristic`, `derived_analysis`)
+Common async/sync-mixing risk pattern scan (for example `Task.Wait`, `.Result`, `async void`).
+
+Contract rule:
+
+- Every non-stable command must ship with explicit caveats in `describe-command` notes and bounded options (`max_*`, `brief`).
+
 ## Release Artifact Expectations
 
 Every release bundle should include:
 
 - `bin/roscli(.cmd)` launcher,
 - this `PIT_OF_SUCCESS.md` guide,
-- `skills/roslynskills-research/SKILL.md`.
+- `skills/roslynskills-research/SKILL.md`,
+- `skills/roslynskills-tight/SKILL.md`.
 
 First bundle command should still be:
 
 ```text
 bin/roscli quickstart
 ```
-

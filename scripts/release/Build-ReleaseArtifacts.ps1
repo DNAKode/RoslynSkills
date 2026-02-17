@@ -84,8 +84,9 @@ $mcpPublishDir = Join-Path $bundleRoot "mcp"
 $transportPublishDir = Join-Path $bundleRoot "transport"
 $binDir = Join-Path $bundleRoot "bin"
 $skillDir = Join-Path $bundleRoot "skills\roslynskills-research"
+$tightSkillDir = Join-Path $bundleRoot "skills\roslynskills-tight"
 
-foreach ($path in @($bundleRoot, $cliPublishDir, $mcpPublishDir, $transportPublishDir, $binDir, $skillDir)) {
+foreach ($path in @($bundleRoot, $cliPublishDir, $mcpPublishDir, $transportPublishDir, $binDir, $skillDir, $tightSkillDir)) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
@@ -103,6 +104,8 @@ Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("restore", $solutionPath,
 if (-not $SkipTests) {
     Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("test", $solutionPath, "-c", $Configuration, "--nologo")
 }
+
+& (Join-Path $repoRoot "scripts\\skills\\Validate-Skills.ps1")
 
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $cliProjectPath, "-c", $Configuration, "-o", $cliPublishDir, "--nologo")
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $mcpProjectPath, "-c", $Configuration, "-o", $mcpPublishDir, "--nologo")
@@ -187,9 +190,14 @@ Set-ExecutableIfSupported -Path $roscliShPath
 Set-ExecutableIfSupported -Path $mcpShPath
 Set-ExecutableIfSupported -Path $transportShPath
 
-$skillSource = Join-Path $repoRoot "skills\roslynskills-research\SKILL.md"
-if (Test-Path $skillSource -PathType Leaf) {
-    Copy-Item -Path $skillSource -Destination (Join-Path $skillDir "SKILL.md") -Force
+$skillSourceDir = Join-Path $repoRoot "skills\\roslynskills-research"
+if (Test-Path $skillSourceDir -PathType Container) {
+    Copy-Item -Path (Join-Path $skillSourceDir "*") -Destination $skillDir -Recurse -Force
+}
+
+$tightSkillSourceDir = Join-Path $repoRoot "skills\\roslynskills-tight"
+if (Test-Path $tightSkillSourceDir -PathType Container) {
+    Copy-Item -Path (Join-Path $tightSkillSourceDir "*") -Destination $tightSkillDir -Recurse -Force
 }
 
 $pitOfSuccessSource = Join-Path $repoRoot "docs\PIT_OF_SUCCESS.md"
@@ -212,6 +220,8 @@ Contents:
   - roslyn-transport(.cmd)
 - PIT_OF_SUCCESS.md
 - skills/roslynskills-research/SKILL.md
+- skills/roslynskills-research/references/
+- skills/roslynskills-tight/SKILL.md
 
 First command:
 - bin/roscli quickstart
@@ -226,6 +236,7 @@ $manifest = [ordered]@{
     files = @(
         "roslynskills-bundle-$normalizedVersion.zip",
         "roslynskills-research-skill-$normalizedVersion.zip",
+        "roslynskills-tight-skill-$normalizedVersion.zip",
         "$toolPackageId.$normalizedVersion.nupkg"
     )
 }
@@ -238,13 +249,20 @@ if (Test-Path $bundleZipPath -PathType Leaf) {
 }
 Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $bundleZipPath -Force
 
-$skillSourceDir = Join-Path $repoRoot "skills\roslynskills-research"
 $skillZipPath = Join-Path $OutputRoot ("roslynskills-research-skill-{0}.zip" -f $normalizedVersion)
 if (Test-Path $skillZipPath -PathType Leaf) {
     Remove-Item $skillZipPath -Force
 }
 if (Test-Path $skillSourceDir -PathType Container) {
     Compress-Archive -Path (Join-Path $skillSourceDir "*") -DestinationPath $skillZipPath -Force
+}
+
+$tightSkillZipPath = Join-Path $OutputRoot ("roslynskills-tight-skill-{0}.zip" -f $normalizedVersion)
+if (Test-Path $tightSkillZipPath -PathType Leaf) {
+    Remove-Item $tightSkillZipPath -Force
+}
+if (Test-Path $tightSkillSourceDir -PathType Container) {
+    Compress-Archive -Path (Join-Path $tightSkillSourceDir "*") -DestinationPath $tightSkillZipPath -Force
 }
 
 $checksumEntries = New-Object System.Collections.Generic.List[string]
@@ -262,6 +280,7 @@ Set-Content -Path $checksumsPath -Value $checksumEntries
 
 Write-Host ("BUNDLE_ZIP={0}" -f $bundleZipPath)
 Write-Host ("SKILL_ZIP={0}" -f $skillZipPath)
+Write-Host ("TIGHT_SKILL_ZIP={0}" -f $tightSkillZipPath)
 Write-Host ("MANIFEST={0}" -f $manifestPath)
 Write-Host ("CHECKSUMS={0}" -f $checksumsPath)
 

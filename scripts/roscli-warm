@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-cache_dir="$repo_root/artifacts/roscli-cache"
+cache_dir="${ROSCLI_CACHE_DIR:-$repo_root/artifacts/roscli-cache}"
 stamp_file="$cache_dir/publish.stamp"
 
 dotnet publish "$repo_root/src/RoslynSkills.Cli" -c Release -o "$cache_dir" --nologo

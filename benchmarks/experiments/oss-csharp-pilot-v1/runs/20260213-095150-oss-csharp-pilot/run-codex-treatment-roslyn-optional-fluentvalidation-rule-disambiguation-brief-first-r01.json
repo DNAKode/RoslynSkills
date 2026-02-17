@@ -16,9 +16,6 @@
     "prompt_tokens":  1311532,
     "completion_tokens":  8589,
     "total_tokens":  1320121,
-    "tool_calls":  [
-
-                   ],
     "context":  {
                     "task_title":  "FluentValidation ambiguous member targeting in validator updates",
                     "repo":  "FluentValidation/FluentValidation",
@@ -34,5 +31,26 @@
                     "roslyn_guidance_profile":  "brief-first",
                     "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-095150-oss-csharp-pilot\\fluentvalidation-rule-disambiguation\\treatment-roslyn-optional\\run-codex-treatment-roslyn-optional-fluentvalidation-rule-disambiguation-brief-first-r01",
                     "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-treatment-ro-fluentvalida-brief-first-r01-baf3fdc0"
-                }
+                },
+    "tools_offered":  [
+                          "shell.exec",
+                          "nav.find_symbol",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_file_diagnostics",
+                          "diag.get_workspace_snapshot",
+                          "diag.get_solution_snapshot",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "edit.create_file",
+                          "session.open",
+                          "session.apply_text_edits",
+                          "session.apply_and_commit",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+
+                   ]
 }

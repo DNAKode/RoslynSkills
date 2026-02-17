@@ -1,0 +1,138 @@
+{
+    "run_id":  "run-codex-treatment-roslyn-required-mediatr-openbehavior-nullguard-brief-first-v5-r01",
+    "task_id":  "mediatr-openbehavior-nullguard",
+    "condition_id":  "treatment-roslyn-required",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "gpt-5.3-codex-spark",
+    "model_reasoning_effort":  "low",
+    "succeeded":  true,
+    "setup_passed":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "exit_code":  0,
+    "timed_out":  false,
+    "duration_seconds":  83.858,
+    "prompt_tokens":  367261,
+    "completion_tokens":  4083,
+    "total_tokens":  371344,
+    "tools_offered":  [
+                          "shell.exec",
+                          "nav.find_symbol",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_file_diagnostics",
+                          "diag.get_workspace_snapshot",
+                          "diag.get_solution_snapshot",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "edit.create_file",
+                          "session.open",
+                          "session.apply_text_edits",
+                          "session.apply_and_commit",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+                       {
+                           "ok":  true,
+                           "tool_name":  "nav.find_symbol"
+                       },
+                       {
+                           "ok":  false,
+                           "tool_name":  "nav.find_symbol"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  false,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  false,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "diag.get_file_diagnostics"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "diag.get_file_diagnostics"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "diag.get_file_diagnostics"
+                       },
+                       {
+                           "ok":  false,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  false,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       }
+                   ],
+    "roslyn_used":  true,
+    "roslyn_attempted_calls":  5,
+    "roslyn_successful_calls":  4,
+    "roslyn_usage_indicators":  [
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027scripts/roscli.cmd nav.find_symbol src/MediatR/Entities/OpenBehavior.cs ValidatePipelineBehaviorType --brief true --max-results 20 --require-workspace true\u0027",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027scripts/roscli.cmd nav.find_symbol test/MediatR.Tests OpenBehavior --brief true --max-results 20 --require-workspace true\u0027",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027scripts/roscli.cmd diag.get_file_diagnostics src/MediatR/Entities/OpenBehavior.cs --require-workspace true\u0027",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027scripts/roscli.cmd diag.get_file_diagnostics test/MediatR.Tests/MicrosoftExtensionsDI/PipelineTests.cs --require-workspace true\u0027",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \u0027scripts/roscli.cmd diag.get_file_diagnostics src/MediatR/Entities/OpenBehavior.cs --require-workspace true; scripts/roscli.cmd diag.get_file_diagnostics test/MediatR.Tests/MicrosoftExtensionsDI/PipelineTests.cs --require-workspace true\u0027"
+                                ],
+    "roslyn_workspace_mode_workspace_count":  1,
+    "roslyn_workspace_mode_ad_hoc_count":  0,
+    "roslyn_workspace_mode_last":  "workspace",
+    "cs0518_detected":  false,
+    "validity_gates":  {
+                           "treatment_required":  true,
+                           "missing_required_roslyn_usage":  false,
+                           "missing_required_workspace_mode":  false,
+                           "workspace_health_gate_cs0518":  false,
+                           "failure_reasons":  [
+
+                                               ]
+                       },
+    "context":  {
+                    "task_title":  "MediatR OpenBehavior null-guard exception correctness",
+                    "repo":  "jbogard/MediatR",
+                    "repo_url":  "https://github.com/jbogard/MediatR.git",
+                    "commit":  "be61f5a415965bf81893a05b25e0c4936079f35c",
+                    "setup_checks":  [
+                                         "dotnet restore"
+                                     ],
+                    "acceptance_checks":  [
+                                              "dotnet test --nologo"
+                                          ],
+                    "task_prompt_file":  "prompts/mediatr-openbehavior-nullguard.md",
+                    "roslyn_guidance_profile":  "brief-first-v5",
+                    "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-151544-oss-csharp-pilot\\mediatr-openbehavior-nullguard\\treatment-roslyn-required\\run-codex-treatment-roslyn-required-mediatr-openbehavior-nullguard-brief-first-v5-r01",
+                    "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-treatment-ro-mediatr-open-brief-first--r01-a723818b"
+                }
+}

@@ -9,12 +9,39 @@ Purpose: consolidate current evidence across approaches/scenarios and separate e
 - Paired microtask (project task shape, Codex):
   - `artifacts/real-agent-runs/20260213-081019-paired/paired-run-summary.md`
   - `artifacts/real-agent-runs/20260213-081019-paired/paired-run-summary.json`
+- Paired microtask follow-ups (project task shape, Codex):
+  - `artifacts/real-agent-runs/20260213-103432-paired/paired-run-summary.md`
+  - `artifacts/real-agent-runs/20260213-103545-paired/paired-run-summary.md`
 - MCP interop sweep (project task shape, Codex + Spark, low/high):
   - `artifacts/real-agent-runs/20260213-mcp-interop-workspace-v4/codex-mcp-interop-summary.md`
 - OSS pilot (Avalonia, Codex Spark, low):
   - `artifacts/real-agent-runs/20260213-075926-oss-csharp-pilot/*`
   - `artifacts/real-agent-runs/20260213-080511-oss-csharp-pilot/*`
   - run records (latest overwrite semantics): `benchmarks/experiments/oss-csharp-pilot-v1/runs/*.json`
+- OSS pilot treatment-required (MediatR, Codex Spark, low):
+  - `artifacts/real-agent-runs/20260213-110716-oss-csharp-pilot/*`
+  - run record: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-110716-oss-csharp-pilot/run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-r01.json`
+- OSS pilot treatment-required (Codex Spark, low, tight prompting):
+  - `artifacts/real-agent-runs/20260213-140558-oss-csharp-pilot/*`
+  - `artifacts/real-agent-runs/20260213-141123-oss-csharp-pilot/*`
+  - run records:
+    - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-140558-oss-csharp-pilot/run-codex-control-text-only-mediatr-behavior-targeting-brief-first-v4-r01.json`
+    - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-140558-oss-csharp-pilot/run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-v4-r01.json`
+    - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-141123-oss-csharp-pilot/run-codex-control-text-only-fluentvalidation-rule-disambiguation-brief-first-v4-r01.json`
+    - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-141123-oss-csharp-pilot/run-codex-treatment-roslyn-required-fluentvalidation-rule-disambiguation-brief-first-v4-r01.json`
+- OSS pilot scope expansion (Codex Spark, low, `brief-first-v4`):
+  - `artifacts/real-agent-runs/20260213-142746-oss-csharp-pilot/*`
+  - run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-142746-oss-csharp-pilot/*.json`
+  - gate summary: `artifacts/agent-eval/20260213-145801/summary/agent-eval-summary.md`
+- OSS pilot prompt/guidance iteration (Codex Spark, low, `brief-first-v5`):
+  - `artifacts/real-agent-runs/20260213-150618-oss-csharp-pilot/*`
+  - `artifacts/real-agent-runs/20260213-151544-oss-csharp-pilot/*`
+  - run records:
+    - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-150618-oss-csharp-pilot/*.json`
+    - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-151544-oss-csharp-pilot/*.json`
+  - gate summaries:
+    - `artifacts/agent-eval/20260213-151416/summary/agent-eval-summary.md`
+    - `artifacts/agent-eval/20260213-151923/summary/agent-eval-summary.md`
 
 ## A) Project Microtask (Codex Spark, brief-first)
 
@@ -63,6 +90,66 @@ Source:
 Read:
 - This replicate shows lower token totals in treatment than control, likely due to trajectory variance (control performed high-output directory listing and raw file reads).
 - Duration remained higher for treatment (Roslyn helper latency dominates on this trivial task).
+
+
+## A4) Project Microtask (Codex Spark, brief-first-v2, low reasoning, with MCP arm)
+
+Source:
+- `artifacts/real-agent-runs/20260213-103432-paired/paired-run-summary.md`
+
+Task shape: project (`TargetHarness.csproj`) rename with overload hazards.
+
+| Approach | Duration (s) | Model total tokens | Round trips | Roslyn used | Roslyn calls (ok/attempted) | Workspace modes (workspace/ad_hoc) | Outcome |
+| --- | ---: | ---: | ---: | --- | --- | --- | --- |
+| control (no tools) | 6.007 | 25,901 | 1 | false | 0/0 | 0/0 | passed |
+| roscli treatment | 19.023 | 20,009 | 1 | true | 1/1 | 2/0 | passed |
+| Roslyn MCP treatment | 13.573 | 55,191 | 3 | true | 2/2 | 2/0 | passed |
+
+Read:
+- This replicate shows treatment lower tokens than control, likely trajectory variance (control performed raw file read and wrote a detailed explanation; treatment performed one Roslyn helper call and stopped).
+- MCP was materially higher token overhead than roscli on this microtask.
+
+
+## A5) Project Microtask (Codex Spark, brief-first-v2, high reasoning; helper timeout replicate)
+
+Source:
+- `artifacts/real-agent-runs/20260213-103545-paired/paired-run-summary.md`
+
+Task shape: project (`TargetHarness.csproj`) rename with overload hazards.
+
+| Approach | Duration (s) | Model total tokens | Round trips | Roslyn used | Roslyn calls (ok/attempted) | Workspace modes (workspace/ad_hoc) | Outcome |
+| --- | ---: | ---: | ---: | --- | --- | --- | --- |
+| control (no tools) | 6.688 | 26,602 | 1 | false | 0/0 | 0/0 | passed |
+| roscli treatment | 38.647 | 54,330 | 4 | true | 3/4 | 3/0 | passed |
+
+Read:
+- This replicate shows tool overhead dominating on a low-ambiguity microtask: duration ratio ~5.8x and token ratio ~2.0x.
+- A Roslyn helper attempt timed out, adding extra tool round-trips (and dominating duration).
+
+
+## A6) Project Microtask (Codex Spark, brief-first-v4 "tight commands" guidance)
+
+Task shape: project (`TargetHarness.csproj`) rename with overload hazards.
+
+Sources:
+- low: `artifacts/real-agent-runs/20260213-113738-paired/paired-run-summary.md`
+- medium: `artifacts/real-agent-runs/20260213-113818-paired/paired-run-summary.md`
+- high: `artifacts/real-agent-runs/20260213-113904-paired/paired-run-summary.md`
+
+Result (Codex Spark, project task shape, `brief-first-v4`, fail-closed):
+- low:
+  - control: `tokens=35,633`, `duration_seconds=8.904`.
+  - treatment: `tokens=28,954`, `duration_seconds=13.991`, `roslyn_calls=2/2`.
+- medium:
+  - control: `tokens=36,778`, `duration_seconds=10.934`.
+  - treatment: `tokens=29,498`, `duration_seconds=15.933`, `roslyn_calls=2/2`.
+- high:
+  - control: `tokens=27,285`, `duration_seconds=8.107`.
+  - treatment: `tokens=29,804`, `duration_seconds=14.544`, `roslyn_calls=2/2`.
+
+Read:
+- The v4 guidance reliably induces the intended minimal tool sequence (2 successful Roslyn calls; workspace-bound) and reduces response verbosity.
+- Duration remains higher for treatment on this low-ambiguity microtask; token deltas are smaller and can still invert due to control trajectory variance.
 ## B) MCP Interop Sweep (Codex + Spark)
 
 Task shape: project.
@@ -102,6 +189,111 @@ Result (Codex Spark, low reasoning):
 Read:
 - This replicate is useful as an OSS realism check, but it is confounded for tool effectiveness because the treatment lane did not actually use roscli.
 - Next step: add/enable a treatment-required lane (or fail-closed integrity policy) so OSS treatment runs must demonstrate at least one successful Roslyn call (and `workspace_context.mode=workspace`).
+
+
+## C3) OSS Pilot (MediatR, Treatment-Required)
+
+Task: `mediatr-behavior-targeting` (workspace expected)
+
+Evidence:
+- artifacts: `artifacts/real-agent-runs/20260213-110716-oss-csharp-pilot/mediatr-behavior-targeting/treatment-roslyn-required/*`
+- run record: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-110716-oss-csharp-pilot/run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-r01.json`
+
+Result (Codex Spark, low reasoning):
+- treatment-required: passed acceptance (`dotnet test --nologo`), with `roslyn_used=true`, `roslyn_successful_calls=2`, and `roslyn_workspace_mode_last=workspace`.
+
+Read:
+- This removes the prior OSS confound where “treatment” completed with zero Roslyn tool calls.
+- Even for moderate-sized repos, token totals can still be very high; prompt posture and anti-churn constraints remain important.
+
+
+## C4) OSS Pilot (Treatment-Required, Brief-First-V4 Tight Prompting)
+
+Task shape: OSS repo (workspace expected).
+
+### MediatR (Codex Spark, low)
+
+Sources:
+- `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-140558-oss-csharp-pilot/run-codex-control-text-only-mediatr-behavior-targeting-brief-first-v4-r01.json`
+- `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-140558-oss-csharp-pilot/run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-v4-r01.json`
+
+Result:
+- control: `duration_seconds=76.197`, `total_tokens=826,667`, passed acceptance.
+- treatment-required: `duration_seconds=105.407`, `total_tokens=821,083`, passed acceptance, `roslyn_successful_calls=4`, `roslyn_workspace_mode_last=workspace`.
+
+Read:
+- Tight prompting successfully enforced Roslyn usage and workspace binding evidence.
+- Token totals remain high but comparable between control and treatment; duration is higher for treatment in this replicate.
+
+### FluentValidation (Codex Spark, low)
+
+Sources:
+- `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-141123-oss-csharp-pilot/run-codex-control-text-only-fluentvalidation-rule-disambiguation-brief-first-v4-r01.json`
+- `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-141123-oss-csharp-pilot/run-codex-treatment-roslyn-required-fluentvalidation-rule-disambiguation-brief-first-v4-r01.json`
+
+Result:
+- control: `duration_seconds=152.917`, `total_tokens=1,925,066`, passed acceptance.
+- treatment-required: `duration_seconds=191.752`, `total_tokens=2,153,930`, passed acceptance, `roslyn_successful_calls=3`, `roslyn_workspace_mode_last=workspace`.
+
+Read:
+- Treatment-required eliminated the “Roslyn optional but unused” confound for FluentValidation.
+- In this replicate, treatment incurred a duration/token overhead despite successful tool usage; need ambiguity-heavy tasks with tighter, more specific prompts to see correctness/efficiency wins.
+
+## C5) OSS Pilot (Treatment-Required, More Concrete Small-Scope Tasks)
+
+Task shape: OSS repo (workspace expected).
+
+Evidence:
+- run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-142746-oss-csharp-pilot/*.json`
+- artifacts: `artifacts/real-agent-runs/20260213-142746-oss-csharp-pilot/*`
+- gate summary: `artifacts/agent-eval/20260213-145801/summary/agent-eval-summary.md`
+
+### MediatR (OpenBehavior null-guard correctness)
+
+Result (Codex Spark, low, `brief-first-v4`):
+- control: `duration_seconds=36.392`, `total_tokens=148,327`, passed acceptance.
+- treatment-required: `duration_seconds=170.898`, `total_tokens=780,384`, passed acceptance, `roslyn_successful_calls=9`, `roslyn_workspace_mode_last=workspace`.
+
+Read:
+- For this narrow change, treatment achieved the intended workspace-bound Roslyn usage but incurred large token/time overhead in this single replicate.
+
+### Serilog (LogContext null-enricher guard)
+
+Result (Codex Spark, low, `brief-first-v4`):
+- control: `duration_seconds=32.452`, `total_tokens=216,336`, passed acceptance.
+- treatment-required: `duration_seconds=49.318`, `total_tokens=179,588`, passed acceptance, `roslyn_successful_calls=4`, `roslyn_workspace_mode_last=workspace`.
+
+Read:
+- This replicate shows treatment lower tokens than control despite using Roslyn calls; still higher wall-clock time.
+- Concrete, file-scoped tasks reduce “open-ended exploration” confounds, but token deltas can still invert due to trajectory variance.
+
+## C6) OSS Pilot (Brief-First-V5 Tight Prompting, MediatR Token Clamp Attempt)
+
+Task: `mediatr-openbehavior-nullguard` (workspace expected).
+
+### First attempt (failed due to task prompt ambiguity)
+
+Sources:
+- run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-150618-oss-csharp-pilot/*.json`
+- artifacts: `artifacts/real-agent-runs/20260213-150618-oss-csharp-pilot/*`
+- gate: `artifacts/agent-eval/20260213-151416/summary/agent-eval-summary.md`
+
+Outcome:
+- Both control and treatment failed acceptance due to a cross-targeting issue: `ArgumentNullException.ThrowIfNull(...)` does not exist for some of MediatR’s TFMs (e.g. `netstandard2.0`).
+
+### Prompt-fixed rerun (passed)
+
+Sources:
+- run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-151544-oss-csharp-pilot/*.json`
+- artifacts: `artifacts/real-agent-runs/20260213-151544-oss-csharp-pilot/*`
+- gate: `artifacts/agent-eval/20260213-151923/summary/agent-eval-summary.md`
+
+Result (Codex Spark, low, `brief-first-v5`):
+- control: `duration_seconds=30.249`, `total_tokens=147,108`, passed acceptance.
+- treatment-required: `duration_seconds=83.858`, `total_tokens=371,344`, passed acceptance, `roslyn_successful_calls=4`, `roslyn_workspace_mode_last=workspace`.
+
+Read:
+- Compared to the earlier passing v4 bundle for this task (`treatment total_tokens=780,384`), the v5 run reduced treatment token spend substantially, but treatment still cost more than control in this replicate.
 ## Most Promising Path (Current Read)
 
 1. Default lane for day-to-day: roscli (CLI) with `brief-first` posture and explicit `require_workspace=true` on nav/diag for project code.

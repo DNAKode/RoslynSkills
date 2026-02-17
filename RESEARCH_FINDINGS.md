@@ -118,6 +118,26 @@ Warm-state signal from transport samples:
 Interpretation:
 
 - a major portion of current CLI cost is process startup/initialization overhead, not just command logic.
+
+### F-2026-02-15-01: Claude skill adoption is measurable and reproducible; Bash-first guidance reduces wrapper friction
+
+Evidence:
+
+- skill prompt update: `skills/roslynskills-tight/SKILL.md` (Bash-first `bash scripts/roscli ...` guidance)
+- empirical trigger/adoption harness: `benchmarks/scripts/Test-ClaudeSkillTriggering.ps1`
+- example run summary: `artifacts/skill-tests/checkpoint-20260215i/skill-trigger-summary.md`
+- example run transcript: `artifacts/skill-tests/checkpoint-20260215i/rename-overload-collision-nested-v1-with-skill-invoked-r01/transcript.jsonl`
+
+Result (single task, 1 replicate):
+
+- `skill_loaded_rate`: 1.0 for installed conditions
+- `roslyn_used_rate`: 1.0 for installed conditions (detected via transcript tool-use lines)
+- `dotnet_build_pass_rate`: 1.0 across conditions (harness gate)
+
+Interpretation:
+
+- "skill loads" is not sufficient; we need transcript-based usage accounting and file-change/build gates to detect hallucinated/non-applied edits.
+- Claude Code often executes via the `Bash` tool even on Windows; skill examples must prioritize `bash scripts/roscli ...` to avoid path separator churn.
 - published-DLL CLI already removes most `dotnet run` overhead, but persistent transport removes additional per-call launch cost.
 - warm calls on a persistent process are often an order of magnitude faster than published-DLL process-per-call execution.
 
@@ -1606,3 +1626,587 @@ Interpretation:
 
 Decision:
 - For microtasks, treat token totals as noisy; emphasize reliability/condition integrity (fail-closed on missing tool usage) and shift primary evidence to ambiguity-heavy and multi-file tasks.
+
+
+### F-2026-02-13-58: New paired replicates reconfirm microtask overhead sensitivity (and MCP token overhead)
+
+Evidence:
+- `artifacts/real-agent-runs/20260213-103432-paired/paired-run-summary.md`
+- `artifacts/real-agent-runs/20260213-103545-paired/paired-run-summary.md`
+
+Results (Codex Spark, project task shape, `brief-first-v2`):
+- low reasoning replicate (`20260213-103432-paired`):
+  - control: `total_tokens=25,901`, `duration_seconds=6.007`.
+  - roscli treatment: `total_tokens=20,009`, `duration_seconds=19.023`.
+  - MCP treatment: `total_tokens=55,191`, `duration_seconds=13.573`.
+- high reasoning replicate (`20260213-103545-paired`):
+  - control: `total_tokens=26,602`, `duration_seconds=6.688`.
+  - roscli treatment: `total_tokens=54,330`, `duration_seconds=38.647`.
+
+Interpretation:
+- Token deltas can invert on trivial tasks due to divergent control trajectories, but duration overhead remains consistently higher when tools are invoked (wrapper latency dominates).
+- MCP remains materially higher token overhead than roscli on this microtask family.
+
+Decision:
+- Keep microtasks as a diagnostic for overhead sources, but prioritize ambiguity-heavy and multi-step tasks for primary effectiveness claims.
+
+
+### F-2026-02-13-59: OSS pilot now supports a treatment-required lane and a MediatR run passed with workspace binding evidence
+
+Evidence:
+- manifest updated with `treatment-roslyn-required`: `benchmarks/experiments/oss-csharp-pilot-v1/manifest.json`
+- harness updated to fail-closed on missing required Roslyn usage/workspace evidence: `benchmarks/scripts/Run-OssCsharpPilotRealRuns.ps1`
+- run record:
+  - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-110716-oss-csharp-pilot/run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-r01.json`
+
+Result (Codex Spark, low reasoning, `mediatr-behavior-targeting`, treatment-required):
+- `succeeded=true`, `duration_seconds=66.808`, `total_tokens=766,072`.
+- `roslyn_used=true`, `roslyn_successful_calls=2`, `roslyn_workspace_mode_last=workspace`.
+
+Interpretation:
+- This removes the prior OSS confound where “treatment” completed with zero Roslyn tool calls.
+- Large-repo lanes can still generate very high token totals; strict prompt/trajectory bounding remains critical.
+
+Decision:
+- Use `treatment-roslyn-required` (or equivalent fail-closed integrity) for OSS treatment evidence going forward.
+
+
+### F-2026-02-13-60: A tighter tool prompt (brief-first-v4) reliably induces a 2-call roscli workflow with bounded output
+
+Evidence:
+- `artifacts/real-agent-runs/20260213-113738-paired/paired-run-summary.md` (low reasoning)
+- `artifacts/real-agent-runs/20260213-113818-paired/paired-run-summary.md` (medium reasoning)
+- `artifacts/real-agent-runs/20260213-113904-paired/paired-run-summary.md` (high reasoning)
+
+Result (Codex Spark, project task shape, `brief-first-v4`):
+- treatment runs consistently executed exactly the intended minimal roscli sequence:
+  - `edit.rename_symbol` (workspace-bound) then `diag.get_file_diagnostics` (workspace-bound)
+  - `roslyn_successful_calls=2` with `workspace_context.mode=workspace`
+- treatment responses were constrained to the requested two-line format (reduced output verbosity).
+
+Interpretation:
+- Prompt posture is a controllable variable that can reliably reduce “exploration churn” and verbosity in Roslyn-enabled lanes, without sacrificing correctness on this microtask.
+- Even with tighter prompting, tool invocation still increases wall-clock time vs control on trivial edits; the primary value hypothesis remains in ambiguity-heavy and multi-step tasks.
+
+Decision:
+- Keep `brief-first-v4` as the default “tight” tool-prompt variant for future paired microtask sweeps, and use it as a baseline when optimizing transport latency and wrapper overhead.
+
+
+### F-2026-02-13-61: OSS pilot scope expansion requires explicit primary comparison selection and schema-aligned run records
+
+Evidence:
+- manifest primary-comparison selection:
+  - `benchmarks/experiments/oss-csharp-pilot-v1/manifest.json` (`primary_control_condition_id`, `primary_treatment_condition_id`)
+- scorer support for multi-condition experiments:
+  - `src/RoslynSkills.Benchmark/AgentEval/AgentEvalModels.cs`
+  - `src/RoslynSkills.Benchmark/AgentEval/AgentEvalValidation.cs`
+  - `src/RoslynSkills.Benchmark/AgentEval/AgentEvalScorer.cs`
+- OSS harness run-record shaping + backfill:
+  - `benchmarks/scripts/Run-OssCsharpPilotRealRuns.ps1` (writes `tools_offered` + `tool_calls`)
+  - `benchmarks/scripts/Upgrade-OssPilotRunRecords.ps1` (backfills older OSS runs)
+- scope-expanded run bundle + gate:
+  - run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-142746-oss-csharp-pilot/*.json`
+  - gate summary: `artifacts/agent-eval/20260213-145801/summary/agent-eval-summary.md`
+
+Result (Codex Spark, low, `brief-first-v4`, treatment-required primary):
+- `mediatr-openbehavior-nullguard`:
+  - control: `duration_seconds=36.392`, `total_tokens=148,327`, passed.
+  - treatment-required: `duration_seconds=170.898`, `total_tokens=780,384`, passed; workspace-bound Roslyn calls.
+- `serilog-structured-context-change`:
+  - control: `duration_seconds=32.452`, `total_tokens=216,336`, passed.
+  - treatment-required: `duration_seconds=49.318`, `total_tokens=179,588`, passed; workspace-bound Roslyn calls.
+
+Interpretation:
+- Once the OSS pilot included multiple Roslyn-enabled conditions (optional + required), the benchmark scorer needed an explicit definition of which control/treatment pair is the primary comparison; otherwise the gate would report insufficient data even when the intended pair was present.
+- Without emitting schema-aligned `tools_offered`/`tool_calls`, OSS run records could not be validated/scored by the shared `agent-eval-*` pipeline (a hard failure mode); backfilling run records restores end-to-end gate usability.
+
+Decision:
+- Keep `treatment-roslyn-required` as the primary treatment condition for the OSS pilot until optional-vs-required is separately replicate-backed.
+- Continue adding concrete, file-scoped OSS tasks to reduce open-ended exploration churn, and add replicate coverage before interpreting token deltas.
+
+
+### F-2026-02-13-62: Brief-first-v5 reduced MediatR treatment token blowup, but required task prompt tightening to avoid TFM traps
+
+Evidence:
+- failed first attempt (prompt ambiguity + TFM issue):
+  - `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-150618-oss-csharp-pilot/*.json`
+  - acceptance log showing `ArgumentNullException.ThrowIfNull` missing for `netstandard2.0`:
+    - `artifacts/real-agent-runs/20260213-150618-oss-csharp-pilot/mediatr-openbehavior-nullguard/control-text-only/run-codex-control-text-only-mediatr-openbehavior-nullguard-brief-first-v5-r01/acceptance.log`
+- prompt tightened to forbid `ThrowIfNull` and to test `new OpenBehavior(null!, ...)` directly:
+  - `benchmarks/experiments/oss-csharp-pilot-v1/prompts/mediatr-openbehavior-nullguard.md`
+- passing rerun:
+  - run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-151544-oss-csharp-pilot/*.json`
+  - gate summary: `artifacts/agent-eval/20260213-151923/summary/agent-eval-summary.md`
+
+Result (Codex Spark, low, `brief-first-v5`, task `mediatr-openbehavior-nullguard`):
+- control: `duration_seconds=30.249`, `total_tokens=147,108`, passed.
+- treatment-required: `duration_seconds=83.858`, `total_tokens=371,344`, passed, `roslyn_successful_calls=4`, `workspace_mode_last=workspace`.
+
+Interpretation:
+- The tighter v5 guidance correlated with fewer Roslyn calls (4 successful calls vs 9 in the earlier v4 passing run) and substantially lower treatment token spend compared to the earlier v4 MediatR run (`780,384` tokens), but treatment still cost more tokens/time than control in this replicate.
+- Task prompts for OSS work must be TFM-aware: recommending APIs unavailable in some target frameworks (like `ThrowIfNull`) creates false failures unrelated to Roslyn/tool value.
+
+Decision:
+- Keep `brief-first-v5` available for “token clamp” experiments, but treat task-prompt quality (TFM correctness + exact test target) as a first-class experimental variable in OSS lanes.
+
+### F-2026-02-13-63: Claude skill-style tight guidance can cut Roslyn overhead (fewer round-trips, lower tokens) on a microtask
+
+Evidence:
+- baseline Claude paired run (brief-first-v4):
+  - `artifacts/real-agent-runs/20260213-claude-brief-first-v4-paired-r1/paired-run-summary.md`
+  - `artifacts/real-agent-runs/20260213-claude-brief-first-v4-paired-r1/paired-run-summary.json`
+- tight skill-style Claude paired run (skill-tight-v1, fixed to use `bash scripts/roscli`):
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-paired-r2/paired-run-summary.md`
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-paired-r2/paired-run-summary.json`
+- guidance implementation:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`RoslynGuidanceProfile=skill-tight-v1`)
+
+Result (Claude, task shape `project`, both passed constraint checks):
+- brief-first-v4:
+  - control: `duration_seconds=16.150`, `total_tokens=553`, `round_trips=3`
+  - treatment: `duration_seconds=36.615`, `total_tokens=883`, `round_trips=4`, `roslyn_successful_calls=2/3`
+  - delta: `+330` tokens, `+1` round trip, `+20.465s`
+- skill-tight-v1:
+  - control: `duration_seconds=17.333`, `total_tokens=554`, `round_trips=3`
+  - treatment: `duration_seconds=21.940`, `total_tokens=272`, `round_trips=2`, `roslyn_successful_calls=2/2`
+  - delta: `-282` tokens, `-1` round trip, `+4.607s`
+
+Interpretation:
+- A skill-style prompt (explicit call budget + progressive disclosure + environment-correct invocation + hard output clamp) can materially reduce tool churn and token overhead for Claude in Roslyn-enabled lanes, even on a trivial task.
+- Wall-clock time still increased versus control (tool invocation latency dominates), but the delta was substantially smaller in the tight profile.
+
+Decision:
+- Use `skill-tight-v1` as the default Claude treatment profile for subsequent paired runs, and carry its structure forward when expanding benchmark scope to ambiguity-heavy/multi-file tasks.
+
+### F-2026-02-15-64: Ambiguity-heavy overload rename tasks show mixed token deltas under skill-tight-v1; elapsed overhead persists
+
+Evidence:
+- Per-replicate paired summaries:
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-classes-r1b/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-classes-r2/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-nested-r1/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-nested-r2/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-generic-r1/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260213-claude-skill-tight-v1-generic-r2/paired-run-summary.json`
+- Aggregate rollup:
+  - `artifacts/real-agent-runs/20260215-aggregate-skill-tight-v1-summary.md`
+  - `artifacts/real-agent-runs/20260215-aggregate-skill-tight-v1-summary.json`
+- Harness inputs:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`-TaskId rename-overload-collision-classes-v1|rename-overload-collision-nested-v1|rename-overload-collision-generic-v1`, `-RoslynGuidanceProfile skill-tight-v1`, `-FailOnMissingTreatmentRoslynUsage`)
+
+Result (Claude-only, 3 tasks x 2 replicates, all runs passed constraint checks, treatment required Roslyn usage):
+
+| Task | n | Avg delta tokens (treat-control) | Avg delta seconds | Avg delta round-trips | Token deltas |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `rename-overload-collision-classes-v1` | 2 | `-101.0` | `+14.623` | `+0.000` | `-87, -115` |
+| `rename-overload-collision-generic-v1` | 2 | `+48.5` | `+14.056` | `+0.000` | `-13, +110` |
+| `rename-overload-collision-nested-v1` | 2 | `+183.0` | `+21.434` | `+1.000` | `+155, +211` |
+
+Overall averages across all 6 replicates:
+- `avg_delta_tokens=+43.5`
+- `avg_delta_seconds=+16.704`
+- `avg_delta_round_trips=+0.333`
+
+Interpretation:
+- `skill-tight-v1` keeps the treatment trajectory predictable (3 successful Roslyn calls, workspace-bound) and can be token-competitive on some ambiguity tasks (class-collision wins consistently; generic is mixed), but nested-scope ambiguity still drives extra round-trips and token overhead.
+- Wall-clock remains worse for treatment on every replicate in this task family; tool invocation latency dominates at this scale.
+
+Decision:
+- Keep `skill-tight-v1` as the default Claude treatment posture for ambiguity-heavy overload tasks, but treat “nested ambiguity” as a target for command-surface improvement: reduce the required call budget (ideally 2 calls) by allowing rename targeting by signature/containing type without a preflight `nav.find_symbol`.
+
+### F-2026-02-15-65: skill-tight-v2 (skip explicit diag when edit returns diagnostics) cuts nested-task overhead (2 Roslyn calls, fewer round-trips, lower tokens)
+
+Evidence:
+- New paired run (nested ambiguity, Claude-only):
+  - `artifacts/real-agent-runs/20260215-claude-skill-tight-v2-nested-r1/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260215-claude-skill-tight-v2-nested-r1/paired-run-summary.md`
+- Guidance implementation:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`RoslynGuidanceProfile=skill-tight-v2`)
+
+Result (`rename-overload-collision-nested-v1`, both passed constraint checks, treatment required Roslyn usage):
+- control: `total_tokens=503`, `round_trips=2`, `duration_seconds=16.034`
+- treatment (skill-tight-v2): `total_tokens=457`, `round_trips=2`, `duration_seconds=25.534`, `roslyn_successful_calls=2`
+- delta: `-46` tokens, `+0` round-trips, `+9.500s`
+
+Interpretation:
+- The prior `skill-tight-v1` “always run diag” rule was unnecessary for this task family because `edit.rename_symbol` already reports `diagnostics_after_edit` in its response (0/0 here). Allowing the agent to stop after `nav.find_symbol` + `edit.rename_symbol` removes one Roslyn call and eliminates the nested-task round-trip regression, while improving token efficiency.
+
+Decision:
+- Promote `skill-tight-v2` as the default Claude treatment profile for paired microtasks where `edit.*` commands return post-edit diagnostics reliably; keep `skill-tight-v1` available as a conservative “always verify” profile.
+
+### F-2026-02-15-66: Anthropic skill-guide inspired “critical-first + call budget + validate-before-edit” tightened prompt (skill-tight-v3) further reduces nested-task token overhead
+
+Evidence:
+- Guidance profile implementation:
+  - `benchmarks/scripts/Run-PairedAgentRuns.ps1` (`RoslynGuidanceProfile=skill-tight-v3`)
+- Paired runs (nested ambiguity task):
+  - `artifacts/real-agent-runs/20260215-claude-skill-tight-v3-nested-r1/paired-run-summary.json`
+  - `artifacts/real-agent-runs/20260215-claude-skill-tight-v3-nested-r2/paired-run-summary.json`
+- Comparator (same task, earlier profile):
+  - `artifacts/real-agent-runs/20260215-claude-skill-tight-v2-nested-r1/paired-run-summary.json`
+
+Result (`rename-overload-collision-nested-v1`, all runs passed constraint checks, treatment required Roslyn usage):
+- `skill-tight-v2` (r1): delta tokens `-46`, delta round-trips `+0`, delta seconds `+9.500`, Roslyn calls `2`
+- `skill-tight-v3` (r1/r2): token deltas `-152, -158` (avg `-155`), delta round-trips `+0`, avg delta seconds `+8.311`, Roslyn calls `2`
+
+Interpretation:
+- Making the “non-negotiables” explicit at the top (critical rules), constraining behavior via a tight call budget, and forcing validation against `symbol_display` before rename correlates with lower token overhead without adding tool calls.
+- This matches the skill-guide warning that instructions fail when they are verbose/buried or non-actionable; `skill-tight-v3` reduces ambiguity in what to do next and what to avoid.
+
+Decision:
+- Keep `skill-tight-v3` as the default Claude treatment posture for these paired overload-rename tasks, and only fall back to `skill-tight-v1` when an explicit post-edit diagnostic call is required for trust (or when diagnosing harness/tool regressions).
+
+### F-2026-02-16-67: Claude skill trigger benchmark scope expanded beyond rename to six additional operation families with stronger gates
+
+Evidence:
+- Harness implementation:
+  - `benchmarks/scripts/Test-ClaudeSkillTriggering.ps1`
+- New task families added:
+  - `change-signature-named-args-v1`
+  - `update-usings-cleanup-v1`
+  - `add-member-threshold-v1`
+  - `replace-member-body-guard-v1`
+  - `create-file-audit-log-v1`
+  - `rename-multifile-collision-v1`
+- Gate hardening:
+  - workspace-level change detection (`workspace_changed`)
+  - per-file constraint assertions (`Add-CountCheckInFile`/`Add-MatchCheckInFile`)
+  - per-run timeout (`ClaudeTimeoutSeconds`) and timeout telemetry
+
+Result:
+- A fixture-validation sweep (`artifacts/skill-tests/wide-scope-fixture-validation-v2`) completed across all six new task families and both conditions.
+- Baseline project compile gates were green for all fixture families (`dotnet_build_pass_rate=1.0`), indicating task fixtures are benchmark-ready once agent auth is available.
+
+Interpretation:
+- The benchmark now measures a meaningfully wider operational surface than rename-only tasks and can detect create-file/multi-file edits reliably.
+- Scope expansion is ready for empirical A/B runs; the current blocker is Claude account access, not harness/task construction.
+
+Decision:
+- Keep the expanded task set as the default widened scope for Claude skill-adoption studies.
+
+### F-2026-02-16-68: Authentication/access failures can silently produce misleading zero-usage benchmark outputs unless treated as hard gate
+
+Evidence:
+- Auth-failed run artifacts:
+  - `artifacts/skill-tests/wide-scope-timeout-smoke/`
+  - `artifacts/skill-tests/wide-scope-timeout-smoke-opus/`
+- Transcript symptom:
+  - assistant error text: "Your account does not have access to Claude. Please login again or contact your administrator."
+- Harness hardening:
+  - `Parse-Transcript` now classifies auth failures (`auth_error`, `auth_error_message`)
+  - default fail-closed behavior on auth failures (unless `-IgnoreAuthenticationError` is explicitly set)
+
+Result:
+- Without auth-gating, summaries showed all-zero tool usage and false-negative pass/adoption signals.
+- With auth-gating enabled, runs fail fast and surface root cause clearly.
+
+Interpretation:
+- Auth/access state is an experimental integrity precondition, not incidental runtime noise.
+- Failing closed on auth errors prevents corrupting comparative benchmark conclusions.
+
+Decision:
+- Keep auth-failure fail-closed semantics as default in `Test-ClaudeSkillTriggering.ps1`.
+
+### F-2026-02-16-69: Wider operation-family sweep shows current tight Claude skill prompt still under-delivers on consistency (adoption and pass-rate regressions vs no-skill)
+
+Evidence:
+- Widened sweep artifacts:
+  - `artifacts/skill-tests/wide-scope-v2/skill-trigger-summary.md`
+  - `artifacts/skill-tests/wide-scope-v2/skill-trigger-summary.json`
+- Tasks included:
+  - `change-signature-named-args-v1`
+  - `update-usings-cleanup-v1`
+  - `add-member-threshold-v1`
+  - `replace-member-body-guard-v1`
+  - `create-file-audit-log-v1`
+  - `rename-multifile-collision-v1`
+
+Result:
+- `no-skill` aggregate:
+  - `pass_rate=0.833`
+  - `dotnet_build_pass_rate=1.000`
+  - `timeout_rate=0.000`
+- `with-skill` aggregate:
+  - `pass_rate=0.667`
+  - `dotnet_build_pass_rate=0.833`
+  - `roslyn_used_rate=0.333`
+  - `timeout_rate=0.333`
+  - `avg_tool_uses=6.5` (vs `3.0` for no-skill)
+- Auth integrity was clean in this run (`auth_error_rate=0`), so the regressions are not explained by account access issues.
+
+Interpretation:
+- The skill guidance is still too weak for broad operation families: it increases tool activity but does not yet convert that into reliable success gains.
+- Observed transcript patterns include command-schema retries and trailing verification loops that consume budget and trigger timeout outcomes.
+
+Decision:
+- Keep `roslynskills-tight` as experimental, not yet promoted as first-class default for broad-scope Claude tasks.
+- Next iteration should explicitly optimize for:
+  - higher adoption reliability (`roslyn_used_rate`),
+  - lower timeout rate,
+  - no pass-rate regression relative to no-skill baseline.
+
+### F-2026-02-16-70: Implemented the three high-friction investigative command gaps from fallback logs (`ctx.search_text`, `nav.find_invocations`, `query.batch`) with CLI/MCP guidance and regression coverage
+
+Evidence:
+- New commands:
+  - `src/RoslynSkills.Core/Commands/SearchTextCommand.cs` (`ctx.search_text`)
+  - `src/RoslynSkills.Core/Commands/FindInvocationsCommand.cs` (`nav.find_invocations`)
+  - `src/RoslynSkills.Core/Commands/QueryBatchCommand.cs` (`query.batch`)
+- Registry wiring:
+  - `src/RoslynSkills.Core/DefaultRegistryFactory.cs`
+- CLI guidance/shorthand updates:
+  - `src/RoslynSkills.Cli/CliApplication.cs`
+- MCP schema hint updates:
+  - `src/RoslynSkills.McpServer/Program.cs`
+- Regression coverage:
+  - `tests/RoslynSkills.Core.Tests/BreadthCommandTests.cs`
+  - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+
+Result:
+- Command inventory increased from 34 to 37 commands, including:
+  - `ctx.search_text`
+  - `nav.find_invocations`
+  - `query.batch`
+- Validation gates:
+  - `dotnet build RoslynSkills.slnx` passed.
+  - `dotnet test tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj --filter "FullyQualifiedName~BreadthCommandTests|FullyQualifiedName~CommandTests|FullyQualifiedName~SessionAndExplorationCommandTests"` passed (`43` tests).
+  - `dotnet test tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj --filter "FullyQualifiedName~CliApplicationTests"` passed (`27` tests).
+
+Interpretation:
+- The identified fallback pain points now have first-class Roslyn command paths:
+  - workspace/file text hunting can stay in Roslyn envelopes (`ctx.search_text`),
+  - call-site tracing can use semantic method anchoring (`nav.find_invocations`),
+  - investigative multi-query flows can be bundled into one round-trip (`query.batch`).
+
+Decision:
+- Promote these commands into the benchmark prompt/guidance profiles for cross-project investigative tasks and measure whether fallback `rg` usage and retry churn decrease.
+
+### F-2026-02-17-71: Claude wider non-rename sweep shows explicit skill invocation is currently the strongest Roslyn-adoption lever
+
+Evidence:
+- Sweep artifacts:
+  - `artifacts/skill-tests/20260217-wide-claude-v1/skill-trigger-summary.md`
+  - `artifacts/skill-tests/20260217-wide-claude-v1/skill-trigger-summary.json`
+- Tasks:
+  - `change-signature-named-args-v1`
+  - `replace-member-body-guard-v1`
+  - `create-file-audit-log-v1`
+- Conditions:
+  - `no-skill`, `with-skill`, `with-skill-invoked`, `with-skill-invoked-budgeted`
+
+Result:
+- `pass_rate` was `1.0` in all four conditions for this slice.
+- `roslyn_used_rate`:
+  - `no-skill`: `0.0`
+  - `with-skill`: `0.333`
+  - `with-skill-invoked`: `1.0`
+  - `with-skill-invoked-budgeted`: `0.333`
+
+Interpretation:
+- Explicit skill invocation remains the most reliable way to trigger Roslyn usage across non-rename operations.
+- Budget-constrained prompting reduced call volume but also reduced adoption consistency in this run.
+
+Decision:
+- Keep explicit invocation arm in widened sweeps and treat budget posture as a separate optimization axis, not an unconditional improvement.
+
+### F-2026-02-17-72: Rename-centric treatment guidance causes avoidable failure on non-rename paired tasks; operation-neutral guidance corrects targeting behavior
+
+Evidence:
+- Pre-fix paired run (rename-biased profile on add-member task):
+  - `artifacts/real-agent-runs/20260217-broadened-addmember-v1/paired-run-summary.md`
+  - treatment attempted `nav.find_symbol Target.cs Process` and failed constraints.
+- Harness update:
+  - Added `operation-neutral-v1` profile and mixed task families in `benchmarks/scripts/Run-PairedAgentRuns.ps1`.
+- Post-fix paired run:
+  - `artifacts/real-agent-runs/20260217-claude-opneutral-addmember-v2/paired-run-summary.md`
+
+Result:
+- With `operation-neutral-v1`, both control and treatment passed on `add-member-threshold-v1`.
+- Treatment showed successful Roslyn usage (`roslyn_calls 1/1`) without rename mis-targeting.
+
+Interpretation:
+- Guidance/profile alignment to task family is a first-order correctness requirement for treatment validity on mixed operation benchmarks.
+
+Decision:
+- Use `operation-neutral-v1` (or task-family-specific guidance) as baseline for non-rename paired experiments.
+
+### F-2026-02-17-73: Style-specific constraint assertions can hide true capability by marking semantically correct outputs as failures
+
+Evidence:
+- Earlier add-member paired runs failed despite semantically correct implementation due block-body-only check.
+- Constraint patch in `benchmarks/scripts/Run-PairedAgentRuns.ps1` now accepts:
+  - block-bodied
+  - expression-bodied
+  forms for `HasLongName`.
+
+Result:
+- Re-run after patch (`20260217-claude-opneutral-addmember-v2`) produced `run_passed=True` for both lanes.
+
+Interpretation:
+- Benchmark acceptance gates must prioritize semantic intent over formatting style to avoid false negative conclusions.
+
+Decision:
+- Continue auditing constraint checks for style rigidity whenever a control/treatment diff appears semantically valid but fails gates.
+
+### F-2026-02-17-74: Codex operation-neutral treatment on non-rename task still incurs heavy exploratory overhead despite successful Roslyn usage
+
+Evidence:
+- Paired run artifact:
+  - `artifacts/real-agent-runs/20260217-codex-opneutral-changesig-v1/paired-run-summary.md`
+- Task/profile:
+  - `change-signature-named-args-v1`
+  - `operation-neutral-v1`
+
+Result:
+- Control: pass, no Roslyn usage.
+- Treatment: pass, Roslyn usage observed (`11/17` successful/attempted calls).
+- Overhead vs control:
+  - duration ratio: `7.739`
+  - token ratio: `8.809`
+  - round trips: `20` vs `2`
+
+Interpretation:
+- Roslyn adoption alone is not sufficient; trajectory discipline dominates cost.
+- Major overhead source is redundant command-discovery/validation/retry loops before and around the actual operation.
+
+Decision:
+- Keep operation-neutral guidance for correctness alignment, but add stricter per-task call-budget rails in paired harness prompts before promoting it as an efficiency profile.
+
+### F-2026-02-17-75: Transcript-split deep-dive confirms overhead is concentrated pre-edit and dominated by discovery/schema-probe churn
+
+Evidence:
+- New trajectory-grade split analyzer outputs:
+  - `artifacts/tool-thinking-split/codex-opneutral-changesig-v1-thinking-metrics.json`
+  - `artifacts/tool-thinking-split/claude-opneutral-addmember-v2-thinking-metrics.json`
+
+Result:
+- Codex (`change-signature-named-args-v1`):
+  - treatment vs control deltas:
+    - `command_round_trips`: `+18`
+    - `events_before_first_edit`: `+18`
+    - `discovery_commands_before_first_edit`: `+6`
+    - `failed_commands_before_first_edit`: `+3`
+    - `schema_probe_count`: `+5`
+- Claude (`add-member-threshold-v1`):
+  - treatment vs control deltas:
+    - `command_round_trips`: `+8`
+    - `events_before_first_edit`: `+15`
+    - `discovery_commands_before_first_edit`: `+5`
+    - `failed_commands_before_first_edit`: `+2`
+    - `schema_probe_count`: `+5`
+
+Interpretation:
+- In both agents, the dominant treatment overhead is before first productive edit.
+- Overhead profile is consistent with repeated command-shape discovery (`describe-command` / `validate-input`) and retry loops, not with post-edit verification cost.
+
+Decision:
+- Prioritize reducing pre-edit schema/discovery loops (stronger task-scoped command hints, examples, and call-budget rails) before broader optimization of post-edit diagnostics flow.
+
+### F-2026-02-17-76: External medium-repo split runs required explicit Roslyn launcher injection; once injected, treatment Roslyn usage became measurable with clean control lanes
+
+Evidence:
+- Runner update:
+  - `benchmarks/scripts/Run-ToolThinkingSplitExperiment.ps1` now resolves and injects host launcher path (`scripts/roscli-stable.cmd` fallback chain) into treatment prompts and explicit prohibition into control prompts.
+- Artifacts:
+  - Pre-injection Codex run (`treatment_roslyn=0`):  
+    `artifacts/tool-thinking-split-runs/20260217-084934-codex-mediatr-invalid-notification-codex-v1/`
+  - Post-injection Codex run (`treatment_roslyn=3`):  
+    `artifacts/tool-thinking-split-runs/20260217-085723-codex-mediatr-invalid-notification-codex-v2/`
+  - Post-injection Claude run (`treatment_roslyn=1`):  
+    `artifacts/tool-thinking-split-runs/20260217-090210-claude-mediatr-invalid-notification-claude-v1/`
+- Task/repo:
+  - MediatR (`be61f5a`) invalid non-notification publish-message fix with acceptance  
+    `dotnet test test/MediatR.Tests/MediatR.Tests.csproj --nologo`
+
+Result:
+- Control contamination stayed clean in post-injection runs (`control_roslyn_contamination=false`).
+- Codex post-injection deltas (treatment-control):
+  - `roslyn_command_count +3`
+  - `command_round_trips +2`
+  - `events_before_first_edit +11`
+  - `discovery_commands_before_first_edit +3`
+  - `failed_commands_before_first_edit +1`
+  - `total_tokens +31134`
+- Claude post-injection deltas:
+  - `roslyn_command_count +1`
+  - `command_round_trips +1`
+  - `events_before_first_edit +5`
+  - `discovery_commands_before_first_edit +1`
+  - `failed_commands_before_first_edit +0`
+  - `total_tokens +74` (`cache_inclusive_total_tokens +22270`)
+
+Interpretation:
+- On external repos, treatment can silently degrade to text-only unless a concrete launcher path is provided in-prompt.
+- With launcher availability fixed, Roslyn usage appears with bounded pre-edit overhead rather than large uncontrolled exploratory churn.
+
+Decision:
+- Keep launcher injection as default split-run behavior for external repos.
+- In future split experiments, treat `treatment_roslyn_command_count > 0` as a validity gate before interpreting overhead/correctness outcomes.
+
+### F-2026-02-17-77: Tight treatment guidance reduced pre-edit/tool overhead versus standard in matched Codex split runs while preserving Roslyn usage
+
+Evidence:
+- Matched Codex runs on same MediatR task/repo:
+  - Standard profile:
+    `artifacts/tool-thinking-split-runs/20260217-091745-codex-mediatr-invalid-notification-codex-v3-standard/`
+  - Tight profile:
+    `artifacts/tool-thinking-split-runs/20260217-091218-codex-mediatr-invalid-notification-codex-v3-tight/`
+- Claude direction check:
+  - baseline profile:
+    `artifacts/tool-thinking-split-runs/20260217-090210-claude-mediatr-invalid-notification-claude-v1/`
+  - tight profile:
+    `artifacts/tool-thinking-split-runs/20260217-092330-claude-mediatr-invalid-notification-claude-v2-tight/`
+
+Result:
+- Codex (tight vs standard, treatment-control deltas):
+  - `roslyn_command_count`: `+4` vs `+11`
+  - `command_round_trips`: `+6` vs `+12`
+  - `events_before_first_edit`: `+17` vs `+34`
+  - `failed_commands_before_first_edit`: `+4` vs `+9`
+  - `total_tokens`: `+74894` vs `+180969`
+- Claude direction check:
+  - `roslyn_command_count` remained `+1`
+  - `events_before_first_edit` reduced (`+5` -> `+3`)
+  - `total_tokens` delta reduced (`+74` -> `+48`) while cache-inclusive deltas remained noisy.
+
+Interpretation:
+- Tight guidance does not eliminate overhead, but it meaningfully bounds pre-edit exploration and retry churn compared with broader standard flow in this task family.
+- Token/caching telemetry remains agent-specific; cache-inclusive totals need cautious interpretation.
+
+Decision:
+- Keep `tight` as default treatment profile for split-lane experiments.
+- Retain `standard` as an explicit comparator arm for periodic drift checks.
+
+### F-2026-02-17-78: “Roslyn used” and “Roslyn used well” diverged in split runs; productive-call scoring exposed quality gap hidden by raw usage counts
+
+Evidence:
+- Analyzer update:
+  - `benchmarks/scripts/Analyze-ToolThinkingSplit.ps1` now emits:
+    - `productive_roslyn_command_count`
+    - `events_before_first_productive_roslyn`
+    - `semantic_edit_first_try_success_rate`
+    - `verify_after_edit_rate`
+    - `roslyn_used_well_score`
+  - score contract: `roslyn_used_well_score = 0` when no productive Roslyn command occurs.
+- Re-scored artifacts:
+  - Codex standard: `artifacts/tool-thinking-split-runs/20260217-091745-codex-mediatr-invalid-notification-codex-v3-standard/`
+  - Codex tight: `artifacts/tool-thinking-split-runs/20260217-091218-codex-mediatr-invalid-notification-codex-v3-tight/`
+  - Claude baseline/tight:
+    - `artifacts/tool-thinking-split-runs/20260217-090210-claude-mediatr-invalid-notification-claude-v1/`
+    - `artifacts/tool-thinking-split-runs/20260217-092330-claude-mediatr-invalid-notification-claude-v2-tight/`
+
+Result:
+- Codex:
+  - standard: `treatment_roslyn=11`, `productive_roslyn=8`, `used_well_score=49.55`
+  - tight: `treatment_roslyn=4`, `productive_roslyn=1`, `used_well_score=40`
+- Claude:
+  - baseline: `treatment_roslyn=1`, `productive_roslyn=0`, `used_well_score=0`
+  - tight: `treatment_roslyn=1`, `productive_roslyn=0`, `used_well_score=0`
+
+Interpretation:
+- Raw Roslyn adoption can overstate utility when calls are schema probes only.
+- Productive-call and used-well metrics better capture whether RoslynSkills materially influenced task execution quality.
+
+Decision:
+- Treat `productive_roslyn_command_count > 0` and non-zero `roslyn_used_well_score` as required indicators for “Roslyn used well” claims.
+- Keep reporting both usage presence and used-well quality to avoid false positives.

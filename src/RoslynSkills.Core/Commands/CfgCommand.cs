@@ -8,7 +8,7 @@ namespace RoslynSkills.Core.Commands;
 public sealed class CfgCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
-        Id: "analyze.cfg",
+        Id: "analyze.control_flow_graph",
         Summary: "Build a control-flow graph (CFG) summary for the executable region around a source location.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",

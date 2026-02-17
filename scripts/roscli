@@ -23,7 +23,7 @@ refresh_published="${ROSCLI_REFRESH_PUBLISHED:-}"
 stale_check="${ROSCLI_STALE_CHECK:-0}"
 
 if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" == "yes" || "$use_published" == "on" ]]; then
-  cache_dir="$repo_root/artifacts/roscli-cache"
+  cache_dir="${ROSCLI_CACHE_DIR:-$repo_root/artifacts/roscli-cache}"
   cli_dll="$cache_dir/$cli_dll_name"
   stamp_file="$cache_dir/publish.stamp"
   need_publish=0

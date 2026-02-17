@@ -1,0 +1,18 @@
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
+
+set "ROSCLI_USE_PUBLISHED=1"
+set "ROSCLI_CACHE_DIR=%ROSCLI_STABLE_CACHE_DIR%"
+if "%ROSCLI_CACHE_DIR%"=="" set "ROSCLI_CACHE_DIR=%REPO_ROOT%\artifacts\roscli-stable-cache"
+
+set "ROSCLI_REFRESH_PUBLISHED=%ROSCLI_STABLE_REFRESH%"
+if "%ROSCLI_REFRESH_PUBLISHED%"=="" set "ROSCLI_REFRESH_PUBLISHED=0"
+
+set "ROSCLI_STALE_CHECK=%ROSCLI_STABLE_STALE_CHECK%"
+if "%ROSCLI_STALE_CHECK%"=="" set "ROSCLI_STALE_CHECK=0"
+
+call "%SCRIPT_DIR%roscli.cmd" %*
+set "EXIT_CODE=%ERRORLEVEL%"
+endlocal & exit /b %EXIT_CODE%

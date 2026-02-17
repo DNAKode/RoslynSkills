@@ -129,3 +129,256 @@ Purpose: record every fallback to non-Roslyn `.cs` reading/editing so fallback p
     - token_count: lower (less manual source inspection and patch iteration).
   - Follow-up issue/test link:
     - Added regression coverage in `tests/RoslynSkills.Core.Tests/CommandTests.cs` and `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`.
+
+- `2026-02-13`: Bootstrap context used plain-text search on `WorkspaceSemanticLoader.cs` to confirm the MSBuildLocator fix site
+  - Task/Context: read `HANDOVER.md` and rehydrate context; verify the "prefer .NET SDK MSBuild (DiscoveryType.DotNetSdk)" registration logic and its rationale (`CS0518` false-positive) quickly.
+  - Fallback action:
+    - `read`
+  - Why Roslyn path was not used:
+    - During bootstrap, a quick `Select-String` was used to jump directly to the `DiscoveryType.DotNetSdk` logic without first doing Roslyn navigation to the containing method/member.
+  - Roslyn command attempted (if any):
+    - None before fallback.
+  - Missing command/option hypothesis:
+    - Missing a low-friction Roslyn-native text search/snippet command for `.cs` files to locate non-symbol tokens (e.g., enum values, comments) without dropping to shell tools.
+  - Proposed improvement:
+    - Add `ctx.search_text` (single file, optional workspace-scoped variant) returning bounded matches with line/column spans suitable for follow-on `ctx.member_source`/`session.apply_text_edits`.
+  - Expected impact:
+    - correctness: higher (keeps reads inside a consistent, workspace-aware envelope and reduces accidental drift between ad-hoc text inspection and Roslyn snapshots).
+    - latency: lower (reduces hesitation and command-churn between `rg`/`Select-String` and Roslyn commands).
+    - token_count: lower (bounded snippets + spans avoid full-file dumps).
+  - Follow-up issue/test link:
+    - TODO: add command contract + tests + include in `list-commands` pit-of-success `first_steps`.
+
+- `2026-02-16`: Cross-project replication/config tracing used shell `rg` for multi-pattern hunting after targeted Roslyn reads
+  - Task/Context: trace configuration save/update and replication pathways across multiple projects (`AimsWebNancy`, `AimsDataConnection`, `AimsViewModel`, `AimsConsole`) while confirming specific member bodies via `ctx.member_source`.
+  - Fallback action:
+    - `read`
+  - Why Roslyn path was not used:
+    - Needed broad workspace text hunting for endpoint/action names and method call patterns; current Roslyn surface is strong for member-local extraction (`ctx.member_source`) but weak for "find these N textual patterns across many projects" workflows.
+    - Shell regex quoting/escaping introduced avoidable churn (`rg` unclosed-group parse error), then required retries.
+  - Roslyn command attempted (if any):
+    - `ctx.member_source` on `ExcelDataManager.cs` and `AimsApplicationViewModel.cs`.
+  - Missing command/option hypothesis:
+    - Missing Roslyn-native workspace text search with pattern list input (literal + regex modes), safe escaping, and bounded result envelopes.
+    - Missing Roslyn-native "find invocations by symbol/member name across workspace" command for call-path discovery without raw grep.
+  - Proposed improvement:
+    - Add `ctx.search_text` with payload `{ patterns: [...], mode: literal|regex, roots/include_globs, max_results }`, returning file/line/preview in Roslyn JSON envelope.
+    - Add `nav.find_invocations` (or `nav.find_calls`) that accepts symbol id or member signature and returns call sites across projects.
+    - Add `query.batch` to run several search intents in one Roslyn round-trip for investigative tasks.
+  - Expected impact:
+    - correctness: higher (fewer missed/overmatched hits from ad-hoc regex and shell escaping mistakes).
+    - latency: lower (fewer retry loops and less context switching between Roslyn + shell tools).
+    - token_count: lower (structured bounded responses instead of repeated wide grep output + manual triage).
+  - Follow-up issue/test link:
+    - TODO: add command proposals to command-surface backlog and include a benchmark fixture for "cross-project investigative tracing".
+
+- `2026-02-16`: Implemented new investigative commands in RoslynSkills via direct source edits (`ctx.search_text`, `nav.find_invocations`, `query.batch`)
+  - Task/Context: ship missing command-surface capabilities identified from Codex/Claude fallback churn, including CLI/MCP guidance and coverage tests.
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - RoslynSkills currently lacks a self-hosted maintainer workflow for editing its own command implementations and registry wiring semantically across multiple files.
+  - Roslyn command attempted (if any):
+    - `scripts/roscli.cmd list-commands --compact` and post-change `list-commands --ids-only` validation to verify command registration and envelope shape.
+  - Missing command/option hypothesis:
+    - Missing repository-maintainer semantic edit workflow for RoslynSkills self-evolution (multi-file symbol-anchored edits + command-surface regeneration).
+  - Proposed improvement:
+    - Add a maintainer-oriented transaction mode that can update command classes/registry/CLI usage hints atomically and validate schema/help drift in one pass.
+  - Expected impact:
+    - correctness: higher (less manual drift between command code and guidance surfaces).
+    - latency: lower (faster command-surface iteration loops).
+    - token_count: lower (fewer manual grep/read/patch cycles when evolving RoslynSkills itself).
+  - Follow-up issue/test link:
+    - Added regression coverage in `tests/RoslynSkills.Core.Tests/BreadthCommandTests.cs` and `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`.
+
+- `2026-02-16`: Call-hierarchy naming/discoverability verification used direct `.cs` read on CLI usage-hint logic
+  - Task/Context: confirm `nav.call_hierarchy` vs `nav.call_chain` naming behavior and patch `describe-command` usage examples/optional-property hints for the alias.
+  - Fallback action:
+    - `read`
+  - Why Roslyn path was not used:
+    - Needed a quick inspection of the CLI host formatting logic (`GenerateUsageHints`) where behavior depends on string templates rather than symbol navigation alone.
+  - Roslyn command attempted (if any):
+    - `scripts/roscli.cmd list-commands --compact`
+    - `scripts/roscli.cmd describe-command nav.call_chain`
+    - `scripts/roscli.cmd nav.call_chain ...` smoke run
+  - Missing command/option hypothesis:
+    - Missing Roslyn-native "show command host member source by symbol id/name" flow optimized for self-hosted CLI UX tuning.
+  - Proposed improvement:
+    - Add a maintainer helper command that resolves and returns bounded source for command-host methods (for example `ctx.command_host_member_source --type CliApplication --member GenerateUsageHints`).
+  - Expected impact:
+    - correctness: higher (less drift between alias behavior and help text).
+    - latency: lower (faster diagnosis of command-surface UX regressions).
+    - token_count: lower (fewer ad-hoc full-file reads while tuning command guidance).
+  - Follow-up issue/test link:
+    - Updated usage-hint behavior in `src/RoslynSkills.Cli/CliApplication.cs`; validation via CLI/core test slices.
+
+- `2026-02-16`: Removed `nav.call_chain` alias to keep canonical Roslyn-aligned naming
+  - Task/Context: user requested a single canonical name and no alias; removed `nav.call_chain` from command surface and docs/tests.
+  - Fallback action:
+    - `edit`
+  - Why Roslyn path was not used:
+    - This change modifies RoslynSkills implementation internals (`Core` command registry, CLI host, MCP schema hints, tests/docs), which currently requires direct source edits.
+  - Roslyn command attempted (if any):
+    - `scripts/roscli.cmd list-commands --ids-only`
+    - `scripts/roscli.cmd describe-command nav.call_hierarchy`
+    - `scripts/roscli.cmd describe-command nav.call_chain` (expected fail/command_not_found)
+  - Missing command/option hypothesis:
+    - Missing self-hosted maintainer workflow for multi-file command-surface deprecations/removals with descriptor-aware propagation.
+  - Proposed improvement:
+    - Add maintainer-focused command-surface transaction support to update registry + CLI usage hints + MCP input hints atomically from command descriptor diffs.
+  - Expected impact:
+    - correctness: higher (prevents stale alias/docs/schema drift).
+    - latency: lower (fewer manual multi-file touchpoints during command-surface cleanup).
+    - token_count: lower (less repetitive inspection/verification loops for rename/deprecation passes).
+  - Follow-up issue/test link:
+    - Validation: `dotnet build RoslynSkills.slnx`; CLI/Core targeted test slices passed.
+
+- `2026-02-16`: Added command maturity model (`stable|advanced|experimental`) and surfaced metadata in CLI/MCP + skills/docs
+  - Task/Context: introduce explicit expectations for heuristic/slower commands and establish an extensible pattern for advanced/experimental analysis tools.
+  - Fallback action:
+    - `edit`
+  - Why Roslyn path was not used:
+    - This is RoslynSkills self-evolution across contracts, command descriptors, CLI host, MCP metadata, tests, and docs; no self-hosted semantic maintainer flow exists yet.
+  - Roslyn command attempted (if any):
+    - Post-change validation with `roscli list-commands`, `roscli describe-command`, plus build/test gates.
+  - Missing command/option hypothesis:
+    - Missing descriptor-driven maintainer transactions that can propagate command metadata changes atomically across CLI/MCP/doc surfaces.
+  - Proposed improvement:
+    - Add a metadata propagation tool that syncs command descriptors to CLI list/describe output shapes, MCP catalog annotations, and doc stubs.
+  - Expected impact:
+    - correctness: higher (less drift between metadata contract and tool surfaces).
+    - latency: lower (faster rollout of non-stable command caveats).
+    - token_count: lower (fewer repeated manual consistency checks).
+  - Follow-up issue/test link:
+    - Validation: `dotnet build RoslynSkills.slnx`; targeted core/CLI test slices and roscli command checks.
+- `2026-02-16`: Added static-analysis command lane (`analyze.*`) and dual-lane roscli wrappers via direct source reads/edits
+  - Task/Context: implement `analyze.unused_private_symbols`, `analyze.dependency_violations`, `analyze.impact_slice`, `analyze.override_coverage`, and `analyze.async_risk_scan`; add docs/tests; add pinned stable/dev roscli plumbing.
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - RoslynSkills still lacks a self-hosted maintainer workflow for multi-file command implementation/wiring across Core, CLI, MCP, tests, and docs.
+  - Roslyn command attempted (if any):
+    - `scripts/roscli-stable.cmd list-commands --compact`
+    - `scripts/roscli-dev.cmd list-commands --ids-only`
+  - Missing command/option hypothesis:
+    - Missing maintainer-focused semantic transaction flow that can update command registrations/help hints/tests atomically and validate command-surface drift.
+  - Proposed improvement:
+    - Extend maintainer mode over `edit.transaction` with descriptor-aware propagation checks (registry + CLI usage + MCP input hints + docs/test checklist) in one guided operation.
+  - Expected impact:
+    - correctness: higher (lower risk of command-surface/documentation/test drift during feature additions).
+    - latency: lower (fewer manual cross-file patch/validation loops).
+    - token_count: lower (less repeated source inspection to keep multiple surfaces in sync).
+  - Follow-up issue/test link:
+    - Added coverage in `tests/RoslynSkills.Core.Tests/BreadthCommandTests.cs` and `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`.
+
+- `2026-02-16`: Codex run-fragment retrospective identified two additional pit-of-success gaps now partially addressed
+  - Task/Context: review a real Codex investigative sequence over a large C# workspace (symbol/member tracing, call-path discovery, repeated `ctx.member_source`, and shell regex retries) to answer “could RoslynSkills have been more helpful?”
+  - Fallback action:
+    - `read`
+  - Why Roslyn path was not used:
+    - Cross-file tracing still drifted into raw regex/shell loops when command affordances were not discoverable enough at point-of-use.
+    - VB parity holes in high-traffic context commands (`ctx.file_outline`, `ctx.member_source`) reduced confidence in mixed-language workflows.
+  - Roslyn command attempted (if any):
+    - `ctx.member_source` on multiple members; `nav.find_invocations`; `ctx.search_text`; `query.batch`.
+  - Missing command/option hypothesis:
+    - MCP tool schemas lacked explicit input hints/examples for `ctx.file_outline` and `ctx.member_source`, increasing argument uncertainty.
+    - `ctx.member_source` body extraction semantics in VB need stronger deterministic anchoring tests for declaration-line anchors.
+  - Proposed improvement:
+    - Add explicit MCP input-schema hints and URI examples for `ctx.file_outline`/`ctx.member_source` (implemented in this pass).
+    - Treat VB parity on context commands as first-class and keep dedicated VB regression tests for outline/member-source behavior (implemented in this pass).
+    - Follow with a targeted benchmark slice measuring reduced shell fallback on cross-project investigative tasks after schema/guidance upgrades.
+  - Expected impact:
+    - correctness: higher (stronger mixed-language reliability and fewer argument-shape errors).
+    - latency: lower (less retry churn from unclear command inputs).
+    - token_count: lower (fewer exploratory retries and shell transcript noise).
+  - Follow-up issue/test link:
+    - Added tests in `tests/RoslynSkills.Core.Tests/VbCommandTests.cs` for VB `ctx.file_outline` and `ctx.member_source` flows.
+
+- `2026-02-17`: Wider benchmark sweep uncovered operation-specific guidance mismatch and overly strict constraint shape checks
+  - Task/Context: broaden benchmark scope beyond rename tasks (change-signature, replace-member-body, create-file, add-member) while validating Claude skill-guidance and paired harness behavior.
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - Existing paired guidance profiles were rename-centric, causing treatment runs on non-rename tasks to spend calls on `nav.find_symbol Process` / `edit.rename_symbol` even when task intent was `edit.add_member`/`edit.change_signature`/etc.
+    - Constraint checks encoded one syntactic form for `add-member-threshold-v1` (block-bodied method), generating false negatives for semantically valid expression-bodied output.
+  - Roslyn command attempted (if any):
+    - `scripts/roscli.cmd list-commands --compact`
+    - `scripts/roscli.cmd edit.add_member ...`
+    - `scripts/roscli.cmd diag.get_file_diagnostics ...`
+  - Missing command/option hypothesis:
+    - Missing operation-neutral guidance profile that steers command choice by task family rather than rename default.
+    - Missing “semantic-equivalence tolerant” constraint checks for style variants that preserve behavior.
+  - Proposed improvement:
+    - Add `operation-neutral-v1` guidance profile in paired harness for multi-operation tasks (implemented).
+    - Expand task catalog + constraints for non-rename families and accept equivalent member-body styles where appropriate (implemented).
+    - Add one-click multi-task paired sweep helper to avoid PowerShell array binding friction and reduce operator error.
+  - Expected impact:
+    - correctness: higher (fewer false negatives from syntactic-only checks; better task-command alignment).
+    - latency: lower (reduced wasted Roslyn calls on irrelevant rename flows).
+    - token_count: lower (fewer exploratory retries and less command-contract churn).
+  - Follow-up issue/test link:
+    - Updated `benchmarks/scripts/Run-PairedAgentRuns.ps1` with expanded task IDs + `operation-neutral-v1`.
+    - Added regression coverage in `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`.
+
+- `2026-02-17`: Renamed CFG command id and extended benchmark preflight to Gemini using direct source edits
+  - Task/Context: apply approved command rename (`analyze.cfg` -> `analyze.control_flow_graph`, no alias), add Gemini preflight detection/tests, and add transcript-split tooling scripts for overhead analysis.
+  - Fallback action:
+    - `edit`
+  - Why Roslyn path was not used:
+    - RoslynSkills currently has no self-hosted maintainer transaction command that can propagate command-id changes through Core/CLI/MCP/tests/docs and benchmark infrastructure atomically.
+  - Roslyn command attempted (if any):
+    - `scripts/roscli.cmd describe-command analyze.control_flow_graph`
+    - `scripts/roscli.cmd describe-command analyze.cfg` (expected `command_not_found`)
+  - Missing command/option hypothesis:
+    - Missing maintainer-grade command-surface rename primitive with contract checks (registry routing, direct CLI shorthand, MCP schema hints, query.batch support, docs/examples).
+  - Proposed improvement:
+    - Add `maint.rename_command_id` (or equivalent) that computes and validates cross-surface rename impact before apply.
+  - Expected impact:
+    - correctness: higher (prevents stale ids on one surface).
+    - latency: lower (fewer manual search/patch cycles).
+    - token_count: lower (less repeated inspection during command-surface refactors).
+  - Follow-up issue/test link:
+    - Added regression checks in `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs` for new id acceptance + old id rejection.
+    - Added Gemini probe coverage in `tests/RoslynSkills.Benchmark.Tests/AgentEvalPreflightCheckerTests.cs`.
+
+- `2026-02-17`: External split-lane run on MediatR initially produced zero treatment Roslyn usage due missing launcher discoverability
+  - Task/Context: tool-thinking split experiment on external repo (`MediatR`) where treatment prompt asked for RoslynSkills usage.
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - External repo did not include local `scripts/roscli*`; treatment guidance lacked an explicit executable path to host RoslynSkills launcher, so agent stayed text-only.
+  - Roslyn command attempted (if any):
+    - None in first run (`treatment.roslyn_command_count=0`).
+  - Missing command/option hypothesis:
+    - Split harness lacked a first-class mechanism to provide executable Roslyn launcher coordinates to treatment lanes on non-RoslynSkills repositories.
+  - Proposed improvement:
+    - Inject resolved host launcher path into treatment prompt and explicit prohibition into control prompt; stamp launcher path in run summary (implemented in `Run-ToolThinkingSplitExperiment.ps1`).
+  - Expected impact:
+    - correctness: higher (valid treatment condition with actual Roslyn usage).
+    - latency: lower (fewer failed/irrelevant attempts to discover Roslyn command entrypoints).
+    - token_count: lower (reduced exploration churn from missing tool entrypoint).
+  - Follow-up issue/test link:
+    - Verified by MediatR reruns:
+      - pre-injection `treatment_roslyn=0`: `artifacts/tool-thinking-split-runs/20260217-084934-codex-mediatr-invalid-notification-codex-v1/`
+      - post-injection Codex `treatment_roslyn=3`: `artifacts/tool-thinking-split-runs/20260217-085723-codex-mediatr-invalid-notification-codex-v2/`
+      - post-injection Claude `treatment_roslyn=1`: `artifacts/tool-thinking-split-runs/20260217-090210-claude-mediatr-invalid-notification-claude-v1/`
+
+- `2026-02-17`: Added “used well” trajectory metrics via script/test updates using direct source edits
+  - Task/Context: user requested validation that reveals whether RoslynSkills is used well, not just used.
+  - Fallback action:
+    - `edit`
+  - Why Roslyn path was not used:
+    - This work modifies RoslynSkills analyzer/test internals (PowerShell + C# test files) and currently lacks a self-hosted maintainer command flow for cross-file metric-contract changes.
+  - Roslyn command attempted (if any):
+    - Not applicable for implementation edits; validation performed via benchmark script runs and `dotnet test` suite.
+  - Missing command/option hypothesis:
+    - Missing maintainer-grade command to evolve benchmark metric schemas and propagate contract updates across scripts/tests/docs atomically.
+  - Proposed improvement:
+    - Add maintainer benchmark-contract tooling (for example `maint.update_benchmark_metric_contract`) with impact checks across script output fields and tests.
+  - Expected impact:
+    - correctness: higher (lower risk of metric drift between script and test expectations).
+    - latency: lower (faster metric evolution cycles).
+    - token_count: lower (fewer manual reconcile loops across scripts/tests/docs).
+  - Follow-up issue/test link:
+    - `tests/RoslynSkills.Benchmark.Tests/ToolThinkingSplitScriptTests.cs`
+    - `benchmarks/scripts/Analyze-ToolThinkingSplit.ps1`

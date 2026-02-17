@@ -35,6 +35,9 @@ public sealed class AgentEvalRunValidator
             string taskId = string.IsNullOrWhiteSpace(run.TaskId) ? "<missing-task-id>" : run.TaskId;
             string conditionId = string.IsNullOrWhiteSpace(run.ConditionId) ? "<missing-condition-id>" : run.ConditionId;
 
+            IReadOnlyList<string> toolsOffered = run.ToolsOffered ?? Array.Empty<string>();
+            IReadOnlyList<AgentToolCall> toolCalls = run.ToolCalls ?? Array.Empty<AgentToolCall>();
+
             if (string.IsNullOrWhiteSpace(run.RunId))
             {
                 AddIssue(issues, "error", runId, taskId, conditionId, "run_id is required.");
@@ -81,16 +84,16 @@ public sealed class AgentEvalRunValidator
                 AddIssue(issues, "warning", runId, taskId, conditionId, "duration_seconds is zero; timing metrics may be unreliable.");
             }
 
-            if (run.ToolsOffered.Count == 0)
+            if (toolsOffered.Count == 0)
             {
                 AddIssue(issues, "warning", runId, taskId, conditionId, "tools_offered is empty; tool availability analysis is incomplete.");
             }
 
-            HashSet<string> offeredToolSet = run.ToolsOffered
+            HashSet<string> offeredToolSet = toolsOffered
                 .Where(t => !string.IsNullOrWhiteSpace(t))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            foreach (AgentToolCall call in run.ToolCalls)
+            foreach (AgentToolCall call in toolCalls)
             {
                 if (string.IsNullOrWhiteSpace(call.ToolName))
                 {
@@ -104,8 +107,8 @@ public sealed class AgentEvalRunValidator
                 }
             }
 
-            bool roslynOffered = run.ToolsOffered.Any(t => IsRoslynTool(t, manifest.RoslynToolPrefixes));
-            bool roslynUsed = run.ToolCalls.Any(c => IsRoslynTool(c.ToolName, manifest.RoslynToolPrefixes));
+            bool roslynOffered = toolsOffered.Any(t => IsRoslynTool(t, manifest.RoslynToolPrefixes));
+            bool roslynUsed = toolCalls.Any(c => IsRoslynTool(c.ToolName, manifest.RoslynToolPrefixes));
 
             if (knownCondition)
             {

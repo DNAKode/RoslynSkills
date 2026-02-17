@@ -833,7 +833,7 @@ Workflow:
                 input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
-            case "analyze.cfg":
+            case "analyze.control_flow_graph":
                 if (positionalArgs.Length != 3 ||
                     string.IsNullOrWhiteSpace(positionalArgs[0]) ||
                     !int.TryParse(positionalArgs[1], out int cfgLine) ||
@@ -842,7 +842,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.cfg <file-path> <line> <column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.control_flow_graph <file-path> <line> <column> [--option value ...]"));
                     return false;
                 }
 
@@ -1079,7 +1079,7 @@ Workflow:
             "nav.call_hierarchy" => true,
             "nav.call_path" => true,
             "analyze.unused_private_symbols" => true,
-            "analyze.cfg" => true,
+            "analyze.control_flow_graph" => true,
             "analyze.dataflow_slice" => true,
             "analyze.dependency_violations" => true,
             "analyze.impact_slice" => true,
@@ -1550,7 +1550,7 @@ Workflow:
             }
         }
 
-        if (string.Equals(commandId, "analyze.cfg", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "analyze.control_flow_graph", StringComparison.OrdinalIgnoreCase))
         {
             if (TryGetObject(element, "cfg_summary", out JsonElement cfgSummary) &&
                 TryGetInt(cfgSummary, "total_blocks", out int blocks) &&
@@ -1959,12 +1959,12 @@ Workflow:
             };
         }
 
-        if (string.Equals(commandId, "analyze.cfg", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "analyze.control_flow_graph", StringComparison.OrdinalIgnoreCase))
         {
             return new
             {
-                direct = "analyze.cfg <file-path> <line> <column> [--option value ...]",
-                run = "run analyze.cfg --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true,\"max_blocks\":200,\"max_edges\":500}'",
+                direct = "analyze.control_flow_graph <file-path> <line> <column> [--option value ...]",
+                run = "run analyze.control_flow_graph --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true,\"max_blocks\":200,\"max_edges\":500}'",
                 required_properties = new[] { "file_path", "line", "column" },
                 optional_properties = new[] { "brief", "max_blocks", "max_edges", "workspace_path", "require_workspace" },
                 notes = new[]
@@ -2205,7 +2205,7 @@ Workflow:
                 nav.call_hierarchy <file-path> <line> <column>
                 nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column>
                 analyze.unused_private_symbols <workspace-path>
-                analyze.cfg <file-path> <line> <column>
+                analyze.control_flow_graph <file-path> <line> <column>
                 analyze.dataflow_slice <file-path> <line> <column>
                 analyze.dependency_violations <workspace-path> <layer1> <layer2> [layerN ...]
                 analyze.impact_slice <file-path> <line> <column>
@@ -2228,7 +2228,7 @@ Workflow:
                 nav.call_hierarchy <file-path> <line> <column> --direction both --max-depth 2 --brief true
                 nav.call_path <source-file> <source-line> <source-column> <target-file> <target-line> <target-column> --max-depth 8 --brief true
                 analyze.unused_private_symbols src --brief true --max-symbols 100
-                analyze.cfg <file-path> <line> <column> --brief true --max-blocks 120 --max-edges 260
+                analyze.control_flow_graph <file-path> <line> <column> --brief true --max-blocks 120 --max-edges 260
                 analyze.dataflow_slice <file-path> <line> <column> --brief true --max-symbols 120
                 analyze.dependency_violations src MyApp.Web MyApp.Application MyApp.Domain --direction toward_end --brief true
                 analyze.impact_slice <file-path> <line> <column> --brief true --include-callers true --include-callees true

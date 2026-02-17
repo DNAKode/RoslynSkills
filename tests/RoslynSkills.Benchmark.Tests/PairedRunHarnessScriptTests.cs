@@ -88,6 +88,8 @@ public sealed class PairedRunHarnessScriptTests
         string script = ReadScript();
 
         Assert.Contains("brief-first-v2", script, StringComparison.Ordinal);
+        Assert.Contains("brief-first-v3", script, StringComparison.Ordinal);
+        Assert.Contains("brief-first-v4", script, StringComparison.Ordinal);
         Assert.Contains("workspace-locked", script, StringComparison.Ordinal);
         Assert.Contains("diagnostics-first", script, StringComparison.Ordinal);
         Assert.Contains("edit-then-verify", script, StringComparison.Ordinal);
@@ -101,6 +103,21 @@ public sealed class PairedRunHarnessScriptTests
 
         Assert.Contains("FailOnMissingTreatmentRoslynUsage", script, StringComparison.Ordinal);
         Assert.Contains("missing_treatment_roslyn_usage", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TaskCatalog_IncludesBroaderNonRenameOperationFamilies()
+    {
+        string script = ReadScript();
+
+        Assert.Contains("change-signature-named-args-v1", script, StringComparison.Ordinal);
+        Assert.Contains("update-usings-cleanup-v1", script, StringComparison.Ordinal);
+        Assert.Contains("add-member-threshold-v1", script, StringComparison.Ordinal);
+        Assert.Contains("replace-member-body-guard-v1", script, StringComparison.Ordinal);
+        Assert.Contains("create-file-audit-log-v1", script, StringComparison.Ordinal);
+        Assert.Contains("operation-neutral-v1", script, StringComparison.Ordinal);
+        Assert.Contains("task_scope_instruction", script, StringComparison.Ordinal);
+        Assert.Contains("auditlog_no_diagnostics_errors", script, StringComparison.Ordinal);
     }
     private static string ReadScript()
     {

@@ -17,7 +17,7 @@ public sealed class QueryBatchCommand : IAgentCommand
             ["nav.find_invocations"] = static () => new FindInvocationsCommand(),
             ["nav.call_hierarchy"] = static () => new CallHierarchyCommand(),
             ["nav.call_path"] = static () => new CallPathCommand(),
-            ["analyze.cfg"] = static () => new CfgCommand(),
+            ["analyze.control_flow_graph"] = static () => new CfgCommand(),
             ["analyze.dataflow_slice"] = static () => new DataflowSliceCommand(),
             ["analyze.unused_private_symbols"] = static () => new UnusedPrivateSymbolsCommand(),
             ["analyze.dependency_violations"] = static () => new DependencyViolationsCommand(),

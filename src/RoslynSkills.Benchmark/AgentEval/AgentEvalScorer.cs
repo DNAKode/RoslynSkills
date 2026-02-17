@@ -82,8 +82,14 @@ public sealed class AgentEvalScorer
         AgentEvalManifest manifest,
         IReadOnlyList<AgentEvalConditionSummary> summaries)
     {
-        AgentEvalCondition? control = manifest.Conditions.FirstOrDefault(c => !c.RoslynToolsEnabled);
-        AgentEvalCondition? treatment = manifest.Conditions.FirstOrDefault(c => c.RoslynToolsEnabled);
+        AgentEvalCondition? control = !string.IsNullOrWhiteSpace(manifest.PrimaryControlConditionId)
+            ? manifest.Conditions.FirstOrDefault(c => string.Equals(c.Id, manifest.PrimaryControlConditionId, StringComparison.OrdinalIgnoreCase))
+            : manifest.Conditions.FirstOrDefault(c => !c.RoslynToolsEnabled);
+
+        AgentEvalCondition? treatment = !string.IsNullOrWhiteSpace(manifest.PrimaryTreatmentConditionId)
+            ? manifest.Conditions.FirstOrDefault(c => string.Equals(c.Id, manifest.PrimaryTreatmentConditionId, StringComparison.OrdinalIgnoreCase))
+            : manifest.Conditions.FirstOrDefault(c => c.RoslynToolsEnabled);
+
         if (control is null || treatment is null)
         {
             return null;
@@ -141,8 +147,14 @@ public sealed class AgentEvalScorer
         IReadOnlyList<AgentEvalRun> runs,
         IReadOnlyList<string> roslynToolPrefixes)
     {
-        AgentEvalCondition? control = manifest.Conditions.FirstOrDefault(c => !c.RoslynToolsEnabled);
-        AgentEvalCondition? treatment = manifest.Conditions.FirstOrDefault(c => c.RoslynToolsEnabled);
+        AgentEvalCondition? control = !string.IsNullOrWhiteSpace(manifest.PrimaryControlConditionId)
+            ? manifest.Conditions.FirstOrDefault(c => string.Equals(c.Id, manifest.PrimaryControlConditionId, StringComparison.OrdinalIgnoreCase))
+            : manifest.Conditions.FirstOrDefault(c => !c.RoslynToolsEnabled);
+
+        AgentEvalCondition? treatment = !string.IsNullOrWhiteSpace(manifest.PrimaryTreatmentConditionId)
+            ? manifest.Conditions.FirstOrDefault(c => string.Equals(c.Id, manifest.PrimaryTreatmentConditionId, StringComparison.OrdinalIgnoreCase))
+            : manifest.Conditions.FirstOrDefault(c => c.RoslynToolsEnabled);
+
         if (control is null || treatment is null)
         {
             return new List<AgentEvalTaskComparison>();
@@ -211,9 +223,9 @@ public sealed class AgentEvalScorer
         int testsCount = runs.Count(r => r.TestsPassed);
         double avgDuration = runs.Average(r => r.DurationSeconds);
 
-        int totalToolCalls = runs.Sum(r => r.ToolCalls.Count);
-        int roslynToolCalls = runs.Sum(r => r.ToolCalls.Count(c => IsRoslynTool(c.ToolName, roslynToolPrefixes)));
-        int roslynUsedRuns = runs.Count(r => r.ToolCalls.Any(c => IsRoslynTool(c.ToolName, roslynToolPrefixes)));
+        int totalToolCalls = runs.Sum(r => r.ToolCalls?.Count ?? 0);
+        int roslynToolCalls = runs.Sum(r => r.ToolCalls?.Count(c => IsRoslynTool(c.ToolName, roslynToolPrefixes)) ?? 0);
+        int roslynUsedRuns = runs.Count(r => r.ToolCalls?.Any(c => IsRoslynTool(c.ToolName, roslynToolPrefixes)) == true);
 
         int[] reflectionScores = runs
             .Select(r => r.PostRunReflection?.RoslynHelpfulnessScore)

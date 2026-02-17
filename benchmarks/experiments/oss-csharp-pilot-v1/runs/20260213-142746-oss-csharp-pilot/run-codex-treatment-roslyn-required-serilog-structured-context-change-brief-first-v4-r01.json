@@ -1,0 +1,93 @@
+{
+    "run_id":  "run-codex-treatment-roslyn-required-serilog-structured-context-change-brief-first-v4-r01",
+    "task_id":  "serilog-structured-context-change",
+    "condition_id":  "treatment-roslyn-required",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "gpt-5.3-codex-spark",
+    "model_reasoning_effort":  "low",
+    "succeeded":  true,
+    "setup_passed":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "exit_code":  0,
+    "timed_out":  false,
+    "duration_seconds":  49.318,
+    "prompt_tokens":  176087,
+    "completion_tokens":  3501,
+    "total_tokens":  179588,
+    "roslyn_used":  true,
+    "roslyn_attempted_calls":  4,
+    "roslyn_successful_calls":  4,
+    "roslyn_usage_indicators":  [
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd nav.find_symbol src/Serilog/Context/LogContext.cs Push --brief true --max-results 20 --require-workspace true\"",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd diag.get_file_diagnostics src/Serilog/Context/LogContext.cs --require-workspace true\"",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd diag.get_file_diagnostics src/Serilog/Context/LogContext.cs --require-workspace true\"",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd diag.get_file_diagnostics test/Serilog.Tests/Context/LogContextTests.cs --require-workspace true\""
+                                ],
+    "roslyn_workspace_mode_workspace_count":  1,
+    "roslyn_workspace_mode_ad_hoc_count":  0,
+    "roslyn_workspace_mode_last":  "workspace",
+    "cs0518_detected":  false,
+    "validity_gates":  {
+                           "treatment_required":  true,
+                           "missing_required_roslyn_usage":  false,
+                           "missing_required_workspace_mode":  false,
+                           "workspace_health_gate_cs0518":  false,
+                           "failure_reasons":  [
+
+                                               ]
+                       },
+    "context":  {
+                    "task_title":  "Serilog API usage adjustment with call-site precision",
+                    "repo":  "serilog/serilog",
+                    "repo_url":  "https://github.com/serilog/serilog.git",
+                    "commit":  "dc529798b07de14d74393f33e388a51be9c610b2",
+                    "setup_checks":  [
+                                         "dotnet restore"
+                                     ],
+                    "acceptance_checks":  [
+                                              "dotnet test --nologo"
+                                          ],
+                    "task_prompt_file":  "prompts/serilog-structured-context-change.md",
+                    "roslyn_guidance_profile":  "brief-first-v4",
+                    "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-142746-oss-csharp-pilot\\serilog-structured-context-change\\treatment-roslyn-required\\run-codex-treatment-roslyn-required-serilog-structured-context-change-brief-first-v4-r01",
+                    "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-treatment-ro-serilog-stru-brief-first--r01-2d39f181"
+                },
+    "tools_offered":  [
+                          "shell.exec",
+                          "nav.find_symbol",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_file_diagnostics",
+                          "diag.get_workspace_snapshot",
+                          "diag.get_solution_snapshot",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "edit.create_file",
+                          "session.open",
+                          "session.apply_text_edits",
+                          "session.apply_and_commit",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "nav.find_symbol",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "diag.get_file_diagnostics",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "diag.get_file_diagnostics",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "diag.get_file_diagnostics",
+                           "ok":  true
+                       }
+                   ]
+}

@@ -16,12 +16,13 @@ public sealed class AgentEvalPreflightCheckerTests
             probe.Add("rg", true);
             probe.Add("codex", false);
             probe.Add("claude", false);
+            probe.Add("gemini", false);
 
             AgentEvalPreflightChecker checker = new(probe);
             AgentEvalPreflightReport report = await checker.RunAsync(outputDir, CancellationToken.None);
 
             Assert.False(report.all_required_available);
-            Assert.Equal(5, report.checks.Count);
+            Assert.Equal(6, report.checks.Count);
             Assert.True(File.Exists(report.output_path));
         }
         finally
@@ -52,6 +53,8 @@ public sealed class AgentEvalPreflightCheckerTests
             probe.Add("codex.cmd", true);
             probe.Add("claude", false);
             probe.Add("claude.cmd", true);
+            probe.Add("gemini", false);
+            probe.Add("gemini.cmd", true);
 
             AgentEvalPreflightChecker checker = new(probe);
             AgentEvalPreflightReport report = await checker.RunAsync(outputDir, CancellationToken.None);
@@ -59,13 +62,17 @@ public sealed class AgentEvalPreflightCheckerTests
             Assert.True(report.all_required_available);
             Assert.Contains(report.checks, c => c.command == "codex" && c.available);
             Assert.Contains(report.checks, c => c.command == "claude" && c.available);
+            Assert.Contains(report.checks, c => c.command == "gemini" && c.available);
 
             int codexIndex = probe.Calls.IndexOf("codex");
             int codexCmdIndex = probe.Calls.IndexOf("codex.cmd");
             int claudeIndex = probe.Calls.IndexOf("claude");
             int claudeCmdIndex = probe.Calls.IndexOf("claude.cmd");
+            int geminiIndex = probe.Calls.IndexOf("gemini");
+            int geminiCmdIndex = probe.Calls.IndexOf("gemini.cmd");
             Assert.True(codexIndex >= 0 && codexCmdIndex > codexIndex);
             Assert.True(claudeIndex >= 0 && claudeCmdIndex > claudeIndex);
+            Assert.True(geminiIndex >= 0 && geminiCmdIndex > geminiIndex);
         }
         finally
         {

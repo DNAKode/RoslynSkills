@@ -29,6 +29,40 @@ internal static class AgentEvalValidation
                 "Manifest should include at least one control condition and one Roslyn-enabled treatment condition.");
         }
 
+        if (!string.IsNullOrWhiteSpace(manifest.PrimaryControlConditionId))
+        {
+            AgentEvalCondition? control = manifest.Conditions.FirstOrDefault(c =>
+                string.Equals(c.Id, manifest.PrimaryControlConditionId, StringComparison.OrdinalIgnoreCase));
+            if (control is null)
+            {
+                throw new InvalidOperationException(
+                    $"primary_control_condition_id '{manifest.PrimaryControlConditionId}' was not found in conditions.");
+            }
+
+            if (control.RoslynToolsEnabled)
+            {
+                throw new InvalidOperationException(
+                    $"primary_control_condition_id '{manifest.PrimaryControlConditionId}' must have roslyn_tools_enabled=false.");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(manifest.PrimaryTreatmentConditionId))
+        {
+            AgentEvalCondition? treatment = manifest.Conditions.FirstOrDefault(c =>
+                string.Equals(c.Id, manifest.PrimaryTreatmentConditionId, StringComparison.OrdinalIgnoreCase));
+            if (treatment is null)
+            {
+                throw new InvalidOperationException(
+                    $"primary_treatment_condition_id '{manifest.PrimaryTreatmentConditionId}' was not found in conditions.");
+            }
+
+            if (!treatment.RoslynToolsEnabled)
+            {
+                throw new InvalidOperationException(
+                    $"primary_treatment_condition_id '{manifest.PrimaryTreatmentConditionId}' must have roslyn_tools_enabled=true.");
+            }
+        }
+
         foreach (AgentEvalTask task in manifest.Tasks)
         {
             if (string.IsNullOrWhiteSpace(task.Repo))

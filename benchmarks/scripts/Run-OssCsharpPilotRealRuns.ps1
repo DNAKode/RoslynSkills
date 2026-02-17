@@ -3,16 +3,208 @@
     [string]$OutputRoot = "",
     [string]$CodexModel = "gpt-5.3-codex",
     [ValidateSet("low", "medium", "high", "xhigh")][string]$CodexReasoningEffort = "low",
-    [ValidateSet("control-text-only", "treatment-roslyn-optional")][string[]]$ConditionIds = @("control-text-only", "treatment-roslyn-optional"),
+    [ValidateSet("control-text-only", "treatment-roslyn-optional", "treatment-roslyn-required")][string[]]$ConditionIds = @("control-text-only", "treatment-roslyn-optional"),
     [string[]]$TaskIds = @('avalonia-cornerradius-tryparse'),
     [int]$CodexTimeoutSeconds = 240,
     [int]$RunsPerCell = 1,
-    [ValidateSet("brief-first", "standard", "verbose-first")][string]$RoslynGuidanceProfile = "brief-first",
+    [ValidateSet("brief-first", "brief-first-v4", "brief-first-v5", "standard", "verbose-first")][string]$RoslynGuidanceProfile = "brief-first",
     [switch]$KeepWorkspaces
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+function Test-IsRoslynCommandText {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $false
+    }
+
+    # Keep this aligned with the paired-run harness: detect both the shim and direct command ids.
+    $patterns = @(
+        "roslyn-list-commands.ps1",
+        "roslyn-find-symbol.ps1",
+        "roslyn-rename-symbol.ps1",
+        "roslyn-rename-and-verify.ps1",
+        "roscli.cmd",
+        "scripts/roscli",
+        "./scripts/roscli",
+        "nav.find_symbol",
+        "edit.rename_symbol",
+        "diag.get_file_diagnostics",
+        "diag.get_workspace_snapshot",
+        "edit.replace_member_body",
+        "edit.transaction",
+        "RoslynSkills.Cli"
+    )
+
+    foreach ($pattern in $patterns) {
+        if ($Text.IndexOf($pattern, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-CodexRoslynUsage {
+    param([Parameter(Mandatory = $true)][string]$TranscriptPath)
+
+    $invocations = New-Object System.Collections.Generic.List[string]
+    $seenInvocationIds = New-Object System.Collections.Generic.HashSet[string]
+    $successfulInvocationIds = New-Object System.Collections.Generic.HashSet[string]
+    $successful = 0
+    $toolCalls = New-Object System.Collections.Generic.List[hashtable]
+    # Regex (PowerShell single-quoted string): match "scripts\roscli.cmd <commandId>" or "scripts/roscli.cmd <commandId>"
+    $roslynCommandPattern = '(?is)scripts[\\/]+roscli\.cmd\s+([a-z]+\.[a-z0-9_]+)'
+
+    foreach ($line in (Get-Content -Path $TranscriptPath -ErrorAction SilentlyContinue)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        try {
+            $event = $line | ConvertFrom-Json
+        } catch {
+            continue
+        }
+
+        if ($event.type -ne "item.started" -and $event.type -ne "item.completed") {
+            continue
+        }
+
+        if ($null -eq $event.item) {
+            continue
+        }
+
+        $candidateCommand = $null
+        if ($event.item.PSObject.Properties.Match("command").Count -gt 0 -and $null -ne $event.item.command) {
+            $candidateCommand = [string]$event.item.command
+        }
+
+        $invocationText = $null
+        if (-not [string]::IsNullOrWhiteSpace($candidateCommand) -and (Test-IsRoslynCommandText -Text $candidateCommand)) {
+            $invocationText = $candidateCommand
+        }
+
+        $isRoslynInvocation = -not [string]::IsNullOrWhiteSpace($invocationText)
+
+        $itemId = $null
+        if ($event.item.PSObject.Properties.Match("id").Count -gt 0 -and $null -ne $event.item.id) {
+            $itemId = [string]$event.item.id
+        }
+        if ([string]::IsNullOrWhiteSpace($itemId)) {
+            $itemId = [Guid]::NewGuid().ToString("n")
+        }
+
+        if ($isRoslynInvocation) {
+            if ($seenInvocationIds.Add($itemId)) {
+                $invocations.Add($invocationText)
+            }
+        }
+
+        if ($event.type -eq "item.completed") {
+            $wasSuccessful = $false
+            if ($event.item.PSObject.Properties.Match("status").Count -gt 0 -and $null -ne $event.item.status) {
+                $statusValue = [string]$event.item.status
+                if (-not [string]::IsNullOrWhiteSpace($statusValue) -and $statusValue.Equals("failed", [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $wasSuccessful = $false
+                } else {
+                    $wasSuccessful = $true
+                }
+            } else {
+                $wasSuccessful = $true
+            }
+
+            if ($event.item.PSObject.Properties.Match("exit_code").Count -gt 0 -and $null -ne $event.item.exit_code) {
+                $wasSuccessful = ([int]$event.item.exit_code -eq 0)
+            }
+
+            if ($event.item.PSObject.Properties.Match("error").Count -gt 0 -and $null -ne $event.item.error) {
+                $wasSuccessful = $false
+            }
+
+            # Track tool calls for analysis/scoring. We only record completed items because they include success/failure.
+            if (-not [string]::IsNullOrWhiteSpace($candidateCommand)) {
+                $toolName = "shell.exec"
+                if (Test-IsRoslynCommandText -Text $candidateCommand) {
+                    $toolName = "roscli"
+                    if ($candidateCommand -match $roslynCommandPattern) {
+                        $candidate = [string]$Matches[1]
+                        if (-not [string]::IsNullOrWhiteSpace($candidate)) { $toolName = $candidate.Trim() }
+                    }
+                }
+                $toolCalls.Add(@{ tool_name = $toolName; ok = [bool]$wasSuccessful }) | Out-Null
+            }
+
+            if ($isRoslynInvocation -and $wasSuccessful -and $successfulInvocationIds.Add($itemId)) {
+                $successful++
+            }
+        }
+    }
+
+    return @{
+        Commands = $invocations.ToArray()
+        Successful = $successful
+        ToolCalls = $toolCalls.ToArray()
+    }
+}
+
+function Get-RoslynWorkspaceContextUsage {
+    param([Parameter(Mandatory = $true)][string]$TranscriptPath)
+
+    $content = Get-Content -Path $TranscriptPath -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $content) {
+        $content = ""
+    }
+
+    # Handle both plain JSON and escaped JSON payloads (tool output embedded in JSON strings).
+    $patterns = @(
+        '(?is)"workspace_context"\\s*:\\s*\\{.*?"mode"\\s*:\\s*"(workspace|ad_hoc)"',
+        '(?is)\\\\\"workspace_context\\\\\"\\s*:\\s*\\{.*?\\\\\"mode\\\\\"\\s*:\\s*\\\\\"(workspace|ad_hoc)\\\\\"'
+    )
+
+    $modes = New-Object System.Collections.Generic.List[string]
+    foreach ($pattern in $patterns) {
+        foreach ($match in [System.Text.RegularExpressions.Regex]::Matches($content, $pattern)) {
+            if ($null -eq $match -or $match.Groups.Count -lt 2) {
+                continue
+            }
+
+            $mode = [string]$match.Groups[1].Value
+            if (-not [string]::IsNullOrWhiteSpace($mode)) {
+                $modes.Add($mode.Trim().ToLowerInvariant()) | Out-Null
+            }
+        }
+    }
+
+    if ($modes.Count -eq 0) {
+        # Fallback: some transcripts truncate/reshape tool payloads, but usually preserve the Preview/Summary text.
+        if ($content -match "workspace=workspace") { $modes.Add("workspace") | Out-Null }
+        if ($content -match "workspace=ad_hoc") { $modes.Add("ad_hoc") | Out-Null }
+    }
+
+    $workspaceCount = @($modes | Where-Object { $_ -eq "workspace" }).Count
+    $adHocCount = @($modes | Where-Object { $_ -eq "ad_hoc" }).Count
+
+    $lastMode = $null
+    for ($index = $modes.Count - 1; $index -ge 0; $index--) {
+        $candidate = $modes[$index]
+        if ($candidate -eq "workspace" -or $candidate -eq "ad_hoc") {
+            $lastMode = $candidate
+            break
+        }
+    }
+
+    return @{
+        workspace_count = $workspaceCount
+        ad_hoc_count = $adHocCount
+        total_count = ($workspaceCount + $adHocCount)
+        distinct_modes = @($modes | Where-Object { $_ -eq "workspace" -or $_ -eq "ad_hoc" } | Select-Object -Unique)
+        last_mode = $lastMode
+    }
+}
 
 function Convert-ToText {
     param([object]$Value)
@@ -260,6 +452,77 @@ Tooling constraint:
 "@
     }
 
+    if ($ConditionId -eq "treatment-roslyn-required") {
+        if ($RoslynGuidanceProfile -eq "brief-first-v4") {
+            return @"
+$TaskPrompt
+
+Tooling constraint (treatment-required):
+- You MUST use RoslynSkills at least once (run scripts\\roscli.cmd) and the tool call must succeed.
+- You MUST make at least one call that reports workspace_context.mode=workspace (use --require-workspace true).
+- If you cannot satisfy those constraints, stop and explain why without attempting a text-only solution.
+
+Roslyn usage rules (tight):
+- Do NOT run list-commands.
+- Do NOT do broad workspace scans.
+- Before the first edit, make at most 2 Roslyn calls (1 targeting + 1 diagnostics check).
+- Prefer `--brief true` where supported.
+
+Tight workflow:
+1) One targeted lookup for the exact symbol/member you intend to edit:
+   scripts\\roscli.cmd nav.find_symbol <file> <name> --brief true --max-results 20 --require-workspace true
+2) If you need local context, prefer Roslyn extraction:
+   scripts\\roscli.cmd ctx.member_source <file> <line> <column> body
+3) Apply the minimal safe edit(s).
+4) Verify only what you touched:
+   scripts\\roscli.cmd diag.get_file_diagnostics <file-you-edited> --require-workspace true
+"@
+        }
+
+        if ($RoslynGuidanceProfile -eq "brief-first-v5") {
+            return @"
+$TaskPrompt
+
+Tooling constraint (treatment-required):
+- You MUST use RoslynSkills at least once (run scripts\\roscli.cmd) and the tool call must succeed.
+- You MUST make at least one call that reports workspace_context.mode=workspace (use --require-workspace true).
+- If you cannot satisfy those constraints, stop and explain why without attempting a text-only solution.
+
+Roslyn usage rules (tight):
+- Do NOT run list-commands.
+- Do NOT do broad workspace scans.
+- Before the first edit, make at most 2 Roslyn calls (targeting only; keep them `--brief true`).
+
+Tight workflow:
+1) Target the exact symbol/member to edit:
+   scripts\\roscli.cmd nav.find_symbol <file> <name> --brief true --max-results 20 --require-workspace true
+2) Apply the minimal safe edit(s).
+3) Verify only the files you edited:
+   scripts\\roscli.cmd diag.get_file_diagnostics <file-you-edited> --require-workspace true
+
+Output rule:
+- Do not paste build/test logs.
+- Finish with 2 lines:
+  - status: ok/failed
+  - roslyn: used=<true/false> workspace_mode=<workspace|ad_hoc|unknown> successful_calls=<n>
+"@
+        }
+
+        return @"
+$TaskPrompt
+
+Tooling constraint (treatment-required):
+- You MUST use RoslynSkills at least once (run scripts\\roscli.cmd) and the tool call must succeed.
+- You MUST make at least one call that reports workspace_context.mode=workspace (use --require-workspace true).
+- If you cannot satisfy those constraints, stop and explain why without attempting a text-only solution.
+
+Minimal pit-of-success:
+1) scripts\\roscli.cmd nav.find_symbol <file> <name> --brief true --max-results 20 --require-workspace true
+2) Apply minimal safe edit.
+3) scripts\\roscli.cmd diag.get_file_diagnostics <file> --require-workspace true
+"@
+    }
+
     if ($RoslynGuidanceProfile -eq "verbose-first") {
         return @"
 $TaskPrompt
@@ -427,12 +690,29 @@ foreach ($taskId in $TaskIds) {
                 Add-Content -Path $transcriptPath -Value '{"type":"setup.failed","message":"Setup commands failed."}'
             }
 
+            $roslynUsage = Get-CodexRoslynUsage -TranscriptPath $transcriptPath
+            $workspaceContextUsage = Get-RoslynWorkspaceContextUsage -TranscriptPath $transcriptPath
+            $cs0518Detected = (Select-String -Path $transcriptPath -Pattern "CS0518" -SimpleMatch -Quiet)
+
+            $treatmentRequired = ($conditionId -eq "treatment-roslyn-required")
+            $missingRequiredRoslynUsageDetected = ($treatmentRequired -and [int]$roslynUsage.Successful -le 0)
+            $missingRequiredWorkspaceModeDetected = ($treatmentRequired -and [int]$workspaceContextUsage.workspace_count -le 0)
+            $workspaceHealthGateFailed = ($treatmentRequired -and [bool]$cs0518Detected)
+
             $acceptOk = $false
             if ($setupOk) {
-                $acceptOk = $true
-                foreach ($cmdLine in @($task.acceptance_checks)) {
-                    if ([string]::IsNullOrWhiteSpace($cmdLine)) { continue }
-                    if ((Invoke-CommandLine -WorkingDirectory $workspaceDir -CommandLine (Convert-ToText $cmdLine) -LogPath $acceptLog) -ne 0) { $acceptOk = $false; break }
+                if ($missingRequiredRoslynUsageDetected -or $missingRequiredWorkspaceModeDetected -or $workspaceHealthGateFailed) {
+                    $acceptOk = $false
+                    Add-Content -Path $acceptLog -Value "SKIPPED: acceptance checks not run because treatment-required validity gates failed."
+                    if ($missingRequiredRoslynUsageDetected) { Add-Content -Path $acceptLog -Value "Gate: missing required successful Roslyn usage." }
+                    if ($missingRequiredWorkspaceModeDetected) { Add-Content -Path $acceptLog -Value "Gate: missing required workspace_context.mode=workspace evidence." }
+                    if ($workspaceHealthGateFailed) { Add-Content -Path $acceptLog -Value "Gate: CS0518 detected (workspace reference assemblies unhealthy)." }
+                } else {
+                    $acceptOk = $true
+                    foreach ($cmdLine in @($task.acceptance_checks)) {
+                        if ([string]::IsNullOrWhiteSpace($cmdLine)) { continue }
+                        if ((Invoke-CommandLine -WorkingDirectory $workspaceDir -CommandLine (Convert-ToText $cmdLine) -LogPath $acceptLog) -ne 0) { $acceptOk = $false; break }
+                    }
                 }
             } else {
                 Add-Content -Path $acceptLog -Value 'SKIPPED: acceptance checks not run because setup failed.'
@@ -448,6 +728,33 @@ foreach ($taskId in $TaskIds) {
 
             $tokens = Get-CodexTokenMetrics -TranscriptPath $transcriptPath
             $succeeded = ($setupOk -and $agentExit -eq 0 -and $acceptOk)
+
+            $failureReasons = @()
+            if ($missingRequiredRoslynUsageDetected) { $failureReasons += "missing_required_roslyn_usage" }
+            if ($missingRequiredWorkspaceModeDetected) { $failureReasons += "missing_required_workspace_mode" }
+            if ($workspaceHealthGateFailed) { $failureReasons += "workspace_health_gate_cs0518" }
+
+            $roslynToolsEnabled = ($conditionId -ne "control-text-only")
+            $toolsOffered = @("shell.exec")
+            if ($roslynToolsEnabled) {
+                $toolsOffered += @(
+                    "nav.find_symbol",
+                    "ctx.member_source",
+                    "ctx.symbol_envelope",
+                    "diag.get_file_diagnostics",
+                    "diag.get_workspace_snapshot",
+                    "diag.get_solution_snapshot",
+                    "edit.rename_symbol",
+                    "edit.replace_member_body",
+                    "edit.transaction",
+                    "edit.create_file",
+                    "session.open",
+                    "session.apply_text_edits",
+                    "session.apply_and_commit",
+                    "session.commit",
+                    "session.close"
+                )
+            }
 
             $runRecord = [ordered]@{
                 run_id = $runId
@@ -467,7 +774,23 @@ foreach ($taskId in $TaskIds) {
                 prompt_tokens = $tokens.prompt_tokens
                 completion_tokens = $tokens.completion_tokens
                 total_tokens = $tokens.total_tokens
-                tool_calls = @()
+                tools_offered = @($toolsOffered)
+                tool_calls = @($roslynUsage.ToolCalls)
+                roslyn_used = ([int]$roslynUsage.Successful -gt 0)
+                roslyn_attempted_calls = [int]$roslynUsage.Commands.Count
+                roslyn_successful_calls = [int]$roslynUsage.Successful
+                roslyn_usage_indicators = @($roslynUsage.Commands)
+                roslyn_workspace_mode_workspace_count = [int]$workspaceContextUsage.workspace_count
+                roslyn_workspace_mode_ad_hoc_count = [int]$workspaceContextUsage.ad_hoc_count
+                roslyn_workspace_mode_last = $workspaceContextUsage.last_mode
+                cs0518_detected = [bool]$cs0518Detected
+                validity_gates = [ordered]@{
+                    treatment_required = [bool]$treatmentRequired
+                    missing_required_roslyn_usage = [bool]$missingRequiredRoslynUsageDetected
+                    missing_required_workspace_mode = [bool]$missingRequiredWorkspaceModeDetected
+                    workspace_health_gate_cs0518 = [bool]$workspaceHealthGateFailed
+                    failure_reasons = @($failureReasons)
+                }
                 context = [ordered]@{
                     task_title = (Convert-ToText $task.title)
                     repo = (Convert-ToText $task.repo)
@@ -484,6 +807,10 @@ foreach ($taskId in $TaskIds) {
 
             $runPath = Join-Path $runBundleDir ("{0}.json" -f $runId)
             $runRecord | ConvertTo-Json -Depth 12 | Set-Content -Path $runPath
+
+            if ($treatmentRequired -and $failureReasons.Count -gt 0) {
+                throw ("Treatment-required gates failed for run '{0}': {1}" -f $runId, ([string]::Join(", ", $failureReasons)))
+            }
         }
     }
 }

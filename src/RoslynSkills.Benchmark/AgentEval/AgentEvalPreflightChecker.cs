@@ -11,6 +11,7 @@ public sealed class AgentEvalPreflightChecker
         new("rg", "--version", Required: true),
         new("codex", "--version", Required: false, WindowsFallbackCommands: ["codex.cmd", "codex.exe"]),
         new("claude", "--version", Required: false, WindowsFallbackCommands: ["claude.cmd", "claude.exe"]),
+        new("gemini", "--version", Required: false, WindowsFallbackCommands: ["gemini.cmd", "gemini.exe"]),
     };
 
     private readonly ICommandProbe _probe;

@@ -22,3 +22,9 @@ This is the first realistic public-OSS trial pack for control/treatment A/B runs
    - `dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-export-summary --report <agent-eval-report.json> --run-validation <agent-eval-run-validation.json>`
 7. Or run gate end-to-end in one command:
    - `dotnet run --project src/RoslynSkills.Benchmark -- agent-eval-gate --manifest benchmarks/experiments/oss-csharp-pilot-v1/manifest.json --runs <runs-dir>`
+
+## Notes
+
+- This experiment has multiple Roslyn-enabled conditions; the primary A/B pair is defined via `primary_control_condition_id`/`primary_treatment_condition_id` in `manifest.json`.
+- If older OSS pilot run records are missing `tools_offered`/`tool_calls`, backfill them with:
+  - `benchmarks/scripts/Upgrade-OssPilotRunRecords.ps1 -RunsDirectory <runs-dir>`

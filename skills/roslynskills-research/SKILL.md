@@ -1,23 +1,25 @@
 ---
 name: roslynskills-research
-description: Run Roslyn-first coding research workflows for C#/.NET repositories using RoslynSkills CLI commands. Use when you need semantic navigation, context envelopes, diagnostics triage, non-destructive edit validation, or evidence capture for control vs Roslyn-enabled agent comparisons.
+description: Roslyn-first C#/.NET coding workflow using RoslynSkills (roscli). Use when user asks for symbol navigation, semantic context, structured refactors (rename/transactions), workspace-backed diagnostics triage, or evidence capture for benchmark runs. Avoid for non-C# repos or tasks that do not need semantic certainty.
+license: MIT
+compatibility: Claude.ai / Claude Code. Requires local shell access (Bash or PowerShell) plus RoslynSkills CLI (roscli) and/or the RoslynSkills MCP server.
+metadata:
+  author: DNA Kode
+  mcp-server: roslynskills
+allowed-tools: "Bash Read Write Edit Grep Glob"
 ---
 
 # RoslynSkills Research
 
-## Session start
+Goal: use Roslyn semantics as the truth source (not regex) when correctness matters.
+
+## Session Start
 
 Run command inventory first:
 
 ```powershell
 roscli list-commands --ids-only
-roscli quickstart
-```
-
-Cross-platform alternative:
-
-```bash
-roscli list-commands --ids-only
+roscli list-commands --stable-only --ids-only
 roscli quickstart
 ```
 
@@ -25,308 +27,81 @@ If `roscli` is not on PATH, in this repository use:
 
 ```powershell
 scripts\roscli.cmd list-commands --ids-only
+scripts\roscli.cmd list-commands --stable-only --ids-only
 scripts\roscli.cmd quickstart
+```
+
+Cross-platform wrapper:
+
+```bash
+bash scripts/roscli list-commands --ids-only
+bash scripts/roscli list-commands --stable-only --ids-only
+bash scripts/roscli quickstart
 ```
 
 Pit-of-success contract:
 
 - Discover: `list-commands --ids-only`
-- Orient: `quickstart`
 - Disambiguate args: `describe-command <command-id>`
 - Execute semantic-first: `nav.*`, `ctx.*`, `diag.*` before text fallback
-- Verify workspace binding: inspect `workspace_context.mode` on semantic file commands (nav/ctx/diag) and use `--require-workspace true` for fail-closed checks
+- Start stable-first: use `list-commands --stable-only --ids-only`; only step into `advanced`/`experimental` commands when needed
+- Verify workspace binding: use `--workspace-path ... --require-workspace true` on project code
 - Verify before finalize: diagnostics + build/tests
 
-Prefer Roslyn commands for navigation, context, diagnostics, repair, and structured edits before text-only fallbacks.
+Mandatory policy: if you use non-Roslyn tooling to read/edit `.cs`, append a short entry to `ROSLYN_FALLBACK_REFLECTION_LOG.md`.
 
-Mandatory policy: if a `.cs` read/edit uses non-Roslyn tooling, append a self-reflection entry to `ROSLYN_FALLBACK_REFLECTION_LOG.md` before continuing.
+## Canonical Workflow (Find -> Edit -> Verify)
 
-## Complementary dependency intelligence (optional)
-
-When the task is about external package APIs (overloads, version diffs, vulnerability metadata), combine RoslynSkills with `dotnet-inspect` if available:
+1) Find declaration coordinates (workspace-bound for project code):
 
 ```powershell
-dnx dotnet-inspect -y -- api JsonSerializer --package System.Text.Json
+roscli nav.find_symbol src/MyFile.cs MySymbol --brief true --max-results 50 --workspace-path MyProject.csproj --require-workspace true
 ```
 
-Use `dotnet-inspect` for dependency/package discovery, then use `roscli` for workspace-local semantic edits and diagnostics.
-
-Selection hints:
-
-- external package API shape / overloads / version diffs: `dotnet-inspect`
-- in-repo symbol targeting / edits / diagnostics: `roscli`
-- dependency-driven local changes: use both (inspect first, edit second)
-
-Fast combined pattern:
+2) Apply a structured edit:
 
 ```powershell
-# 1) Inspect external API
-dnx dotnet-inspect -y -- api JsonSerializer --package System.Text.Json
-
-# 2) Make local semantic change
-roscli nav.find_symbol src/MyProject/File.cs JsonSerializer --brief true --max-results 20
-roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true
-roscli diag.get_file_diagnostics src/MyProject/File.cs
+roscli edit.rename_symbol src/MyFile.cs 42 17 NewName --apply true --max-diagnostics 50 --workspace-path MyProject.csproj --require-workspace true
 ```
 
-## Roscli performance mode (high call volume)
-
-For longer agent loops with many Roslyn calls, prefer cached published execution:
+3) If the edit response does not include post-edit diagnostics (or reports errors/warnings), verify:
 
 ```powershell
-scripts\roscli-warm.cmd
-$env:ROSCLI_USE_PUBLISHED = "1"
+roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MyProject.csproj --require-workspace true
 ```
 
-Cross-platform:
-
-```bash
-./scripts/roscli-warm
-export ROSCLI_USE_PUBLISHED=1
-```
-
-Use `ROSCLI_REFRESH_PUBLISHED=1` for one call when binaries need refresh after local source changes.
-`ROSCLI_STALE_CHECK` is disabled by default in published mode for low latency; enable `ROSCLI_STALE_CHECK=1` during active roscli source development when automatic republish checks matter more than call speed.
-
-## Simple command mode (positional + optional flags)
-
-Use direct command invocation for common workflows and append optional flags directly:
+Investigative tracing (when target is unclear across many files):
 
 ```powershell
-scripts\roscli.cmd ctx.file_outline src/RoslynSkills.Core/DefaultRegistryFactory.cs
-scripts\roscli.cmd ctx.file_outline src/RoslynSkills.Core/DefaultRegistryFactory.cs --include-members false --max-types 1
-scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 25 body --brief true
-scripts\roscli.cmd ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 236 25 --mode body --include-source-text true --context-lines-before 2
-scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs
-scripts\roscli.cmd diag.get_file_diagnostics src/RoslynSkills.Core/DefaultRegistryFactory.cs --workspace-path src/RoslynSkills.Core/RoslynSkills.Core.csproj --require-workspace true
-scripts\roscli.cmd diag.get_workspace_snapshot src --brief true --require-workspace true
-scripts\roscli.cmd diag.get_workspace_snapshot src --require-workspace true --workspace-path RoslynSkills.slnx
-scripts\roscli.cmd diag.get_solution_snapshot src --brief true
-scripts\roscli.cmd diag.get_solution_snapshot src --mode compact --severity-filter Error --severity-filter Warning
-scripts\roscli.cmd nav.find_symbol src/RoslynSkills.Cli/CliApplication.cs TryGetCommandAndInputAsync --brief true --max-results 200
-scripts\roscli.cmd edit.rename_symbol src/RoslynSkills.Core/Commands/RenameSymbolCommand.cs 19 20 ValidateName --apply false
-scripts\roscli.cmd edit.create_file src/RoslynSkills.Core/Commands/NewCommand.cs --content "public sealed class NewCommand { }"
-scripts\roscli.cmd session.open src/RoslynSkills.Cli/CliApplication.cs demo-session
-scripts\roscli.cmd session.get_diagnostics demo-session
-scripts\roscli.cmd session.commit demo-session --keep-session false --require-disk-unchanged true
-scripts\roscli.cmd session.diff demo-session
-scripts\roscli.cmd session.close demo-session
+roscli ctx.search_text "RemoteUserAction" src --mode literal --max-results 120 --brief true
+roscli nav.find_invocations src/MyFile.cs 42 17 --brief true --max-results 100 --workspace-path MyProject.csproj --require-workspace true
+roscli nav.call_hierarchy src/MyFile.cs 42 17 --direction both --max-depth 2 --brief true --workspace-path MyProject.csproj --require-workspace true
+roscli analyze.control_flow_graph src/MyFile.cs 42 17 --brief true --max-blocks 120 --max-edges 260 --workspace-path MyProject.csproj --require-workspace true
+roscli analyze.dataflow_slice src/MyFile.cs 42 17 --brief true --max-symbols 120 --workspace-path MyProject.csproj --require-workspace true
+roscli analyze.unused_private_symbols src --brief true --max-symbols 120
+roscli analyze.dependency_violations src MyApp.Web MyApp.Application MyApp.Domain --direction toward_end --brief true
+roscli analyze.impact_slice src/MyFile.cs 42 17 --brief true --include-callers true --include-callees true
+roscli analyze.override_coverage src --coverage-threshold 0.6 --brief true
+roscli analyze.async_risk_scan src --brief true --max-findings 120 --severity-filter warning --severity-filter info
 ```
 
-Flag syntax supports:
-
-- `--name value`
-- `--name=value`
-- `--flag` (implies `true`)
-- `--no-flag` (implies `false`)
-- repeated flags for arrays (for example `--severity-filter Error --severity-filter Warning`)
-
-Keep JSON input for complex/structured operations (especially `edit.transaction`, `session.apply_text_edits`, `repair.apply_plan`, and advanced `diag.*` payloads).
-When unsure about arguments for any command, run `roscli describe-command <command-id>` first.
-For project-backed files, `workspace_context.mode` should be `workspace`; if it is `ad_hoc`, rerun with `--workspace-path <.csproj|.sln|.slnx|dir>` and prefer `--require-workspace true`.
-
-Use JSON for `session.set_content` (full source payload) to avoid shell escaping issues.
-Use `session.apply_and_commit` for one-shot structured edits + guarded commit when you do not need a long-lived session.
-For simple read/navigation calls, avoid JSON payload piping and call the shorthand command directly to reduce token and transcript overhead.
-`session.open` supports only `.cs`/`.csx` source files; do not open `.sln`, `.slnx`, or `.csproj`.
-
-## Input transport (avoid temp files)
-
-Prefer stdin JSON instead of `--input @temp.json`:
+Bundle multiple read-only probes in one call when useful:
 
 ```powershell
-$payload = @{ file_path = "src/MyFile.cs"; symbol_name = "TargetSymbol" }
-$payload | ConvertTo-Json -Depth 8 | scripts\roscli.cmd run nav.find_symbol --input-stdin
+roscli run query.batch --input "{`"queries`":[{`"command_id`":`"ctx.search_text`",`"input`":{`"patterns`":[`"RemoteUserAction`",`"ReplicationUpdate`"],`"roots`":[`"src`"],`"mode`":`"literal`"}},{`"command_id`":`"nav.find_invocations`",`"input`":{`"file_path`":`"src/MyFile.cs`",`"line`":42,`"column`":17,`"brief`":true,`"workspace_path`":`"MyProject.csproj`",`"require_workspace`":true}}],`"continue_on_error`":true}"
 ```
 
-Also supported:
+## Troubleshooting (Fast Fail-Closed)
 
-- `--input -` to read JSON from stdin.
-- `--input @path.json` only when stdin piping is impractical.
+- Args/schema error: run `roscli describe-command <command-id>` once, fix args, retry.
+- Workspace is `ad_hoc` for project code: rerun with explicit `--workspace-path ... --require-workspace true`.
+- You see `CS0518` (missing core types): treat as invalid workspace binding and retry with correct workspace root.
 
-## Diagnostic triage workflow
+## Deep Reference (Progressive Disclosure)
 
-Prefer workspace-backed triage for project code:
+Keep this SKILL.md small. Use these references only when needed:
 
-```powershell
-scripts\roscli.cmd diag.get_workspace_snapshot src --brief true --require-workspace true
-```
-
-Use `diag.get_solution_snapshot` only for ad-hoc file set compilation (it may report false missing-reference/type errors for real projects when no .csproj/.sln context is loaded).
-
-Use `diag.get_solution_snapshot` in progressive detail:
-
-1. Brief triage (lowest payload):
-
-```powershell
-scripts\roscli.cmd diag.get_workspace_snapshot src --brief true --require-workspace true
-scripts\roscli.cmd diag.get_workspace_snapshot src --require-workspace true --workspace-path RoslynSkills.slnx
-scripts\roscli.cmd diag.get_solution_snapshot src --brief true
-```
-
-2. Compact triage (default):
-
-```powershell
-$payload = @{ directory_path = "src"; recursive = $true }
-$payload | ConvertTo-Json -Depth 8 | scripts\roscli.cmd run diag.get_solution_snapshot --input-stdin
-```
-
-3. Guided triage (adds operation suggestions):
-
-```powershell
-$payload = @{
-  directory_path = "src"
-  mode = "guided"
-  include_unfiltered = $false
-  include_query = $false
-  max_files_in_output = 12
-}
-$payload | ConvertTo-Json -Depth 8 | scripts\roscli.cmd run diag.get_solution_snapshot --input-stdin
-```
-
-4. Raw detail (includes diagnostic tuples):
-
-```powershell
-$payload = @{ directory_path = "src"; mode = "raw"; max_diagnostics = 2000 }
-$payload | ConvertTo-Json -Depth 8 | scripts\roscli.cmd run diag.get_solution_snapshot --input-stdin
-```
-
-Useful filters:
-
-- `severity_filter` (default: `Error`, `Warning`)
-- `diagnostic_ids` for targeted triage
-- `include_generated` (default `false`)
-- `use_sdk_defaults` (default `true`) for realistic SDK-style compilation context
-
-## Non-destructive analysis with immutable trees
-
-Roslyn syntax trees/compilations are immutable snapshots. Use `file_overrides` for what-if diagnostics without editing files:
-
-```powershell
-$payload = @{
-  file_paths = @("src/MyFile.cs")
-  mode = "guided"
-  file_overrides = @(
-    @{
-      file_path = "src/MyFile.cs"
-      content = "public class Demo { public void M() { int x = ; } }"
-    }
-  )
-}
-$payload | ConvertTo-Json -Depth 12 | scripts\roscli.cmd run diag.get_solution_snapshot --input-stdin
-```
-
-After triage, keep edit loop non-destructive first:
-
-1. `diag.get_after_edit` with `proposed_content`
-2. chosen `edit.*` command in dry-run mode when available
-3. apply only after diagnostics are acceptable
-
-For iterative in-memory edit loops:
-
-1. `session.open <file-path> [session-id]`
-2. `session.status <session-id>` (capture `generation` and sync state)
-3. Prefer `session.apply_text_edits` for local changes (small token payloads); use `session.set_content` for full rewrites.
-4. `session.get_diagnostics`
-5. `session.diff`
-6. `session.commit` with conflict guards when ready (`expected_generation`, optional `require_disk_unchanged`)
-7. `session.close`
-
-Fast-path alternative:
-
-1. `session.open <file-path> [session-id]`
-2. `session.apply_and_commit --input-stdin` with `session_id`, `edits`, and optional `expected_generation`
-3. Continue with a fresh `session.open` only if more edits are needed
-
-Example structured span edit without temp files:
-
-```powershell
-$payload = @{
-  session_id = "demo-session"
-  expected_generation = 0
-  edits = @(
-    @{
-      start_line = 42
-      start_column = 13
-      end_line = 42
-      end_column = 22
-      new_text = "newValue"
-    }
-  )
-}
-$payload | ConvertTo-Json -Depth 10 | scripts\roscli.cmd run session.apply_text_edits --input-stdin
-```
-
-Reliability rule:
-
-- Before each mutating session step, pass `expected_generation` from the latest session result.
-- Before commit, use `session.status` and fail closed if sync state indicates external disk drift (`disk_changed_external`).
-- Keep `session.*` mutations sequential; do not run `session.commit` and `session.close` in parallel.
-- Prefer `session.commit` as the terminal operation, and only call `session.close` separately when a committed session is intentionally kept open.
-
-For coordinated multi-file changes in one step, use `edit.transaction`:
-
-```powershell
-$payload = @{
-  apply = $false
-  operations = @(
-    @{
-      operation = "replace_span"
-      file_path = "src/A.cs"
-      start_line = 12
-      start_column = 19
-      end_line = 12
-      end_column = 24
-      new_text = "NewName"
-    },
-    @{
-      operation = "set_content"
-      file_path = "src/B.cs"
-      new_content = "public class B { }"
-    }
-  )
-}
-$payload | ConvertTo-Json -Depth 12 | scripts\roscli.cmd run edit.transaction --input-stdin
-```
-
-For micro-benchmark rename tasks, prefer one-shot verification helper where available:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
-```
-
-## Token-efficiency tracking
-
-For each paired run (baseline vs Roslyn-enabled), record:
-
-- total model tokens (prompt/completion) when provider telemetry is available
-- fallback proxy when telemetry is missing:
-  - request JSON character count
-  - response JSON character count
-  - number of command round-trips
-- command mix (`session.apply_text_edits` vs `session.set_content` vs text fallback)
-
-Interpretation rule:
-
-- Prefer workflows that reduce total tokens and retries while preserving correctness.
-
-## Exploration gap logging
-
-If Roslyn commands cannot answer a task and you must use plain file reads:
-
-1. Record the gap and reason.
-2. Propose a candidate exploratory command (`nav.*`/`ctx.*`/`diag.*`).
-3. Add regression tests for the new command once implemented.
-
-Use this template in `ROSLYN_FALLBACK_REFLECTION_LOG.md`:
-
-- Date
-- Task/context
-- Fallback action (`read`/`edit`/`both`)
-- Why Roslyn path was not used
-- Roslyn command attempted (if any)
-- Missing command/option hypothesis
-- Proposed improvement
-- Expected impact (correctness, latency, token_count)
-
-
+- `references/diagnostics.md`: workspace vs solution snapshots, common failure modes
+- `references/sessions.md`: non-destructive sessions, apply-and-commit
+- `references/performance.md`: published-mode speed knobs (`ROSCLI_USE_PUBLISHED`)
+- `references/dependency-intel.md`: when to combine with `dotnet-inspect`

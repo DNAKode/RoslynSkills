@@ -1,0 +1,111 @@
+{
+    "run_id":  "run-codex-control-text-only-mediatr-openbehavior-nullguard-brief-first-v5-r01",
+    "task_id":  "mediatr-openbehavior-nullguard",
+    "condition_id":  "control-text-only",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "gpt-5.3-codex-spark",
+    "model_reasoning_effort":  "low",
+    "succeeded":  true,
+    "setup_passed":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "exit_code":  0,
+    "timed_out":  false,
+    "duration_seconds":  30.249,
+    "prompt_tokens":  144757,
+    "completion_tokens":  2351,
+    "total_tokens":  147108,
+    "tools_offered":  [
+                          "shell.exec"
+                      ],
+    "tool_calls":  [
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  false,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       },
+                       {
+                           "ok":  true,
+                           "tool_name":  "shell.exec"
+                       }
+                   ],
+    "roslyn_used":  false,
+    "roslyn_attempted_calls":  0,
+    "roslyn_successful_calls":  0,
+    "roslyn_usage_indicators":  [
+
+                                ],
+    "roslyn_workspace_mode_workspace_count":  0,
+    "roslyn_workspace_mode_ad_hoc_count":  0,
+    "roslyn_workspace_mode_last":  null,
+    "cs0518_detected":  false,
+    "validity_gates":  {
+                           "treatment_required":  false,
+                           "missing_required_roslyn_usage":  false,
+                           "missing_required_workspace_mode":  false,
+                           "workspace_health_gate_cs0518":  false,
+                           "failure_reasons":  [
+
+                                               ]
+                       },
+    "context":  {
+                    "task_title":  "MediatR OpenBehavior null-guard exception correctness",
+                    "repo":  "jbogard/MediatR",
+                    "repo_url":  "https://github.com/jbogard/MediatR.git",
+                    "commit":  "be61f5a415965bf81893a05b25e0c4936079f35c",
+                    "setup_checks":  [
+                                         "dotnet restore"
+                                     ],
+                    "acceptance_checks":  [
+                                              "dotnet test --nologo"
+                                          ],
+                    "task_prompt_file":  "prompts/mediatr-openbehavior-nullguard.md",
+                    "roslyn_guidance_profile":  "brief-first-v5",
+                    "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-151544-oss-csharp-pilot\\mediatr-openbehavior-nullguard\\control-text-only\\run-codex-control-text-only-mediatr-openbehavior-nullguard-brief-first-v5-r01",
+                    "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-control-text-mediatr-open-brief-first--r01-822fb67a"
+                }
+}

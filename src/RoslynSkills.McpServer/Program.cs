@@ -722,7 +722,7 @@ internal static class Program
             return;
         }
 
-        if (string.Equals(commandId, "analyze.cfg", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "analyze.control_flow_graph", StringComparison.OrdinalIgnoreCase))
         {
             properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
             properties["line"] = IntProperty("1-based line number for executable region anchor.", 1);
@@ -1062,7 +1062,7 @@ internal static class Program
                 "roslyn://command/nav.call_hierarchy?file_path=Target.cs&line=12&column=15&direction=both&max_depth=2&brief=true",
                 "roslyn://command/nav.call_path?source_file_path=Caller.cs&source_line=12&source_column=15&target_file_path=Target.cs&target_line=48&target_column=18&max_depth=8&brief=true",
                 "roslyn://command/analyze.unused_private_symbols?workspace_path=src&brief=true&max_symbols=100",
-                "roslyn://command/analyze.cfg?file_path=Target.cs&line=12&column=15&brief=true&max_blocks=120&max_edges=260",
+                "roslyn://command/analyze.control_flow_graph?file_path=Target.cs&line=12&column=15&brief=true&max_blocks=120&max_edges=260",
                 "roslyn://command/analyze.dataflow_slice?file_path=Target.cs&line=12&column=15&brief=true&max_symbols=120",
                 "roslyn://command/analyze.impact_slice?file_path=Target.cs&line=12&column=15&include_references=true&include_callers=true&brief=true",
                 "roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true",

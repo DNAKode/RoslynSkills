@@ -3,7 +3,8 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
 
-set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
+set "CACHE_DIR=%ROSCLI_CACHE_DIR%"
+if "%CACHE_DIR%"=="" set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
 set "CACHE_STAMP=%CACHE_DIR%\publish.stamp"
 dotnet publish "%REPO_ROOT%\src\RoslynSkills.Cli" -c Release -o "%CACHE_DIR%" --nologo
 set "EXIT_CODE=%ERRORLEVEL%"

@@ -101,11 +101,11 @@ Deep guidance reference: `docs/PIT_OF_SUCCESS.md`
 
 ## What You Get
 
-`roscli` currently exposes 44 commands across:
+`roscli` currently exposes 46 commands across:
 
 - `nav.*`: semantic symbol/references/implementations/overrides
 - `ctx.*`: file/member/call-chain/dependency context
-- `analyze.*`: lightweight static analysis (unused private symbols, dependency violations, impact slices, override coverage, async risk scan)
+- `analyze.*`: lightweight static analysis (control-flow graphs, dataflow slices, unused private symbols, dependency violations, impact slices, override coverage, async risk scan)
 - `diag.*`: diagnostics snapshots/diffs/after-edit checks
 - `edit.*`: structured semantic edits and transactions
 - `repair.*`: diagnostics-driven repair planning/application
@@ -248,6 +248,28 @@ For Claude users, MCP works best paired with a skill:
 
 - Connect the MCP server (above) so Claude has the tools.
 - Install `roslynskills-tight-skill-<version>.zip` so Claude reliably uses the tools with a low-churn, minimal-call workflow.
+
+## Gemini CLI Compatibility (Early Support)
+
+Current status:
+
+- Benchmark preflight now probes `gemini` availability (plus Windows shims `gemini.cmd` / `gemini.exe`).
+- Recommended integration path is MCP + concise RoslynSkills startup guidance (`list-commands` -> `quickstart` -> `describe-command`).
+
+Practical first check:
+
+```powershell
+gemini --version
+roscli list-commands --stable-only --ids-only
+```
+
+Guidance/compliance notes:
+
+- Keep extension/tool instructions concise and example-driven.
+- Prefer low-flag, brief-first commands for first interactions.
+- Expand detail only after initial success.
+
+See `docs/ECOSYSTEM_NOTES.md` for the Gemini guideline mapping and OpenCode follow-up backlog item.
 
 ## For Maintainers
 

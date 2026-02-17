@@ -541,6 +541,70 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_AnalyzeControlFlowGraph_AcceptsPositionalShorthand()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-cfg-{Guid.NewGuid():N}.cs");
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public int Compute(int value)
+                    {
+                        if (value > 0)
+                        {
+                            return value + 1;
+                        }
+
+                        return value - 1;
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "analyze.control_flow_graph", filePath, "3", "20", "--brief", "true", "--max-blocks", "50", "--max-edges", "100" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"analyze.control_flow_graph\"", output);
+            Assert.Contains("\"cfg_summary\":", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_AnalyzeCfg_ReturnsUnknownVerb()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "analyze.cfg" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(1, exitCode);
+        Assert.Contains("unknown_verb", output);
+        Assert.Contains("analyze.cfg", output);
+    }
+
+    [Fact]
     public async Task DirectCommand_RenameSymbol_AcceptsPositionalShorthand()
     {
         string filePath = Path.GetTempFileName();

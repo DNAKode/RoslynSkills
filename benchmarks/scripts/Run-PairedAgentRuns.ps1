@@ -4,7 +4,7 @@ param(
     [string]$CodexModel = "",
     [AllowEmptyString()][ValidateSet("", "low", "medium", "high", "xhigh")][string]$CodexReasoningEffort = "",
     [string]$ClaudeModel = "",
-    [ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$RoslynGuidanceProfile = "standard",
+    [ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$RoslynGuidanceProfile = "standard",
     [string]$CliPublishConfiguration = "Release",
     [switch]$IncludeMcpTreatment,
     [switch]$IncludeClaudeLspTreatment,
@@ -16,7 +16,18 @@ param(
     [switch]$KeepIsolatedWorkspaces,
     [switch]$SkipCodex,
     [switch]$SkipClaude,
-    [ValidateSet("single-file", "project")][string]$TaskShape = "single-file"
+    [ValidateSet("single-file", "project")][string]$TaskShape = "single-file",
+    [ValidateSet(
+        "rename-overload-v1",
+        "rename-overload-collision-classes-v1",
+        "rename-overload-collision-nested-v1",
+        "rename-overload-collision-generic-v1",
+        "change-signature-named-args-v1",
+        "update-usings-cleanup-v1",
+        "add-member-threshold-v1",
+        "replace-member-body-guard-v1",
+        "create-file-audit-log-v1"
+    )][string]$TaskId = "rename-overload-v1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -136,6 +147,7 @@ function Copy-RunArtifactFiles {
     foreach ($fileName in @(
             "Target.cs",
             "Target.original.cs",
+            "AuditLog.cs",
             "Program.cs",
             "TargetHarness.csproj",
             "prompt.txt",
@@ -171,7 +183,8 @@ function Write-TaskWorkspaceFiles {
     param(
         [Parameter(Mandatory = $true)][string]$RunDirectory,
         [Parameter(Mandatory = $true)][string]$TargetContent,
-        [Parameter(Mandatory = $true)][ValidateSet("single-file", "project")][string]$TaskShape
+        [Parameter(Mandatory = $true)][ValidateSet("single-file", "project")][string]$TaskShape,
+        [Parameter(Mandatory = $false)][string]$ProgramContent = ""
     )
 
     $targetPath = Join-Path $RunDirectory "Target.cs"
@@ -180,7 +193,10 @@ function Write-TaskWorkspaceFiles {
     Copy-Item -Path $targetPath -Destination $targetOriginalPath -Force
 
     if ($TaskShape -eq "project") {
-        $programContent = @"
+        $programContent = if (-not [string]::IsNullOrWhiteSpace($ProgramContent)) {
+            $ProgramContent
+        } else {
+            @"
 public static class Program
 {
     public static void Main()
@@ -190,6 +206,7 @@ public static class Program
     }
 }
 "@
+        }
 
         $projectContent = @"
 <Project Sdk="Microsoft.NET.Sdk">
@@ -2084,66 +2101,189 @@ function Get-RegexCount {
         [System.Text.RegularExpressions.RegexOptions]::Multiline).Count
 }
 
-function Invoke-RenameConstraintChecks {
+function Invoke-TaskConstraintChecks {
     param(
         [Parameter(Mandatory = $true)][string]$RunDirectory,
         [Parameter(Mandatory = $true)][string]$CliDllPath,
+        [Parameter(Mandatory = $true)][ValidateSet(
+            "rename-overload-v1",
+            "rename-overload-collision-classes-v1",
+            "rename-overload-collision-nested-v1",
+            "rename-overload-collision-generic-v1",
+            "change-signature-named-args-v1",
+            "update-usings-cleanup-v1",
+            "add-member-threshold-v1",
+            "replace-member-body-guard-v1",
+            "create-file-audit-log-v1"
+        )][string]$TaskId,
         [Parameter(Mandatory = $false)][ValidateSet("single-file", "project")][string]$TaskShape = "single-file"
     )
 
     $targetPath = Join-Path $RunDirectory "Target.cs"
     $content = Get-Content -Path $targetPath -Raw
 
-    $handleIntSignatureCount = Get-RegexCount -Text $content -Pattern "public\s+void\s+Handle\s*\(\s*int\s+value\s*\)"
-    $processIntSignatureCount = Get-RegexCount -Text $content -Pattern "public\s+void\s+Process\s*\(\s*int\s+value\s*\)"
-    $processStringSignatureCount = Get-RegexCount -Text $content -Pattern "public\s+void\s+Process\s*\(\s*string\s+value\s*\)"
-    $handleInvocationCount = Get-RegexCount -Text $content -Pattern "\bHandle\s*\(\s*1\s*\)\s*;"
-    $processIntInvocationCount = Get-RegexCount -Text $content -Pattern "\bProcess\s*\(\s*1\s*\)\s*;"
-    $processStringInvocationCount = Get-RegexCount -Text $content -Pattern "\bProcess\s*\(\s*\""x\""\s*\)\s*;"
-    $writeLineLiteralCount = Get-RegexCount -Text $content -Pattern "System\.Console\.WriteLine\(\s*\""Process\""\s*\)\s*;"
-    $forbiddenHandleStringInvocationCount = Get-RegexCount -Text $content -Pattern "\bHandle\s*\(\s*\""x\""\s*\)\s*;"
-
     $checks = New-Object System.Collections.Generic.List[object]
-    $checks.Add([ordered]@{
-        name = "handle_int_signature_once"
-        passed = ($handleIntSignatureCount -eq 1)
-        detail = "count=$handleIntSignatureCount"
-    })
-    $checks.Add([ordered]@{
-        name = "process_int_signature_removed"
-        passed = ($processIntSignatureCount -eq 0)
-        detail = "count=$processIntSignatureCount"
-    })
-    $checks.Add([ordered]@{
-        name = "process_string_signature_preserved"
-        passed = ($processStringSignatureCount -eq 1)
-        detail = "count=$processStringSignatureCount"
-    })
-    $checks.Add([ordered]@{
-        name = "handle_invocation_updated_once"
-        passed = ($handleInvocationCount -eq 1)
-        detail = "count=$handleInvocationCount"
-    })
-    $checks.Add([ordered]@{
-        name = "process_int_invocation_removed"
-        passed = ($processIntInvocationCount -eq 0)
-        detail = "count=$processIntInvocationCount"
-    })
-    $checks.Add([ordered]@{
-        name = "process_string_invocation_preserved"
-        passed = ($processStringInvocationCount -eq 1)
-        detail = "count=$processStringInvocationCount"
-    })
-    $checks.Add([ordered]@{
-        name = "process_string_literal_preserved"
-        passed = ($writeLineLiteralCount -eq 1)
-        detail = "count=$writeLineLiteralCount"
-    })
-    $checks.Add([ordered]@{
-        name = "forbidden_handle_string_invocation_absent"
-        passed = ($forbiddenHandleStringInvocationCount -eq 0)
-        detail = "count=$forbiddenHandleStringInvocationCount"
-    })
+
+    function Add-CountCheck {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)][string]$Pattern,
+            [Parameter(Mandatory = $true)][int]$Expected
+        )
+
+        $count = Get-RegexCount -Text $content -Pattern $Pattern
+        $checks.Add([ordered]@{
+            name = $Name
+            passed = ($count -eq $Expected)
+            detail = "count=$count expected=$Expected"
+        }) | Out-Null
+    }
+
+    function Add-MatchCheck {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)][string]$Pattern,
+            [Parameter(Mandatory = $true)][bool]$ExpectedMatch
+        )
+
+        $options = [System.Text.RegularExpressions.RegexOptions]::Singleline
+        $matched = [System.Text.RegularExpressions.Regex]::IsMatch($content, $Pattern, $options)
+        $checks.Add([ordered]@{
+            name = $Name
+            passed = ($matched -eq $ExpectedMatch)
+            detail = "matched=$matched expected=$ExpectedMatch"
+        }) | Out-Null
+    }
+
+    function Add-BooleanCheck {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)][bool]$Actual,
+            [Parameter(Mandatory = $true)][bool]$Expected
+        )
+
+        $checks.Add([ordered]@{
+            name = $Name
+            passed = ($Actual -eq $Expected)
+            detail = "actual=$Actual expected=$Expected"
+        }) | Out-Null
+    }
+
+    switch ($TaskId) {
+        "rename-overload-v1" {
+            Add-CountCheck -Name "handle_int_signature_once" -Pattern 'public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "process_int_signature_removed" -Pattern 'public\s+void\s+Process\s*\(\s*int\s+value\s*\)' -Expected 0
+            Add-CountCheck -Name "process_string_signature_preserved" -Pattern 'public\s+void\s+Process\s*\(\s*string\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "handle_invocation_updated_once" -Pattern '\bHandle\s*\(\s*1\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_int_invocation_removed" -Pattern '\bProcess\s*\(\s*1\s*\)\s*;' -Expected 0
+            Add-CountCheck -Name "process_string_invocation_preserved" -Pattern '\bProcess\s*\(\s*"x"\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_string_literal_preserved" -Pattern 'System\.Console\.WriteLine\(\s*"Process"\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "forbidden_handle_string_invocation_absent" -Pattern '\bHandle\s*\(\s*"x"\s*\)\s*;' -Expected 0
+        }
+        "rename-overload-collision-classes-v1" {
+            Add-MatchCheck -Name "overloads_has_handle_int" -Pattern 'public\s+class\s+Overloads[\s\S]*?public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -ExpectedMatch $true
+            Add-MatchCheck -Name "overloads_no_process_int_before_other_class" -Pattern 'public\s+class\s+Overloads[\s\S]*?public\s+void\s+Process\s*\(\s*int\s+value\s*\)[\s\S]*?public\s+class\s+OtherOverloads' -ExpectedMatch $false
+            Add-MatchCheck -Name "other_overloads_still_process_int" -Pattern 'public\s+class\s+OtherOverloads[\s\S]*?public\s+void\s+Process\s*\(\s*int\s+value\s*\)' -ExpectedMatch $true
+            Add-MatchCheck -Name "other_overloads_no_handle_int" -Pattern 'public\s+class\s+OtherOverloads[\s\S]*?public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -ExpectedMatch $false
+
+            Add-CountCheck -Name "handle_int_signature_once" -Pattern 'public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "process_int_signature_once" -Pattern 'public\s+void\s+Process\s*\(\s*int\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "handle_invocation_updated_once" -Pattern '\bHandle\s*\(\s*1\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_int_invocation_once" -Pattern '\bProcess\s*\(\s*1\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_string_invocation_preserved_twice" -Pattern '\bProcess\s*\(\s*"x"\s*\)\s*;' -Expected 2
+            Add-CountCheck -Name "process_string_literal_preserved_twice" -Pattern 'System\.Console\.WriteLine\(\s*"Process"\s*\)\s*;' -Expected 2
+            Add-CountCheck -Name "forbidden_handle_string_invocation_absent" -Pattern '\bHandle\s*\(\s*"x"\s*\)\s*;' -Expected 0
+        }
+        "rename-overload-collision-nested-v1" {
+            Add-MatchCheck -Name "outer_has_handle_int" -Pattern 'public\s+class\s+Overloads[\s\S]*?public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -ExpectedMatch $true
+            Add-MatchCheck -Name "outer_no_process_int_before_inner" -Pattern 'public\s+class\s+Overloads[\s\S]*?public\s+void\s+Process\s*\(\s*int\s+value\s*\)[\s\S]*?public\s+class\s+Inner' -ExpectedMatch $false
+            Add-MatchCheck -Name "inner_still_process_int" -Pattern 'public\s+class\s+Inner[\s\S]*?public\s+void\s+Process\s*\(\s*int\s+value\s*\)' -ExpectedMatch $true
+            Add-MatchCheck -Name "inner_no_handle_int" -Pattern 'public\s+class\s+Inner[\s\S]*?public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -ExpectedMatch $false
+
+            Add-CountCheck -Name "handle_int_signature_once" -Pattern 'public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "process_int_signature_once" -Pattern 'public\s+void\s+Process\s*\(\s*int\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "handle_invocation_updated_once" -Pattern '\bHandle\s*\(\s*1\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_int_invocation_once" -Pattern '\bProcess\s*\(\s*1\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_string_invocation_preserved_twice" -Pattern '\bProcess\s*\(\s*"x"\s*\)\s*;' -Expected 2
+            Add-CountCheck -Name "process_string_literal_preserved_twice" -Pattern 'System\.Console\.WriteLine\(\s*"Process"\s*\)\s*;' -Expected 2
+            Add-CountCheck -Name "forbidden_handle_string_invocation_absent" -Pattern '\bHandle\s*\(\s*"x"\s*\)\s*;' -Expected 0
+        }
+        "rename-overload-collision-generic-v1" {
+            Add-CountCheck -Name "handle_int_signature_once" -Pattern 'public\s+void\s+Handle\s*\(\s*int\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "process_int_signature_removed" -Pattern 'public\s+void\s+Process\s*\(\s*int\s+value\s*\)' -Expected 0
+            Add-CountCheck -Name "process_string_signature_preserved" -Pattern 'public\s+void\s+Process\s*\(\s*string\s+value\s*\)' -Expected 1
+            Add-CountCheck -Name "process_generic_signature_preserved" -Pattern 'public\s+void\s+Process\s*<' -Expected 1
+            Add-CountCheck -Name "forbidden_handle_generic_signature_absent" -Pattern 'public\s+void\s+Handle\s*<' -Expected 0
+
+            Add-CountCheck -Name "handle_invocation_updated_once" -Pattern '\bHandle\s*\(\s*1\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_object_invocation_preserved" -Pattern '\bProcess\s*<\s*object\s*>\s*\(' -Expected 1
+            Add-CountCheck -Name "forbidden_handle_object_invocation_absent" -Pattern '\bHandle\s*<\s*object\s*>\s*\(' -Expected 0
+            Add-CountCheck -Name "process_string_invocation_preserved" -Pattern '\bProcess\s*\(\s*"x"\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "process_string_literal_preserved" -Pattern 'System\.Console\.WriteLine\(\s*"Process"\s*\)\s*;' -Expected 1
+            Add-CountCheck -Name "forbidden_handle_string_invocation_absent" -Pattern '\bHandle\s*\(\s*"x"\s*\)\s*;' -Expected 0
+        }
+        "change-signature-named-args-v1" {
+            Add-CountCheck -Name "combine_primary_right_signature_once" -Pattern 'public\s+int\s+Combine\s*\(\s*int\s+primary\s*,\s*int\s+right\s*\)' -Expected 1
+            Add-CountCheck -Name "combine_left_right_signature_removed" -Pattern 'public\s+int\s+Combine\s*\(\s*int\s+left\s*,\s*int\s+right\s*\)' -Expected 0
+            Add-CountCheck -Name "named_argument_primary_updated_once" -Pattern '\bCombine\s*\(\s*primary\s*:\s*1\s*,\s*right\s*:\s*2\s*\)' -Expected 1
+            Add-CountCheck -Name "named_argument_left_removed" -Pattern '\bCombine\s*\(\s*left\s*:\s*1\s*,\s*right\s*:\s*2\s*\)' -Expected 0
+            Add-CountCheck -Name "positional_call_preserved_once" -Pattern '\bCombine\s*\(\s*3\s*,\s*4\s*\)' -Expected 1
+            Add-CountCheck -Name "method_uses_primary_variable" -Pattern '\breturn\s+primary\s*\+\s*right\s*;' -Expected 1
+        }
+        "update-usings-cleanup-v1" {
+            Add-CountCheck -Name "system_using_preserved" -Pattern '^using\s+System\s*;' -Expected 1
+            Add-CountCheck -Name "system_text_using_preserved" -Pattern '^using\s+System\.Text\s*;' -Expected 1
+            Add-CountCheck -Name "system_linq_using_removed" -Pattern '^using\s+System\.Linq\s*;' -Expected 0
+            Add-CountCheck -Name "stringbuilder_usage_preserved" -Pattern '\bnew\s+StringBuilder\s*\(' -Expected 1
+            Add-CountCheck -Name "trim_usage_preserved" -Pattern '\bname\.Trim\s*\(' -Expected 1
+        }
+        "add-member-threshold-v1" {
+            $blockBodyPattern = 'public\s+bool\s+HasLongName\s*\(\s*int\s+threshold\s*\)\s*\{[\s\S]*?return\s+Name\.Length\s*>\s*threshold\s*;[\s\S]*?\}'
+            $expressionBodyPattern = 'public\s+bool\s+HasLongName\s*\(\s*int\s+threshold\s*\)\s*=>\s*Name\.Length\s*>\s*threshold\s*;'
+            $hasExpectedMethod = (
+                [System.Text.RegularExpressions.Regex]::IsMatch($content, $blockBodyPattern, [System.Text.RegularExpressions.RegexOptions]::Singleline) -or
+                [System.Text.RegularExpressions.Regex]::IsMatch($content, $expressionBodyPattern, [System.Text.RegularExpressions.RegexOptions]::Singleline))
+            Add-BooleanCheck -Name "method_added_once" -Actual $hasExpectedMethod -Expected $true
+            Add-CountCheck -Name "name_property_preserved" -Pattern 'public\s+string\s+Name\s*\{\s*get\s*;\s*\}' -Expected 1
+            Add-CountCheck -Name "constructor_preserved" -Pattern 'public\s+Profile\s*\(\s*string\s+name\s*\)' -Expected 1
+            Add-CountCheck -Name "assignment_preserved" -Pattern '\bName\s*=\s*name\s*;' -Expected 1
+        }
+        "replace-member-body-guard-v1" {
+            Add-CountCheck -Name "null_or_whitespace_guard_present" -Pattern 'if\s*\(\s*string\.IsNullOrWhiteSpace\s*\(\s*input\s*\)\s*\)' -Expected 1
+            Add-CountCheck -Name "returns_zero_on_guard" -Pattern 'return\s+0\s*;' -Expected 1
+            Add-CountCheck -Name "trim_length_return_present" -Pattern 'return\s+input\.Trim\s*\(\s*\)\.Length\s*;' -Expected 1
+            Add-CountCheck -Name "forbidden_null_forgiving_removed" -Pattern 'input!\.Length' -Expected 0
+        }
+        "create-file-audit-log-v1" {
+            $targetOriginalPath = Join-Path $RunDirectory "Target.original.cs"
+            $targetUnchanged = $false
+            if (Test-Path $targetOriginalPath -PathType Leaf) {
+                $currentHash = Get-FileSha256 -Path $targetPath
+                $originalHash = Get-FileSha256 -Path $targetOriginalPath
+                $targetUnchanged = (
+                    -not [string]::IsNullOrWhiteSpace($currentHash) -and
+                    -not [string]::IsNullOrWhiteSpace($originalHash) -and
+                    $currentHash -eq $originalHash)
+            }
+            Add-BooleanCheck -Name "target_cs_unchanged" -Actual $targetUnchanged -Expected $true
+
+            $auditPath = Join-Path $RunDirectory "AuditLog.cs"
+            $auditExists = Test-Path $auditPath -PathType Leaf
+            Add-BooleanCheck -Name "auditlog_file_created" -Actual $auditExists -Expected $true
+            if ($auditExists) {
+                $auditContent = Get-Content -Path $auditPath -Raw
+                $classMatch = [System.Text.RegularExpressions.Regex]::IsMatch($auditContent, 'public\s+class\s+AuditLog')
+                $entriesMatch = [System.Text.RegularExpressions.Regex]::IsMatch($auditContent, 'public\s+List\s*<\s*string\s*>\s+Entries\s*\{\s*get\s*;\s*\}\s*=\s*new\s*\(\s*\)\s*;')
+                $addMethodMatch = [System.Text.RegularExpressions.Regex]::IsMatch($auditContent, 'public\s+void\s+Add\s*\(\s*string\s+message\s*\)\s*\{[\s\S]*?Entries\.Add\s*\(\s*message\s*\)\s*;[\s\S]*?\}')
+                Add-BooleanCheck -Name "auditlog_class_present" -Actual $classMatch -Expected $true
+                Add-BooleanCheck -Name "auditlog_entries_property_present" -Actual $entriesMatch -Expected $true
+                Add-BooleanCheck -Name "auditlog_add_method_present" -Actual $addMethodMatch -Expected $true
+            }
+        }
+        default {
+            $checks.Add([ordered]@{ name = "unknown_task_id"; passed = $false; detail = "TaskId=$TaskId" }) | Out-Null
+        }
+    }
 
     $diagnostics = [ordered]@{
         command_ok = $false
@@ -2194,6 +2334,52 @@ function Invoke-RenameConstraintChecks {
         passed = $diagnosticsPassed
         detail = "errors=$($diagnostics.errors); command_ok=$($diagnostics.command_ok); parse_ok=$($diagnostics.parse_ok)"
     })
+
+    if ($TaskId -eq "create-file-audit-log-v1") {
+        $auditPath = Join-Path $RunDirectory "AuditLog.cs"
+        if (Test-Path $auditPath -PathType Leaf) {
+            $auditDiagArgs = @("diag.get_file_diagnostics", "AuditLog.cs")
+            if ($TaskShape -eq "project" -and (Test-Path (Join-Path $RunDirectory "TargetHarness.csproj"))) {
+                $auditDiagArgs += @("--workspace-path", "TargetHarness.csproj", "--require-workspace", "true")
+            }
+
+            $auditDiagOutput = $null
+            $auditDiagExitCode = 1
+            Push-Location $RunDirectory
+            try {
+                $auditDiagOutput = & dotnet $CliDllPath @auditDiagArgs
+                $auditDiagExitCode = $LASTEXITCODE
+            } finally {
+                Pop-Location
+            }
+
+            $auditDiagText = if ($auditDiagOutput -is [System.Array]) {
+                [string]::Join([Environment]::NewLine, $auditDiagOutput)
+            } else {
+                [string]$auditDiagOutput
+            }
+
+            $auditDiagOk = $false
+            $auditDiagErrors = $null
+            if ($auditDiagExitCode -eq 0) {
+                try {
+                    $auditEnvelope = $auditDiagText | ConvertFrom-Json
+                    if ($auditEnvelope.Ok) {
+                        $auditDiagErrors = [int]$auditEnvelope.Data.errors
+                        $auditDiagOk = ([int]$auditDiagErrors -eq 0)
+                    }
+                } catch {
+                    $auditDiagOk = $false
+                }
+            }
+
+            $checks.Add([ordered]@{
+                name = "auditlog_no_diagnostics_errors"
+                passed = $auditDiagOk
+                detail = "errors=$auditDiagErrors; exit_code=$auditDiagExitCode"
+            }) | Out-Null
+        }
+    }
 
     $allChecksPassed = (@($checks | Where-Object { -not [bool]$_.passed }).Count -eq 0)
     return [ordered]@{
@@ -2256,6 +2442,31 @@ function Write-PairedRunSummaryMarkdown {
     )
     if ($guidanceProfiles.Count -gt 0) {
         $lines.Add("- Roslyn guidance profile(s): $([string]::Join(', ', $guidanceProfiles))")
+        $lines.Add("")
+    }
+
+    $taskIds = @(
+        $Runs |
+        ForEach-Object {
+            if ($null -eq $_) {
+                return $null
+            }
+
+            if ($_ -is [System.Collections.IDictionary]) {
+                return $_["task_id"]
+            }
+
+            if ($_.PSObject.Properties.Name -contains "task_id") {
+                return $_.task_id
+            }
+
+            return $null
+        } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+        Sort-Object -Unique
+    )
+    if ($taskIds.Count -gt 0) {
+        $lines.Add("- Task id(s): $([string]::Join(', ', $taskIds))")
         $lines.Add("")
     }
 
@@ -2471,6 +2682,17 @@ function Invoke-AgentRun {
         [Parameter(Mandatory = $true)][string]$IsolationRoot,
         [Parameter(Mandatory = $true)][string]$PromptText,
         [Parameter(Mandatory = $true)][string]$TargetContent,
+        [Parameter(Mandatory = $true)][ValidateSet(
+            "rename-overload-v1",
+            "rename-overload-collision-classes-v1",
+            "rename-overload-collision-nested-v1",
+            "rename-overload-collision-generic-v1",
+            "change-signature-named-args-v1",
+            "update-usings-cleanup-v1",
+            "add-member-threshold-v1",
+            "replace-member-body-guard-v1",
+            "create-file-audit-log-v1"
+        )][string]$TaskId,
         [Parameter(Mandatory = $true)][string]$CliDllPath,
         [Parameter(Mandatory = $false)][string]$McpDllPath = "",
         [Parameter(Mandatory = $false)][bool]$EnableMcp = $false,
@@ -2479,7 +2701,8 @@ function Invoke-AgentRun {
         [Parameter(Mandatory = $false)][bool]$FailOnMissingLspTools = $false,
         [Parameter(Mandatory = $false)][bool]$KeepIsolatedWorkspace = $false,
         [Parameter(Mandatory = $false)][string]$Model = "",
-        [Parameter(Mandatory = $false)][ValidateSet("single-file", "project")][string]$TaskShape = "single-file"
+        [Parameter(Mandatory = $false)][ValidateSet("single-file", "project")][string]$TaskShape = "single-file",
+        [Parameter(Mandatory = $false)][string]$ProgramContent = ""
     )
 
     $runId = "$Agent-$Mode"
@@ -2495,7 +2718,7 @@ function Invoke-AgentRun {
     $transcriptPath = Join-Path $workspaceDirectory "transcript.jsonl"
 
     try {
-        Write-TaskWorkspaceFiles -RunDirectory $workspaceDirectory -TargetContent $TargetContent -TaskShape $TaskShape
+        Write-TaskWorkspaceFiles -RunDirectory $workspaceDirectory -TargetContent $TargetContent -TaskShape $TaskShape -ProgramContent $ProgramContent
         Set-Content -Path $promptPath -Value $PromptText -NoNewline
         Set-Content -Path $transcriptPath -Value "" -NoNewline
 
@@ -2598,7 +2821,7 @@ function Invoke-AgentRun {
         $workspaceContextUsage = Get-RoslynWorkspaceContextUsage -TranscriptPath $transcriptPath
         $tokens = Get-TokenMetrics -Agent $Agent -TranscriptPath $transcriptPath
         $tokenAttribution = Get-TokenAttribution -Agent $Agent -TranscriptPath $transcriptPath
-        $constraintChecks = Invoke-RenameConstraintChecks -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath -TaskShape $TaskShape
+        $constraintChecks = Invoke-TaskConstraintChecks -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath -TaskId $TaskId -TaskShape $TaskShape
         $constraintChecksPath = Join-Path $workspaceDirectory "constraint-checks.json"
         $constraintChecks | ConvertTo-Json -Depth 40 | Set-Content -Path $constraintChecksPath
 
@@ -2648,6 +2871,7 @@ function Invoke-AgentRun {
             mode = $Mode
             roslyn_guidance_profile = $RoslynGuidanceProfile
             task_shape = $TaskShape
+            task_id = $TaskId
             codex_reasoning_effort = $(if ($Agent -eq "codex") { $CodexReasoningEffort } else { "" })
             timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
             exit_code = $exitCode
@@ -2758,7 +2982,40 @@ if ($IncludeMcpTreatment) {
     $mcpDllPath = Publish-RoslynMcpServer -McpProjectPath $mcpProjectPath -BundleDirectory $bundleDirectory -Configuration $CliPublishConfiguration
 }
 
-$targetContent = @"
+function Get-TaskDefinition {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet(
+            "rename-overload-v1",
+            "rename-overload-collision-classes-v1",
+            "rename-overload-collision-nested-v1",
+            "rename-overload-collision-generic-v1",
+            "change-signature-named-args-v1",
+            "update-usings-cleanup-v1",
+            "add-member-threshold-v1",
+            "replace-member-body-guard-v1",
+            "create-file-audit-log-v1"
+        )][string]$TaskId
+    )
+
+    $taskLines = @()
+    $constraintLines = @()
+    $taskScopeInstruction = "Edit Target.cs in this directory."
+    $programContent = ""
+    $targetContent = ""
+
+    switch ($TaskId) {
+        "rename-overload-v1" {
+            $taskLines = @(
+                "Rename method Overloads.Process(int value) to Handle(int value).",
+                "Update only the matching invocation Process(1) to Handle(1)."
+            )
+            $constraintLines = @(
+                "Do NOT change Process(string value).",
+                'Do NOT change Process("x").',
+                'Do NOT change string literal "Process".'
+            )
+            $targetContent = @"
+// Task: rename-overload-v1
 public class Overloads
 {
     public void Process(int value)
@@ -2777,14 +3034,395 @@ public class Overloads
     }
 }
 "@
+        }
+        "rename-overload-collision-classes-v1" {
+            $taskLines = @(
+                "Rename method Overloads.Process(int value) to Handle(int value).",
+                "Update only the matching invocation Process(1) to Handle(1) in Overloads.Execute."
+            )
+            $constraintLines = @(
+                "Do NOT change any Process(...) members or calls inside OtherOverloads.",
+                "Do NOT change Process(string value) in either class.",
+                'Do NOT change Process("x") in either class.',
+                'Do NOT change string literal "Process".'
+            )
+            $targetContent = @"
+// Task: rename-overload-collision-classes-v1
+// Note: multiple Process(int) declarations exist below.
+// Rename only Overloads.Process(int).
+public class Overloads
+{
+    public void Process(int value)
+    {
+    }
+
+    public void Process(string value)
+    {
+    }
+
+    public void Execute()
+    {
+        Process(1);
+        Process("x");
+        System.Console.WriteLine("Process");
+    }
+}
+
+public class OtherOverloads
+{
+    public void Process(int value)
+    {
+    }
+
+    public void Process(string value)
+    {
+    }
+
+    public void Execute()
+    {
+        Process(1);
+        Process("x");
+        System.Console.WriteLine("Process");
+    }
+}
+"@
+        }
+        "rename-overload-collision-nested-v1" {
+            $taskLines = @(
+                "Rename method Overloads.Process(int value) to Handle(int value).",
+                "Update only the matching invocation Process(1) to Handle(1) in Overloads.Execute."
+            )
+            $constraintLines = @(
+                "Do NOT change any Process(...) members or calls inside Overloads.Inner.",
+                "Do NOT change Process(string value) in either type.",
+                'Do NOT change Process("x") invocations.',
+                'Do NOT change string literal "Process".'
+            )
+            $targetContent = @"
+// Task: rename-overload-collision-nested-v1
+// Note: there is an inner type below with its own Process(int).
+// Rename only Overloads.Process(int), not Overloads.Inner.Process(int).
+public class Overloads
+{
+    public void Process(int value)
+    {
+    }
+
+    public void Process(string value)
+    {
+    }
+
+    public void Execute()
+    {
+        Process(1);
+        Process("x");
+        System.Console.WriteLine("Process");
+    }
+
+    public class Inner
+    {
+        public void Process(int value)
+        {
+        }
+
+        public void Process(string value)
+        {
+        }
+
+        public void ExecuteInner()
+        {
+            Process(1);
+            Process("x");
+            System.Console.WriteLine("Process");
+        }
+    }
+}
+"@
+        }
+        "rename-overload-collision-generic-v1" {
+            $taskLines = @(
+                "Rename method Overloads.Process(int value) to Handle(int value).",
+                "Update only the matching invocation Process(1) to Handle(1)."
+            )
+            $constraintLines = @(
+                "Do NOT change Process(string value).",
+                "Do NOT change Process<T>(T value) or its invocation Process<object>(...).",
+                'Do NOT change Process("x").',
+                'Do NOT change string literal "Process".'
+            )
+            $targetContent = @"
+// Task: rename-overload-collision-generic-v1
+// Note: there is also a generic method Process<T>(T value).
+// Rename only Overloads.Process(int).
+public class Overloads
+{
+    public void Process(int value)
+    {
+    }
+
+    public void Process(string value)
+    {
+    }
+
+    public void Process<T>(T value)
+    {
+    }
+
+    public void Execute()
+    {
+        Process(1);
+        Process("x");
+        Process<object>(new object());
+        System.Console.WriteLine("Process");
+    }
+}
+"@
+        }
+        "change-signature-named-args-v1" {
+            $taskLines = @(
+                "Change method signature Combine(int left, int right) to Combine(int primary, int right).",
+                "Update matching named-argument call sites from left: to primary:.",
+                "Keep behavior unchanged."
+            )
+            $constraintLines = @(
+                "Do NOT rename the method itself.",
+                "Do NOT remove the existing positional invocation Combine(3, 4).",
+                "Keep changes minimal."
+            )
+            $targetContent = @"
+// Task: change-signature-named-args-v1
+public class Calculator
+{
+    public int Combine(int left, int right)
+    {
+        return left + right;
+    }
+
+    public int Compute()
+    {
+        return Combine(left: 1, right: 2) + Combine(3, 4);
+    }
+}
+"@
+            $programContent = @"
+public static class Program
+{
+    public static void Main()
+    {
+        var calculator = new Calculator();
+        System.Console.WriteLine(calculator.Compute());
+    }
+}
+"@
+        }
+        "update-usings-cleanup-v1" {
+            $taskLines = @(
+                "Remove only unused using directives in Target.cs.",
+                "Preserve required using directives and existing behavior."
+            )
+            $constraintLines = @(
+                "Do NOT rewrite method bodies beyond what is necessary for using cleanup.",
+                "Do NOT change runtime behavior."
+            )
+            $targetContent = @"
+// Task: update-usings-cleanup-v1
+using System;
+using System.Linq;
+using System.Text;
+
+public class MessageBuilder
+{
+    public string Build(string name)
+    {
+        var builder = new StringBuilder();
+        builder.Append("Hello ");
+        builder.Append(name.Trim());
+        return builder.ToString();
+    }
+
+    public int CountCharacters(string[] values)
+    {
+        return values.Length;
+    }
+}
+"@
+            $programContent = @"
+public static class Program
+{
+    public static void Main()
+    {
+        var builder = new MessageBuilder();
+        System.Console.WriteLine(builder.Build(""Roslyn""));
+        System.Console.WriteLine(builder.CountCharacters(new[] { ""a"", ""b"" }));
+    }
+}
+"@
+        }
+        "add-member-threshold-v1" {
+            $taskLines = @(
+                "Add method Profile.HasLongName(int threshold) that returns Name.Length > threshold."
+            )
+            $constraintLines = @(
+                "Do NOT change constructor semantics.",
+                "Do NOT change Name property semantics."
+            )
+            $targetContent = @"
+// Task: add-member-threshold-v1
+public class Profile
+{
+    public string Name { get; }
+
+    public Profile(string name)
+    {
+        Name = name;
+    }
+}
+"@
+            $programContent = @"
+public static class Program
+{
+    public static void Main()
+    {
+        var profile = new Profile(""Delta"");
+        System.Console.WriteLine(profile.Name);
+    }
+}
+"@
+        }
+        "replace-member-body-guard-v1" {
+            $taskLines = @(
+                "Update only ParseCount body so null/whitespace input returns 0.",
+                "Otherwise return input.Trim().Length."
+            )
+            $constraintLines = @(
+                "Do NOT change method signature."
+            )
+            $targetContent = @"
+// Task: replace-member-body-guard-v1
+public class Parser
+{
+    public int ParseCount(string? input)
+    {
+        return input!.Length;
+    }
+}
+"@
+            $programContent = @"
+public static class Program
+{
+    public static void Main()
+    {
+        var parser = new Parser();
+        System.Console.WriteLine(parser.ParseCount(""value""));
+    }
+}
+"@
+        }
+        "create-file-audit-log-v1" {
+            $taskScopeInstruction = "Create AuditLog.cs in this directory. Do not modify Target.cs."
+            $taskLines = @(
+                "Create new file AuditLog.cs.",
+                "Define public class AuditLog with property: public List<string> Entries { get; } = new();",
+                "Add method: public void Add(string message) that appends to Entries."
+            )
+            $constraintLines = @(
+                "Do NOT modify Target.cs."
+            )
+            $targetContent = @"
+// Task: create-file-audit-log-v1
+public class Worker
+{
+    public string Run(string input)
+    {
+        return input.Trim();
+    }
+}
+"@
+            $programContent = @"
+public static class Program
+{
+    public static void Main()
+    {
+        var worker = new Worker();
+        System.Console.WriteLine(worker.Run("" value ""));
+    }
+}
+"@
+        }
+        default {
+            throw "Unsupported TaskId '$TaskId'."
+        }
+    }
+
+    return [ordered]@{
+        task_id = $TaskId
+        task_lines = $taskLines
+        constraint_lines = $constraintLines
+        task_scope_instruction = $taskScopeInstruction
+        target_content = $targetContent
+        program_content = $programContent
+    }
+}
+
+$taskDefinition = Get-TaskDefinition -TaskId $TaskId
+$targetContent = [string]$taskDefinition.target_content
+$programContent = [string]$taskDefinition.program_content
 
 function Get-CliRoslynGuidanceBlock {
     param(
         [Parameter(Mandatory = $true)][ValidateSet("codex", "claude")][string]$Agent,
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$Profile
     )
 
     switch ($Profile) {
+        "operation-neutral-v1" {
+            $taskHint = switch ($TaskId) {
+                "change-signature-named-args-v1" { "Prefer edit.change_signature (or a single focused edit) for the Combine parameter rename, then one diagnostics check." }
+                "update-usings-cleanup-v1" { "Prefer edit.update_usings on Target.cs, then one diagnostics check." }
+                "add-member-threshold-v1" { "Prefer edit.add_member on Profile, then one diagnostics check." }
+                "replace-member-body-guard-v1" { "Prefer edit.replace_member_body on ParseCount, then one diagnostics check." }
+                "create-file-audit-log-v1" { "Prefer edit.create_file for AuditLog.cs (or one equivalent file create), then check diagnostics for both Target.cs and AuditLog.cs." }
+                default { "Prefer the single best-matching edit.* command for this task, then one diagnostics check." }
+            }
+
+            if ($Agent -eq "codex") {
+                return @"
+Roslyn tooling is available via scripts\roscli.cmd and should be used before manual edits.
+Keep usage operation-neutral and minimal:
+- Do not assume this is a rename task.
+- Skip list-commands unless a command fails.
+- Use describe-command only for the specific command you need.
+- Run commands sequentially.
+$taskHint
+
+Workspace rule:
+- If TargetHarness.csproj exists, append --workspace-path TargetHarness.csproj --require-workspace true to nav/edit/diag calls.
+
+Compact flow:
+1) If targeting is ambiguous, run one focused nav.find_symbol lookup.
+2) Run one edit.* command that best matches the requested operation.
+3) Run exactly one diagnostics check with diag.get_file_diagnostics.
+"@
+            }
+
+            return @"
+Roslyn tooling is available via bash scripts/roscli and should be used before manual edits.
+Keep usage operation-neutral and minimal:
+- Do not assume this is a rename task.
+- Skip list-commands unless a command fails.
+- Use describe-command only for the specific command you need.
+- Run commands sequentially.
+$taskHint
+
+Workspace rule:
+- If TargetHarness.csproj exists, append --workspace-path TargetHarness.csproj --require-workspace true to nav/edit/diag calls.
+
+Compact flow:
+1) If targeting is ambiguous, run one focused nav.find_symbol lookup.
+2) Run one edit.* command that best matches the requested operation.
+3) Run exactly one diagnostics check with diag.get_file_diagnostics.
+"@
+        }
         "standard" {
             if ($Agent -eq "codex") {
                 return @"
@@ -2859,6 +3497,40 @@ Workspace correctness addendum:
 - If TargetHarness.csproj exists, pass --workspace-path TargetHarness.csproj --require-workspace true to *all* nav/edit/diag calls.
 - Hard rule: do not edit Target.cs directly before attempting Roslyn helpers (rename_and_verify or roscli).
 "@)
+        }
+        "brief-first-v3" {
+            return @"
+Roslyn tooling is available and required for this run.
+Goal: minimal tool usage with workspace correctness and fast completion.
+
+Hard rules:
+- Do NOT run list-commands.
+- Do NOT read Target.cs (no Get-Content) unless Roslyn fails.
+- Do NOT run nav.find_symbol unless edit.rename_symbol fails or reports ambiguity.
+
+Run exactly these two commands first (PowerShell):
+1) scripts\roscli.cmd edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) scripts\roscli.cmd diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+If (1) fails or times out:
+- Retry (1) once.
+- If still failing, run exactly one lookup:
+  scripts\roscli.cmd nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+Then rerun (1) and (2) and stop.
+"@
+        }
+        "brief-first-v4" {
+            return @"
+Use Roslyn tooling and keep it tight.
+Run only these commands (PowerShell), then stop:
+1) scripts\roscli.cmd edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) scripts\roscli.cmd diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+If (1) fails: run exactly one lookup, then retry (1) and (2):
+- scripts\roscli.cmd nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+Response must be 2 lines:
+- status: ok/failed
+- roslyn: <ok/attempted> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
         }
         "workspace-locked" {
             $base = Get-CliRoslynGuidanceBlock -Agent $Agent -Profile "surgical"
@@ -2948,6 +3620,201 @@ Guardrail:
 - Do not use `session.open` on non-C# files (.sln/.slnx/.csproj).
 "@
         }
+        "skill-tight-v1" {
+            if ($Agent -eq "codex") {
+                return @"
+Skill: RoslynSkills CLI (tight)
+Goal: finish with minimal Roslyn calls and minimal output.
+Success target: 3 roscli calls total (find -> edit -> diagnostics). Only add retries if a call fails.
+
+Do:
+- Use PowerShell commands (Windows): scripts\roscli.cmd ...
+- Keep outputs brief (`--brief true`, low `--max-results`, low `--max-diagnostics`).
+- Use workspace binding for project-shaped tasks:
+  add --workspace-path TargetHarness.csproj --require-workspace true (to nav/edit/diag).
+- Run tools sequentially.
+
+Don't:
+- Don't run list-commands or describe-command unless a roscli call fails with input/validation errors.
+- Don't read Target.cs unless Roslyn fails (avoid Get-Content/large dumps).
+- Don't run solution snapshots.
+
+Happy path (PowerShell, run exactly these then stop):
+1) Find the declaration coordinates for the correct symbol (pick is_declaration=true and the symbol_display that matches the task, e.g. Overloads.Process(int)):
+   scripts\roscli.cmd nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) Rename using the returned line/column:
+   scripts\roscli.cmd edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+3) Verify diagnostics:
+   scripts\roscli.cmd diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+If (1) returns too many matches or no declaration match:
+- Rerun (1) once with --max-results 200, then proceed.
+If a call fails due to args/schema:
+- Run exactly one contract read, fix args, retry:
+  scripts\roscli.cmd describe-command nav.find_symbol
+  scripts\roscli.cmd describe-command edit.rename_symbol
+
+Final response MUST be exactly 2 lines and nothing else:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+            }
+
+            return @"
+Skill: RoslynSkills CLI (tight)
+Goal: finish with minimal Roslyn calls and minimal output.
+Success target: 3 roscli calls total (find -> edit -> diagnostics). Only add retries if a call fails.
+
+Do:
+- Prefer the Bash tool and invoke the bash wrapper (avoid backslashes): bash scripts/roscli ...
+- Keep outputs brief (brief=true, small max-results/max-diagnostics).
+- Use workspace binding for project-shaped tasks:
+  add --workspace-path TargetHarness.csproj --require-workspace true (to nav/edit/diag).
+- Run tools sequentially.
+
+Don't:
+- Don't run list-commands or describe-command unless a roscli call fails with input/validation errors.
+- Don't read Target.cs unless Roslyn fails (avoid large dumps).
+- Don't run solution snapshots.
+
+Happy path (Bash, run exactly these then stop):
+1) Find the declaration coordinates for the correct symbol (pick is_declaration=true and the symbol_display that matches the task, e.g. Overloads.Process(int)):
+   bash scripts/roscli nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) Rename using the returned line/column:
+   bash scripts/roscli edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+3) Verify diagnostics:
+   bash scripts/roscli diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+If (1) returns too many matches or no declaration match:
+- Rerun (1) once with --max-results 200, then proceed.
+
+Final response MUST be exactly 2 lines and nothing else:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+        }
+        "skill-tight-v2" {
+            if ($Agent -eq "codex") {
+                return @"
+Skill: RoslynSkills CLI (tight v2)
+Goal: finish with minimal Roslyn calls and minimal output.
+Success target: 2 roscli calls total (find -> edit). Only add a diagnostics call if the edit response does not include diagnostics.
+
+Do:
+- Use PowerShell commands (Windows): scripts\roscli.cmd ...
+- Keep outputs brief (`--brief true`, low `--max-results`, low `--max-diagnostics`).
+- Use workspace binding for project-shaped tasks:
+  add --workspace-path TargetHarness.csproj --require-workspace true (to nav/edit/diag).
+- Run tools sequentially.
+
+Don't:
+- Don't run list-commands or describe-command unless a roscli call fails with input/validation errors.
+- Don't read Target.cs unless Roslyn fails (avoid Get-Content/large dumps).
+- Don't run solution snapshots.
+
+Happy path (PowerShell, run exactly these then stop):
+1) Find the declaration coordinates for the correct symbol (pick is_declaration=true and the symbol_display that matches the task, e.g. Overloads.Process(int)):
+   scripts\roscli.cmd nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) Rename using the returned line/column:
+   scripts\roscli.cmd edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+
+If the edit response does not include a diagnostics summary, run exactly one verification call, then stop:
+   scripts\roscli.cmd diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+If (1) returns too many matches or no declaration match:
+- Rerun (1) once with --max-results 200, then proceed.
+
+Final response MUST be exactly 2 lines and nothing else:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+            }
+
+            return @"
+Skill: RoslynSkills CLI (tight v2)
+Goal: finish with minimal Roslyn calls and minimal output.
+Success target: 2 roscli calls total (find -> edit). Only add a diagnostics call if the edit response does not include diagnostics.
+
+Do:
+- Prefer the Bash tool and invoke the bash wrapper (avoid backslashes): bash scripts/roscli ...
+- Keep outputs brief (brief=true, small max-results/max-diagnostics).
+- Use workspace binding for project-shaped tasks:
+  add --workspace-path TargetHarness.csproj --require-workspace true (to nav/edit/diag).
+- Run tools sequentially.
+
+Don't:
+- Don't run list-commands or describe-command unless a roscli call fails with input/validation errors.
+- Don't read Target.cs unless Roslyn fails (avoid large dumps).
+- Don't run solution snapshots.
+
+Happy path (Bash, run exactly these then stop):
+1) Find the declaration coordinates for the correct symbol (pick is_declaration=true and the symbol_display that matches the task, e.g. Overloads.Process(int)):
+   bash scripts/roscli nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) Rename using the returned line/column:
+   bash scripts/roscli edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+
+If the edit response does not include a diagnostics summary, run exactly one verification call, then stop:
+   bash scripts/roscli diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+If (1) returns too many matches or no declaration match:
+- Rerun (1) once with --max-results 200, then proceed.
+
+Final response MUST be exactly 2 lines and nothing else:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+        }
+        "skill-tight-v3" {
+            if ($Agent -eq "codex") {
+                return @"
+CRITICAL (read once):
+- Use roscli only: scripts\roscli.cmd ...
+- Call budget: 2 calls total (find -> rename). Only add 1 extra call if blocked.
+- Validate before edit: rename only the declaration whose symbol_display matches the task target (e.g. Overloads.Process(int)).
+- Do not dump/read Target.cs unless roscli fails.
+- Final response MUST be exactly 2 lines (status + roslyn summary).
+
+Do (PowerShell, sequential):
+1) Find declaration coordinates:
+   scripts\roscli.cmd nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) Rename using returned line/column:
+   scripts\roscli.cmd edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+
+If blocked (pick exactly one):
+- Too many/no matches: rerun step 1 once with --max-results 200.
+- Need diagnostics (rename response lacks diagnostics_after_edit OR reports errors/warnings): run exactly one:
+  scripts\roscli.cmd diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+2-line final output:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+            }
+
+            return @"
+CRITICAL (read once):
+- Use the Bash tool and invoke: bash scripts/roscli ...
+- Call budget: 2 calls total (find -> rename). Only add 1 extra call if blocked.
+- Validate before edit: rename only the declaration whose symbol_display matches the task target (e.g. Overloads.Process(int)).
+- Do not dump/read Target.cs unless roscli fails.
+- Final response MUST be exactly 2 lines (status + roslyn summary).
+
+Do (Bash, sequential):
+1) Find declaration coordinates:
+   bash scripts/roscli nav.find_symbol Target.cs Process --brief true --max-results 50 --workspace-path TargetHarness.csproj --require-workspace true
+2) Rename using returned line/column:
+   bash scripts/roscli edit.rename_symbol Target.cs <line> <column> Handle --apply true --max-diagnostics 50 --workspace-path TargetHarness.csproj --require-workspace true
+
+If blocked (pick exactly one):
+- Too many/no matches: rerun step 1 once with --max-results 200.
+- Need diagnostics (rename response lacks diagnostics_after_edit OR reports errors/warnings): run exactly one:
+  bash scripts/roscli diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+2-line final output:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+        }
         "schema-first" {
             if ($Agent -eq "codex") {
                 return @"
@@ -2998,10 +3865,22 @@ If validation fails, fix payload shape before continuing.
 
 function Get-McpRoslynGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$Profile
     )
 
     switch ($Profile) {
+        "operation-neutral-v1" {
+            return @"
+Roslyn MCP resources are available and should be used in an operation-neutral way.
+Do not assume this is a rename task; select one command that matches the requested operation.
+Minimal flow:
+1) (Optional, only if uncertain) read_mcp_resource server=roslyn uri=roslyn://commands
+2) Run one matching edit command URI for this task (for example edit.change_signature/edit.add_member/edit.replace_member_body/edit.update_usings/edit.create_file).
+3) Run one diagnostics check URI.
+Workspace rule:
+- If TargetHarness.csproj exists, append workspace_path=TargetHarness.csproj&require_workspace=true to nav/edit/diag URIs.
+"@
+        }
         "standard" {
             return @"
 Roslyn MCP resources are available for this run and should be used before manual edits.
@@ -3037,6 +3916,37 @@ Prioritize compact MCP usage:
 Workspace correctness addendum:
 - If TargetHarness.csproj exists, append workspace_path=TargetHarness.csproj&require_workspace=true to nav/edit/diag URIs (including edit.rename_symbol).
 "@)
+        }
+        "brief-first-v3" {
+            return @"
+Roslyn MCP resources are available and required for this run.
+Goal: minimal tool usage with workspace correctness and fast completion.
+
+Hard rules:
+- Do NOT call roslyn://commands or list templates.
+- Do NOT read Target.cs unless Roslyn fails.
+- If a precise line/column is provided, do not run pre-rename nav lookups.
+
+Run exactly these two MCP calls first (workspace-bound):
+1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+
+Only if (1) fails: do one lookup and then retry (1) and (2):
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50&workspace_path=TargetHarness.csproj&require_workspace=true
+"@
+        }
+        "brief-first-v4" {
+            return @"
+Use Roslyn MCP and keep it tight.
+Run only these calls (workspace-bound), then stop:
+1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+If (1) fails: run exactly one lookup, then retry (1) and (2):
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50&workspace_path=TargetHarness.csproj&require_workspace=true
+Response must be 2 lines:
+- status: ok/failed
+- roslyn: <ok/attempted> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
         }
         "workspace-locked" {
             $base = Get-McpRoslynGuidanceBlock -Profile "surgical"
@@ -3087,6 +3997,84 @@ Use this sequence:
 4) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs
 "@
         }
+        "skill-tight-v1" {
+            return @"
+Skill: Roslyn MCP (tight)
+Goal: finish with minimal MCP calls and minimal output.
+Success target: if coordinates are known, 2 MCP calls total (rename then diagnostics). If blocked/ambiguous, allow 1 lookup then retry.
+
+Do:
+- Use workspace binding for project-shaped tasks: append workspace_path=TargetHarness.csproj&require_workspace=true to nav/edit/diag URIs.
+- Keep queries narrow (brief=true, max_results=50, max_diagnostics=50).
+- Run MCP calls sequentially.
+
+Don't:
+- Don't call roslyn://commands or list templates unless a direct command URI fails.
+- Don't read Target.cs unless Roslyn fails.
+
+Happy path (run only these 2 calls then stop):
+1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+
+If (1) fails: run exactly one lookup, then retry (1) and (2):
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50&workspace_path=TargetHarness.csproj&require_workspace=true
+
+Final response must be 2 lines:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+        }
+        "skill-tight-v2" {
+            return @"
+Skill: Roslyn MCP (tight v2)
+Goal: finish with minimal MCP calls and minimal output.
+Success target: 2 MCP calls total (rename then diagnostics). Only add a lookup if rename targeting is ambiguous/blocked.
+
+Do:
+- Use workspace binding for project-shaped tasks: append workspace_path=TargetHarness.csproj&require_workspace=true to nav/edit/diag URIs.
+- Keep queries narrow (brief=true, max_results=50, max_diagnostics=50).
+- Run MCP calls sequentially.
+
+Don't:
+- Don't call roslyn://commands or list templates unless a direct command URI fails.
+- Don't read Target.cs unless Roslyn fails.
+
+Happy path (run only these 2 calls then stop):
+1) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=3&column=17&new_name=Handle&apply=true&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+2) read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+
+If (1) fails: run exactly one lookup, then retry (1) and (2):
+- read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50&workspace_path=TargetHarness.csproj&require_workspace=true
+
+Final response must be 2 lines:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+        }
+        "skill-tight-v3" {
+            return @"
+Skill: Roslyn MCP (tight v3)
+Goal: minimal calls, minimal output.
+
+CRITICAL:
+- Call budget: 2 calls if coordinates are known; 3 calls if lookup required.
+- Validate before edit: rename only the declaration whose symbol_display matches the task target (e.g. Overloads.Process(int)).
+- Use workspace binding for project-shaped tasks: append workspace_path=TargetHarness.csproj&require_workspace=true to URIs.
+
+Default flow (lookup then rename, sequential):
+1) read_mcp_resource server=roslyn uri=roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true&max_results=50&workspace_path=TargetHarness.csproj&require_workspace=true
+2) read_mcp_resource server=roslyn uri=roslyn://command/edit.rename_symbol?file_path=Target.cs&line=<line>&column=<col>&new_name=Handle&apply=true&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+
+If blocked (pick exactly one):
+- Too many/no matches: rerun step 1 once with max_results=200.
+- Need diagnostics (rename response lacks diagnostics_after_edit OR reports errors/warnings): run exactly one:
+  read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&max_diagnostics=50&workspace_path=TargetHarness.csproj&require_workspace=true
+
+Final response must be 2 lines:
+- status: ok/failed
+- roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
+"@
+        }
         "schema-first" {
             return @"
 Roslyn MCP resources are available and should be used contract-first.
@@ -3106,7 +4094,7 @@ If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&re
 
 function Get-ClaudeLspGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "schema-first")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$Profile
     )
 
     switch ($Profile) {
@@ -3140,6 +4128,8 @@ If LSP tools are missing, continue with plain text edits only.
 "@
         }
         "brief-first-v2" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "brief-first-v3" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "brief-first-v4" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
         "workspace-locked" { return (Get-ClaudeLspGuidanceBlock -Profile "standard") }
         "diagnostics-first" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
         "edit-then-verify" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
@@ -3166,6 +4156,10 @@ Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts 
 If LSP tools are missing, continue with plain text edits only.
 "@
         }
+        "skill-tight-v1" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "skill-tight-v2" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "skill-tight-v3" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "operation-neutral-v1" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
         "schema-first" {
             return @"
 Use csharp-lsp tools contract-first:
@@ -3187,16 +4181,23 @@ $taskWorkspaceHint = if ($TaskShape -eq "project") {
     "Workspace note: this is a focused single-file task (`Target.cs`)."
 }
 
+$taskNumberedLines = New-Object System.Collections.Generic.List[string]
+for ($i = 0; $i -lt $taskDefinition.task_lines.Count; $i++) {
+    $taskNumberedLines.Add(("{0}) {1}" -f ($i + 1), $taskDefinition.task_lines[$i])) | Out-Null
+}
+$taskNumberedText = [string]::Join([Environment]::NewLine, $taskNumberedLines)
+
+$constraintBulletLines = @($taskDefinition.constraint_lines | ForEach-Object { "- $_" })
+$constraintsText = [string]::Join([Environment]::NewLine, $constraintBulletLines)
+$taskScopeInstruction = [string]$taskDefinition.task_scope_instruction
+
 $taskPromptCore = @"
-Edit Target.cs in this directory.
+$taskScopeInstruction
 $taskWorkspaceHint
 Task:
-1) Rename method Process(int value) to Handle(int value).
-2) Update only the matching invocation Process(1) to Handle(1).
+${taskNumberedText}
 Constraints:
-- Do NOT change Process(string value).
-- Do NOT change Process("x").
-- Do NOT change string literal "Process".
+${constraintsText}
 "@
 
 $roslynWorkspaceGuardrail = @"
@@ -3215,6 +4216,8 @@ Baseline condition:
 - Do NOT invoke Roslyn helper scripts/commands in this run.
 - Do NOT invoke C# LSP tools/plugins in this run.
 - Use plain editor/text operations only.
+- Avoid recursive workspace exploration (no `Get-ChildItem -Recurse`).
+- Avoid dumping full file contents to the console (no full-file `Get-Content`); if you must inspect, use a bounded read.
 After editing, briefly summarize what changed.
 "@
 
@@ -3269,27 +4272,27 @@ if ($runClaude) {
 }
 
 if (-not $SkipCodex) {
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape))
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -TaskId $TaskId -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape -ProgramContent $programContent))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
-    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape))
+    $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodex -TargetContent $targetContent -TaskId $TaskId -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape -ProgramContent $programContent))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     if ($IncludeMcpTreatment) {
-        $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodexMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape))
+        $runs.Add((Invoke-AgentRun -Agent "codex" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptCodexMcp -TargetContent $targetContent -TaskId $TaskId -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $CodexModel -TaskShape $TaskShape -ProgramContent $programContent))
         Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     }
 }
 
 if ($runClaude) {
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "control" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $controlPrompt -TargetContent $targetContent -TaskId $TaskId -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape -ProgramContent $programContent))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
-    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
+    $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaude -TargetContent $targetContent -TaskId $TaskId -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape -ProgramContent $programContent))
     Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     if ($IncludeMcpTreatment) {
-        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeMcp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
+        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-mcp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeMcp -TargetContent $targetContent -TaskId $TaskId -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $true -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape -ProgramContent $programContent))
         Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     }
     if ($IncludeClaudeLspTreatment) {
-        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-lsp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeLsp -TargetContent $targetContent -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape))
+        $runs.Add((Invoke-AgentRun -Agent "claude" -Mode "treatment-lsp" -BundleDirectory $bundleDirectory -RepoRoot $repoRoot -IsolationRoot $isolationRootDirectory -PromptText $treatmentPromptClaudeLsp -TargetContent $targetContent -TaskId $TaskId -CliDllPath $cliDllPath -McpDllPath $mcpDllPath -EnableMcp $false -FailOnControlContamination $FailOnControlContamination -FailOnLspRoslynContamination $FailOnLspRoslynContamination -FailOnMissingLspTools $FailOnMissingLspTools -KeepIsolatedWorkspace $KeepIsolatedWorkspaces -Model $ClaudeModel -TaskShape $TaskShape -ProgramContent $programContent))
         Assert-HostContextIntegrity -ExpectedWorkingDirectory $homeWorkingDirectory -ExpectedRepoRoot $expectedRepoRoot -ExpectedHead $expectedRepoHead
     }
 }

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+
+export ROSCLI_USE_PUBLISHED=1
+export ROSCLI_CACHE_DIR="${ROSCLI_STABLE_CACHE_DIR:-$repo_root/artifacts/roscli-stable-cache}"
+export ROSCLI_REFRESH_PUBLISHED="${ROSCLI_STABLE_REFRESH:-0}"
+export ROSCLI_STALE_CHECK="${ROSCLI_STABLE_STALE_CHECK:-0}"
+
+"$script_dir/roscli" "$@"

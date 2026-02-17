@@ -16,9 +16,6 @@
     "prompt_tokens":  267052,
     "completion_tokens":  6387,
     "total_tokens":  273439,
-    "tool_calls":  [
-
-                   ],
     "context":  {
                     "task_title":  "Avalonia CornerRadius.TryParse additive API + tests",
                     "repo":  "AvaloniaUI/Avalonia",
@@ -35,5 +32,26 @@
                     "roslyn_guidance_profile":  "brief-first",
                     "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-080511-oss-csharp-pilot\\avalonia-cornerradius-tryparse\\treatment-roslyn-optional\\run-codex-treatment-roslyn-optional-avalonia-cornerradius-tryparse-brief-first-r01",
                     "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-treatment-ro-avalonia-cor-brief-first-r01-9ada0c69"
-                }
+                },
+    "tools_offered":  [
+                          "shell.exec",
+                          "nav.find_symbol",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_file_diagnostics",
+                          "diag.get_workspace_snapshot",
+                          "diag.get_solution_snapshot",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "edit.create_file",
+                          "session.open",
+                          "session.apply_text_edits",
+                          "session.apply_and_commit",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+
+                   ]
 }

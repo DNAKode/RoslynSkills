@@ -1,6 +1,8 @@
 {
     "experiment_id":  "oss-csharp-pilot-v1",
     "description":  "First realistic C# OSS control/treatment A/B pilot for Roslyn augmentation utility.",
+    "primary_control_condition_id":  "control-text-only",
+    "primary_treatment_condition_id":  "treatment-roslyn-required",
     "roslyn_tool_prefixes":  [
                                  "roslyn-agent.",
                                  "nav.",
@@ -21,6 +23,12 @@
                            "name":  "Treatment (Roslyn Optional)",
                            "roslyn_tools_enabled":  true,
                            "notes":  "Roslyn tools are available but optional."
+                       },
+                       {
+                           "id":  "treatment-roslyn-required",
+                           "name":  "Treatment (Roslyn Required)",
+                           "roslyn_tools_enabled":  true,
+                           "notes":  "Roslyn tools are available and must be used at least once; runs fail closed if no successful Roslyn tool call is observed."
                        }
                    ],
     "tasks":  [
@@ -63,6 +71,21 @@
                       "commit":  "be61f5a415965bf81893a05b25e0c4936079f35c",
                       "issue_url":  null,
                       "task_prompt_file":  "prompts/mediatr-behavior-targeting.md",
+                      "setup_commands":  [
+                                             "dotnet restore"
+                                         ],
+                      "acceptance_checks":  [
+                                                "dotnet test --nologo"
+                                            ]
+                  },
+                  {
+                      "id":  "mediatr-openbehavior-nullguard",
+                      "title":  "MediatR OpenBehavior null-guard exception correctness",
+                      "repo":  "jbogard/MediatR",
+                      "repo_url":  "https://github.com/jbogard/MediatR.git",
+                      "commit":  "be61f5a415965bf81893a05b25e0c4936079f35c",
+                      "issue_url":  null,
+                      "task_prompt_file":  "prompts/mediatr-openbehavior-nullguard.md",
                       "setup_commands":  [
                                              "dotnet restore"
                                          ],

@@ -1,0 +1,88 @@
+{
+    "run_id":  "run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-r01",
+    "task_id":  "mediatr-behavior-targeting",
+    "condition_id":  "treatment-roslyn-required",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "gpt-5.3-codex-spark",
+    "model_reasoning_effort":  "low",
+    "succeeded":  false,
+    "setup_passed":  true,
+    "compile_passed":  false,
+    "tests_passed":  false,
+    "exit_code":  0,
+    "timed_out":  false,
+    "duration_seconds":  166.246,
+    "prompt_tokens":  1063134,
+    "completion_tokens":  13783,
+    "total_tokens":  1076917,
+    "roslyn_used":  true,
+    "roslyn_attempted_calls":  3,
+    "roslyn_successful_calls":  2,
+    "roslyn_usage_indicators":  [
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd nav.find_symbol src/MediatR/ServiceRegistrar.cs AddOpenBehavior --brief true --max-results 20 --require-workspace true\"",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd nav.find_symbol src/MediatR/Registration/ServiceRegistrar.cs AddOpenBehavior --brief true --max-results 20 --require-workspace true\"",
+                                    "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"scripts\\\\roscli.cmd diag.get_file_diagnostics src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs --require-workspace true\""
+                                ],
+    "roslyn_workspace_mode_workspace_count":  0,
+    "roslyn_workspace_mode_ad_hoc_count":  0,
+    "roslyn_workspace_mode_last":  null,
+    "cs0518_detected":  false,
+    "validity_gates":  {
+                           "treatment_required":  true,
+                           "missing_required_roslyn_usage":  false,
+                           "missing_required_workspace_mode":  true,
+                           "workspace_health_gate_cs0518":  false,
+                           "failure_reasons":  [
+                                                   "missing_required_workspace_mode"
+                                               ]
+                       },
+    "context":  {
+                    "task_title":  "MediatR pipeline behavior targeting and test update",
+                    "repo":  "jbogard/MediatR",
+                    "repo_url":  "https://github.com/jbogard/MediatR.git",
+                    "commit":  "be61f5a415965bf81893a05b25e0c4936079f35c",
+                    "setup_checks":  [
+                                         "dotnet restore"
+                                     ],
+                    "acceptance_checks":  [
+                                              "dotnet test --nologo"
+                                          ],
+                    "task_prompt_file":  "prompts/mediatr-behavior-targeting.md",
+                    "roslyn_guidance_profile":  "brief-first",
+                    "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-110111-oss-csharp-pilot\\mediatr-behavior-targeting\\treatment-roslyn-required\\run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-r01",
+                    "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-treatment-ro-mediatr-beha-brief-first-r01-e6bc3ada"
+                },
+    "tools_offered":  [
+                          "shell.exec",
+                          "nav.find_symbol",
+                          "ctx.member_source",
+                          "ctx.symbol_envelope",
+                          "diag.get_file_diagnostics",
+                          "diag.get_workspace_snapshot",
+                          "diag.get_solution_snapshot",
+                          "edit.rename_symbol",
+                          "edit.replace_member_body",
+                          "edit.transaction",
+                          "edit.create_file",
+                          "session.open",
+                          "session.apply_text_edits",
+                          "session.apply_and_commit",
+                          "session.commit",
+                          "session.close"
+                      ],
+    "tool_calls":  [
+                       {
+                           "tool_name":  "nav.find_symbol",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "nav.find_symbol",
+                           "ok":  true
+                       },
+                       {
+                           "tool_name":  "diag.get_file_diagnostics",
+                           "ok":  true
+                       }
+                   ]
+}

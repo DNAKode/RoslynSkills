@@ -1,0 +1,60 @@
+{
+    "run_id":  "run-codex-control-text-only-mediatr-behavior-targeting-brief-first-r01",
+    "task_id":  "mediatr-behavior-targeting",
+    "condition_id":  "control-text-only",
+    "replicate":  1,
+    "agent":  "codex-cli",
+    "model":  "gpt-5.3-codex-spark",
+    "model_reasoning_effort":  "low",
+    "succeeded":  true,
+    "setup_passed":  true,
+    "compile_passed":  true,
+    "tests_passed":  true,
+    "exit_code":  0,
+    "timed_out":  false,
+    "duration_seconds":  63.438,
+    "prompt_tokens":  738971,
+    "completion_tokens":  15906,
+    "total_tokens":  754877,
+    "roslyn_used":  false,
+    "roslyn_attempted_calls":  0,
+    "roslyn_successful_calls":  0,
+    "roslyn_usage_indicators":  [
+
+                                ],
+    "roslyn_workspace_mode_workspace_count":  0,
+    "roslyn_workspace_mode_ad_hoc_count":  0,
+    "roslyn_workspace_mode_last":  null,
+    "cs0518_detected":  false,
+    "validity_gates":  {
+                           "treatment_required":  false,
+                           "missing_required_roslyn_usage":  false,
+                           "missing_required_workspace_mode":  false,
+                           "workspace_health_gate_cs0518":  false,
+                           "failure_reasons":  [
+
+                                               ]
+                       },
+    "context":  {
+                    "task_title":  "MediatR pipeline behavior targeting and test update",
+                    "repo":  "jbogard/MediatR",
+                    "repo_url":  "https://github.com/jbogard/MediatR.git",
+                    "commit":  "be61f5a415965bf81893a05b25e0c4936079f35c",
+                    "setup_checks":  [
+                                         "dotnet restore"
+                                     ],
+                    "acceptance_checks":  [
+                                              "dotnet test --nologo"
+                                          ],
+                    "task_prompt_file":  "prompts/mediatr-behavior-targeting.md",
+                    "roslyn_guidance_profile":  "brief-first",
+                    "run_directory":  "C:\\Work\\RoslynSkills\\artifacts\\real-agent-runs\\20260213-104831-oss-csharp-pilot\\mediatr-behavior-targeting\\control-text-only\\run-codex-control-text-only-mediatr-behavior-targeting-brief-first-r01",
+                    "workspace_directory":  "C:\\Work\\RoslynSkills\\_tmp\\oss-csharp-pilot\\workspaces\\oss-control-text-mediatr-beha-brief-first-r01-fb828704"
+                },
+    "tools_offered":  [
+                          "shell.exec"
+                      ],
+    "tool_calls":  [
+
+                   ]
+}

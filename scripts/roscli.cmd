@@ -24,7 +24,8 @@ if /I "%USE_PUBLISHED%"=="on" goto :use_published
 goto :use_dotnet_run
 
 :use_published
-set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
+set "CACHE_DIR=%ROSCLI_CACHE_DIR%"
+if "%CACHE_DIR%"=="" set "CACHE_DIR=%REPO_ROOT%\artifacts\roscli-cache"
 set "CLI_DLL=%CACHE_DIR%\%CLI_DLL_NAME%"
 set "CACHE_STAMP=%CACHE_DIR%\publish.stamp"
 set "CACHE_CHECK_MARKER=%CACHE_DIR%\stalecheck.stamp"

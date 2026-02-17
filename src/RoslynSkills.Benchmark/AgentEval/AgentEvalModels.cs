@@ -8,7 +8,9 @@ public sealed record AgentEvalManifest(
     [property: JsonPropertyName("roslyn_tool_prefixes")] IReadOnlyList<string> RoslynToolPrefixes,
     [property: JsonPropertyName("conditions")] IReadOnlyList<AgentEvalCondition> Conditions,
     [property: JsonPropertyName("tasks")] IReadOnlyList<AgentEvalTask> Tasks,
-    [property: JsonPropertyName("runs_per_cell")] int RunsPerCell = 1);
+    [property: JsonPropertyName("runs_per_cell")] int RunsPerCell = 1,
+    [property: JsonPropertyName("primary_control_condition_id")] string? PrimaryControlConditionId = null,
+    [property: JsonPropertyName("primary_treatment_condition_id")] string? PrimaryTreatmentConditionId = null);
 
 public sealed record AgentEvalCondition(
     [property: JsonPropertyName("id")] string Id,

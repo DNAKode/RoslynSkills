@@ -63,7 +63,7 @@ Observed benefit:
 
 Relevance for RoslynSkills:
 
-- continue keeping `skills/roslynskills-research/SKILL.md` focused on practical first steps.
+- continue keeping `skills/roslynskills-research/SKILL.md` focused on practical first steps, and use `skills/roslynskills-tight/SKILL.md` as the low-churn default for agents that over-explore.
 - consider adding an explicit `roscli llmstxt`/reference command for deep, machine-friendly command docs beyond `describe-command`.
 
 ### 4) Skill marketplace packaging
@@ -137,3 +137,45 @@ This aligns with community feedback in the referenced thread: package/assembly a
   - and in conjunction with RoslynSkills.
 - Scope these comparisons to tasks where package/API intelligence is actually decision-relevant (for example version migration and external API usage), not only local symbol edits.
 - Keep condition isolation strict to avoid mixed-tool contamination in control lanes.
+
+## Gemini CLI extension compatibility (initial lane)
+
+Reference:
+
+- `https://developers.googleblog.com/making-gemini-cli-extensions-easier-to-use/`
+
+Status now:
+
+- Added benchmark preflight probe for `gemini` with Windows shim fallbacks (`gemini.cmd`, `gemini.exe`).
+- Added regression coverage in `tests/RoslynSkills.Benchmark.Tests/AgentEvalPreflightCheckerTests.cs`.
+
+Guide-aligned implementation checklist for RoslynSkills:
+
+1. Keep extension/tool entrypoints obvious:
+   - one canonical startup flow near top of docs (`list-commands -> quickstart -> describe-command`).
+2. Minimize "flag overload":
+   - default to shorthand commands with sensible defaults; reserve full JSON payload mode for complex operations.
+3. Minimize context overhead:
+   - use `--brief true` guidance first, then escalate detail on demand.
+4. Publish concrete examples:
+   - include copy-paste examples for common operations and shell-safe syntax.
+5. Fail closed for semantic correctness:
+   - prefer workspace-bound invocations with `--require-workspace true` for project code.
+
+Planned next step for Gemini:
+
+- Add a dedicated Gemini lane in paired harness (control/treatment) once transcript parsing and auth-isolation details are validated for reliable metrics capture.
+
+## OpenCode follow-up note
+
+Future research item:
+
+- Primary references:
+  - `https://opencode.ai/docs/cli/`
+  - `https://github.com/sst/opencode`
+
+- Investigate OpenCode integration and measure parity against Codex/Claude/Gemini lanes for:
+  - tool discovery friction,
+  - MCP/CLI invocation reliability,
+  - transcript telemetry extractability,
+  - token/latency overhead under identical Roslyn task prompts.
