@@ -90,7 +90,7 @@ public sealed class ToolThinkingSplitScriptTests
 
             ProcessStartInfo psi = new()
             {
-                FileName = "powershell",
+                FileName = ResolvePowerShellExecutable(),
                 Arguments = $"-NoLogo -NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -ControlTranscript \"{controlTranscript}\" -TreatmentTranscript \"{treatmentTranscript}\" -OutputJson \"{outputJson}\" -OutputMarkdown \"{outputMarkdown}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true
@@ -146,5 +146,50 @@ public sealed class ToolThinkingSplitScriptTests
         }
 
         throw new InvalidOperationException("Could not locate repository root from test execution directory.");
+    }
+
+    private static string ResolvePowerShellExecutable()
+    {
+        if (IsCommandAvailable("pwsh"))
+        {
+            return "pwsh";
+        }
+
+        if (OperatingSystem.IsWindows() && IsCommandAvailable("powershell"))
+        {
+            return "powershell";
+        }
+
+        return OperatingSystem.IsWindows() ? "powershell" : "pwsh";
+    }
+
+    private static bool IsCommandAvailable(string command)
+    {
+        string locator = OperatingSystem.IsWindows() ? "where" : "which";
+        ProcessStartInfo psi = new()
+        {
+            FileName = locator,
+            Arguments = command,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        try
+        {
+            using Process? process = Process.Start(psi);
+            if (process is null)
+            {
+                return false;
+            }
+
+            process.WaitForExit();
+            return process.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
