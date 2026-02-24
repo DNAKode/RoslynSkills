@@ -21,6 +21,7 @@ public sealed class CliApplicationTests
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
         Assert.Contains("nav.find_symbol", output);
+        Assert.Contains("nav.find_symbol_batch", output);
         Assert.Contains("nav.find_references", output);
         Assert.Contains("nav.find_invocations", output);
         Assert.Contains("nav.call_hierarchy", output);
@@ -411,6 +412,176 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_FindSymbol_AcceptsDeclarationAndSnippetOptions()
+    {
+        string filePath = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Worker
+                {
+                    public Worker Next => new Worker();
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "nav.find_symbol",
+                    filePath,
+                    "Worker",
+                    "--declarations-only", "true",
+                    "--first-declaration", "true",
+                    "--snippet-single-line", "true",
+                    "--max-snippet-chars", "40",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"nav.find_symbol\"", output);
+            Assert.Contains("\"declarations_only\": true", output);
+            Assert.Contains("\"first_declaration\": true", output);
+            Assert.Contains("\"snippet_single_line\": true", output);
+            Assert.Contains("\"max_snippet_chars\": 40", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_FindSymbolBatch_AcceptsQueriesFileShorthand()
+    {
+        string filePath = Path.GetTempFileName();
+        string queriesPath = Path.Combine(Path.GetTempPath(), $"roslynskills-queries-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Worker
+                {
+                    public Worker Next => new Worker();
+                }
+                """);
+
+            await File.WriteAllTextAsync(
+                queriesPath,
+                $$"""
+                [
+                  { "file_path": "{{filePath.Replace("\\", "\\\\")}}", "symbol_name": "Worker", "label": "decl" },
+                  { "file_path": "{{filePath.Replace("\\", "\\\\")}}", "symbol_name": "Next" }
+                ]
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "nav.find_symbol_batch",
+                    "--queries", $"@{queriesPath}",
+                    "--brief", "true",
+                    "--first-declaration", "true",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"nav.find_symbol_batch\"", output);
+            Assert.Contains("\"total_executed\": 2", output);
+            Assert.Contains("\"succeeded\": 2", output);
+            Assert.Contains("\"label\": \"decl\"", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+            File.Delete(queriesPath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_QueryBatch_AcceptsQueriesFileShorthand()
+    {
+        string filePath = Path.GetTempFileName();
+        string queriesPath = Path.Combine(Path.GetTempPath(), $"roslynskills-batch-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Worker
+                {
+                    public Worker Next => new Worker();
+                }
+                """);
+
+            await File.WriteAllTextAsync(
+                queriesPath,
+                $$"""
+                [
+                  {
+                    "command_id": "ctx.search_text",
+                    "input": {
+                      "patterns": [ "Worker" ],
+                      "mode": "literal",
+                      "file_path": "{{filePath.Replace("\\", "\\\\")}}"
+                    }
+                  },
+                  {
+                    "command_id": "nav.find_symbol",
+                    "input": {
+                      "file_path": "{{filePath.Replace("\\", "\\\\")}}",
+                      "symbol_name": "Next",
+                      "brief": true
+                    }
+                  }
+                ]
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "query.batch",
+                    $"@{queriesPath}",
+                    "--continue-on-error", "true",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"query.batch\"", output);
+            Assert.Contains("\"total_executed\": 2", output);
+            Assert.Contains("\"succeeded\": 2", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+            File.Delete(queriesPath);
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_FindInvocations_AcceptsPositionalShorthand()
     {
         string filePath = Path.GetTempFileName();
@@ -727,7 +898,29 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("\"workspace_path\"", output);
         Assert.Contains("\"require_workspace\"", output);
+        Assert.Contains("\"declarations_only\"", output);
+        Assert.Contains("\"first_declaration\"", output);
         Assert.Contains("workspace_context.mode", output);
+    }
+
+    [Fact]
+    public async Task DescribeCommand_FindSymbolBatch_IncludesQueriesHints()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "nav.find_symbol_batch" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"queries\"", output);
+        Assert.Contains("\"continue_on_error\"", output);
+        Assert.Contains("--queries @file.json", output);
     }
 
     [Fact]
@@ -791,6 +984,49 @@ public sealed class CliApplicationTests
         Assert.Contains("src/MyProject/Program.cs", output);
     }
 
+
+    [Fact]
+    public async Task Llmstxt_Default_ReturnsStableBootstrapGuide()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "llmstxt" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("# roscli llmstxt", output);
+        Assert.Contains("catalog mode: `stable-only`", output);
+        Assert.Contains("## Fast Start (Low Round-Trips)", output);
+        Assert.Contains("`nav.find_symbol`", output);
+        Assert.Contains("`session.open` supports only `.cs/.csx` files.", output);
+        Assert.DoesNotContain("`ctx.call_chain_slice`", output);
+    }
+
+    [Fact]
+    public async Task Llmstxt_Full_IncludesAdvancedCatalog()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "llmstxt", "--full" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("catalog mode: `all`", output);
+        Assert.Contains("`ctx.call_chain_slice`", output);
+        Assert.Contains("| traits:", output);
+    }
     [Fact]
     public async Task Help_IncludesQuickstartCommand()
     {
@@ -808,6 +1044,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("version", output);
         Assert.Contains("quickstart", output);
+        Assert.Contains("llmstxt", output);
         Assert.Contains("pit-of-success", output);
     }
 
@@ -869,6 +1106,7 @@ public sealed class CliApplicationTests
         Assert.Equal(1, exitCode);
         Assert.Contains("unknown_verb", output);
         Assert.Contains("quickstart", output);
+        Assert.Contains("llmstxt", output);
     }
 
     [Fact]
@@ -1219,5 +1457,4 @@ public sealed class CliApplicationTests
         }
     }
 }
-
 

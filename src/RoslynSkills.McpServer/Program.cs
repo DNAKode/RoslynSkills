@@ -647,10 +647,46 @@ internal static class Program
             properties["symbol_name"] = StringProperty("Symbol name to search for.");
             properties["brief"] = BoolProperty("Return compact result payload.");
             properties["max_results"] = IntProperty("Maximum matches to return.", 1);
+            properties["declarations_only"] = BoolProperty("When true, return only declaration matches.");
+            properties["first_declaration"] = BoolProperty("When true, return first declaration match (or first match when no declaration exists).");
+            properties["snippet_single_line"] = BoolProperty("Render context snippets as a single line with separators.");
+            properties["max_snippet_chars"] = IntProperty("Maximum snippet character count (0 means no limit).", 0);
             properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("symbol_name");
+            return;
+        }
+
+        if (string.Equals(commandId, "nav.find_symbol_batch", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["queries"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["description"] = "Array of symbol queries. Each item requires file_path and symbol_name; optional label is allowed.",
+                ["items"] = new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb)."),
+                        ["symbol_name"] = StringProperty("Symbol name to search for."),
+                        ["label"] = StringProperty("Optional caller-defined label for result correlation."),
+                    },
+                    ["required"] = new JsonArray { "file_path", "symbol_name" },
+                },
+            };
+            properties["continue_on_error"] = BoolProperty("Continue remaining queries after an error.");
+            properties["brief"] = BoolProperty("Default brief mode applied to all queries unless overridden.");
+            properties["max_results"] = IntProperty("Default max results applied to all queries unless overridden.", 1);
+            properties["context_lines"] = IntProperty("Default context lines applied to all queries unless overridden.", 0);
+            properties["declarations_only"] = BoolProperty("Default declaration-only behavior for queries.");
+            properties["first_declaration"] = BoolProperty("Default first-declaration behavior for queries.");
+            properties["snippet_single_line"] = BoolProperty("Default snippet single-line rendering for queries.");
+            properties["max_snippet_chars"] = IntProperty("Default max snippet chars for queries (0 means no limit).", 0);
+            properties["workspace_path"] = StringProperty("Default workspace path used to force workspace context.");
+            properties["require_workspace"] = BoolProperty("Default fail-closed workspace policy for queries.");
+            required.Add("queries");
             return;
         }
 
@@ -1055,6 +1091,7 @@ internal static class Program
             ["invocationExamples"] = new JsonArray
             {
                 "roslyn://command/nav.find_symbol?file_path=Target.cs&symbol_name=Process&brief=true",
+                "roslyn://command/nav.find_symbol_batch?input_json=%7B%22queries%22%3A%5B%7B%22file_path%22%3A%22Target.cs%22%2C%22symbol_name%22%3A%22Process%22%7D%5D%2C%22first_declaration%22%3Atrue%7D",
                 "roslyn://command/ctx.search_text?pattern=RemoteUserAction&roots=src&mode=literal&max_results=100",
                 "roslyn://command/ctx.file_outline?file_path=Target.vb&include_members=true&max_members=80",
                 "roslyn://command/ctx.member_source?file_path=Target.vb&line=22&column=17&mode=body&brief=true",

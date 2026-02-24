@@ -338,6 +338,57 @@ public sealed class BreadthCommandTests
     }
 
     [Fact]
+    public async Task FindSymbolBatchCommand_ExecutesWorklistWithSharedDefaults()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Worker
+            {
+                public Worker Next => new Worker();
+            }
+            """);
+
+        try
+        {
+            FindSymbolBatchCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                continue_on_error = true,
+                brief = true,
+                first_declaration = true,
+                queries = new object[]
+                {
+                    new
+                    {
+                        file_path = filePath,
+                        symbol_name = "Worker",
+                        label = "worker-query",
+                    },
+                    new
+                    {
+                        file_path = filePath,
+                        symbol_name = "Next",
+                    },
+                },
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_executed\":2", json);
+            Assert.Contains("\"succeeded\":2", json);
+            Assert.Contains("\"label\":\"worker-query\"", json);
+            Assert.Contains("\"symbol_name\":\"Worker\"", json);
+            Assert.Contains("\"symbol_name\":\"Next\"", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task CallHierarchyCommand_ReturnsIncomingAndOutgoingEdgesAcrossWorkspace()
     {
         string root = Path.Combine(Path.GetTempPath(), $"roslynskills-call-hierarchy-{Guid.NewGuid():N}");

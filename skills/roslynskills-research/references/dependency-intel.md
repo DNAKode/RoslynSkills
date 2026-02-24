@@ -12,3 +12,7 @@ Selection hints:
 - in-repo symbol targeting / edits / diagnostics: `roscli`
 - dependency-driven local changes: use both (inspect first, edit second)
 
+Positioning reminder:
+
+- Treat dotnet tools as complementary helpers.
+- Do not frame roscli as a replacement for external package intelligence tooling.

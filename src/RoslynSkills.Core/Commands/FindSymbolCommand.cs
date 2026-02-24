@@ -25,6 +25,10 @@ public sealed class FindSymbolCommand : IAgentCommand
         InputParsing.TryGetRequiredString(input, "symbol_name", errors, out _);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+        InputParsing.ValidateOptionalBool(input, "declarations_only", errors);
+        InputParsing.ValidateOptionalBool(input, "first_declaration", errors);
+        InputParsing.ValidateOptionalBool(input, "snippet_single_line", errors);
+        InputParsing.ValidateOptionalInt(input, "max_snippet_chars", errors, minValue: 0, maxValue: 8000);
 
         if (!File.Exists(filePath))
         {
@@ -59,6 +63,10 @@ public sealed class FindSymbolCommand : IAgentCommand
         bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+        bool declarationsOnly = InputParsing.GetOptionalBool(input, "declarations_only", defaultValue: false);
+        bool firstDeclaration = InputParsing.GetOptionalBool(input, "first_declaration", defaultValue: false);
+        bool snippetSingleLine = InputParsing.GetOptionalBool(input, "snippet_single_line", defaultValue: false);
+        int maxSnippetChars = InputParsing.GetOptionalInt(input, "max_snippet_chars", defaultValue: 0, minValue: 0, maxValue: 8000);
         int contextLines = InputParsing.GetOptionalInt(
             input,
             "context_lines",
@@ -90,15 +98,19 @@ public sealed class FindSymbolCommand : IAgentCommand
         IEnumerable<SyntaxToken> matches = analysis.Root
             .DescendantTokens(descendIntoTrivia: false)
             .Where(t => CommandLanguageServices.IsIdentifierToken(t, analysis.Language) &&
-                        string.Equals(t.ValueText, symbolName, StringComparison.Ordinal))
-            .Take(maxResults);
+                        string.Equals(t.ValueText, symbolName, StringComparison.Ordinal));
 
-        List<SymbolMatch> resultMatches = new();
-        foreach (SyntaxToken match in matches)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            resultMatches.Add(CreateMatch(match, analysis.SourceText, contextLines, analysis.SemanticModel, cancellationToken));
-        }
+        List<SymbolMatch> resultMatches = ResolveMatches(
+            matches,
+            analysis.SourceText,
+            contextLines,
+            analysis.SemanticModel,
+            maxResults,
+            declarationsOnly,
+            firstDeclaration,
+            snippetSingleLine,
+            maxSnippetChars,
+            cancellationToken);
 
         object matchesPayload = brief
             ? resultMatches.Select(m => new
@@ -124,6 +136,10 @@ public sealed class FindSymbolCommand : IAgentCommand
                 max_results = maxResults,
                 context_lines = contextLines,
                 brief,
+                declarations_only = declarationsOnly,
+                first_declaration = firstDeclaration,
+                snippet_single_line = snippetSingleLine,
+                max_snippet_chars = maxSnippetChars,
                 semantic_enrichment = true,
                 require_workspace = requireWorkspace,
                 workspace_context = BuildWorkspaceContextPayload(analysis.WorkspaceContext),
@@ -135,10 +151,83 @@ public sealed class FindSymbolCommand : IAgentCommand
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 
+    private static List<SymbolMatch> ResolveMatches(
+        IEnumerable<SyntaxToken> matches,
+        SourceText sourceText,
+        int contextLines,
+        SemanticModel semanticModel,
+        int maxResults,
+        bool declarationsOnly,
+        bool firstDeclaration,
+        bool snippetSingleLine,
+        int maxSnippetChars,
+        CancellationToken cancellationToken)
+    {
+        if (firstDeclaration)
+        {
+            SymbolMatch? firstAny = null;
+            SymbolMatch? firstDecl = null;
+            foreach (SyntaxToken match in matches)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                SymbolMatch current = CreateMatch(
+                    match,
+                    sourceText,
+                    contextLines,
+                    snippetSingleLine,
+                    maxSnippetChars,
+                    semanticModel,
+                    cancellationToken);
+                firstAny ??= current;
+                if (current.is_declaration)
+                {
+                    firstDecl = current;
+                    break;
+                }
+            }
+
+            if (declarationsOnly)
+            {
+                return firstDecl is null ? new List<SymbolMatch>() : new List<SymbolMatch> { firstDecl };
+            }
+
+            SymbolMatch? selected = firstDecl ?? firstAny;
+            return selected is null ? new List<SymbolMatch>() : new List<SymbolMatch> { selected };
+        }
+
+        List<SymbolMatch> filtered = new();
+        foreach (SyntaxToken match in matches)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SymbolMatch current = CreateMatch(
+                match,
+                sourceText,
+                contextLines,
+                snippetSingleLine,
+                maxSnippetChars,
+                semanticModel,
+                cancellationToken);
+            if (declarationsOnly && !current.is_declaration)
+            {
+                continue;
+            }
+
+            filtered.Add(current);
+            if (filtered.Count >= maxResults)
+            {
+                break;
+            }
+        }
+
+        return filtered;
+    }
+
     private static SymbolMatch CreateMatch(
         SyntaxToken token,
         SourceText sourceText,
         int contextLines,
+        bool snippetSingleLine,
+        int maxSnippetChars,
         SemanticModel semanticModel,
         CancellationToken cancellationToken)
     {
@@ -155,7 +244,7 @@ public sealed class FindSymbolCommand : IAgentCommand
 
         int startLine = Math.Max(line - contextLines, 1);
         int endLine = Math.Min(line + contextLines, sourceText.Lines.Count);
-        string snippet = BuildSnippet(sourceText, startLine, endLine);
+        string snippet = BuildSnippet(sourceText, startLine, endLine, snippetSingleLine, maxSnippetChars);
         SymbolSemanticInfo semantic = CreateSemanticInfo(symbol);
 
         return new SymbolMatch(
@@ -172,7 +261,7 @@ public sealed class FindSymbolCommand : IAgentCommand
             semantic: semantic);
     }
 
-    private static string BuildSnippet(SourceText sourceText, int startLine, int endLine)
+    private static string BuildSnippet(SourceText sourceText, int startLine, int endLine, bool singleLine, int maxSnippetChars)
     {
         List<string> lines = new();
         for (int line = startLine; line <= endLine; line++)
@@ -181,7 +270,21 @@ public sealed class FindSymbolCommand : IAgentCommand
             lines.Add($"{line,4}: {lineText}");
         }
 
-        return string.Join(Environment.NewLine, lines);
+        string snippet = singleLine
+            ? string.Join(" | ", lines)
+            : string.Join(Environment.NewLine, lines);
+        if (maxSnippetChars > 0 && snippet.Length > maxSnippetChars)
+        {
+            if (maxSnippetChars <= 3)
+            {
+                return snippet[..maxSnippetChars];
+            }
+
+            int safeLength = maxSnippetChars - 3;
+            return snippet[..safeLength] + "...";
+        }
+
+        return snippet;
     }
 
     private static SymbolSemanticInfo CreateSemanticInfo(ISymbol? symbol)

@@ -2,6 +2,7 @@ using RoslynSkills.Contracts;
 using RoslynSkills.Core;
 using System.Reflection;
 using System.Globalization;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 
@@ -44,13 +45,13 @@ public sealed class CliApplication
 
         string verb = args[0];
         string[] remainder = args.Skip(1).ToArray();
-
         return verb switch
         {
             "version" => await HandleVersionAsync(stdout).ConfigureAwait(false),
             "list-commands" => await HandleListCommandsAsync(remainder, stdout).ConfigureAwait(false),
             "describe-command" => await HandleDescribeCommandAsync(remainder, stdout).ConfigureAwait(false),
             "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
+            "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
             "validate-input" => await HandleValidateInputAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
@@ -319,6 +320,27 @@ Workflow:
         return 0;
     }
 
+    private async Task<int> HandleLlmstxtAsync(string[] args, TextWriter stdout)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await stdout.WriteLineAsync("Usage: roscli llmstxt [--full]").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Emit one-shot markdown bootstrap guidance for coding agents.").ConfigureAwait(false);
+            return 0;
+        }
+
+        bool full = HasOption(args, "--full");
+        string guide = BuildLlmstxt(full);
+        await stdout.WriteAsync(guide).ConfigureAwait(false);
+
+        if (!guide.EndsWith('\n'))
+        {
+            await stdout.WriteLineAsync().ConfigureAwait(false);
+        }
+
+        return 0;
+    }
+
     private async Task<int> HandleValidateInputAsync(
         string[] args,
         TextWriter stdout,
@@ -456,7 +478,7 @@ Workflow:
         await WriteEnvelopeAsync(stdout, ErrorEnvelope(
             commandId: "cli",
             code: "unknown_verb",
-            message: $"Unknown command '{verb}'. Use '--help', 'quickstart', or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
+            message: $"Unknown command '{verb}'. Use '--help', 'llmstxt', 'quickstart', or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
         await stderr.WriteLineAsync($"Unknown command '{verb}'.").ConfigureAwait(false);
         return 1;
     }
@@ -760,6 +782,15 @@ Workflow:
                 input["symbol_name"] = positionalArgs[1];
                 break;
 
+            case "nav.find_symbol_batch":
+                if (!TryResolveQueriesArgument(commandId, positionalArgs, options, out object? symbolBatchQueries, out error))
+                {
+                    return false;
+                }
+
+                input["queries"] = symbolBatchQueries;
+                break;
+
             case "nav.find_invocations":
                 if (positionalArgs.Length != 3 ||
                     string.IsNullOrWhiteSpace(positionalArgs[0]) ||
@@ -954,6 +985,15 @@ Workflow:
                 }
                 break;
 
+            case "query.batch":
+                if (!TryResolveQueriesArgument(commandId, positionalArgs, options, out object? queryBatchQueries, out error))
+                {
+                    return false;
+                }
+
+                input["queries"] = queryBatchQueries;
+                break;
+
             case "edit.rename_symbol":
                 if (positionalArgs.Length != 4 ||
                     string.IsNullOrWhiteSpace(positionalArgs[0]) ||
@@ -1075,6 +1115,7 @@ Workflow:
             "diag.get_workspace_snapshot" => true,
             "repair.propose_from_diagnostics" => true,
             "nav.find_symbol" => true,
+            "nav.find_symbol_batch" => true,
             "nav.find_invocations" => true,
             "nav.call_hierarchy" => true,
             "nav.call_path" => true,
@@ -1086,6 +1127,7 @@ Workflow:
             "analyze.override_coverage" => true,
             "analyze.async_risk_scan" => true,
             "ctx.search_text" => true,
+            "query.batch" => true,
             "edit.rename_symbol" => true,
             "edit.create_file" => true,
             "session.open" => true,
@@ -1194,6 +1236,11 @@ Workflow:
         if (value.Length == 0)
         {
             return string.Empty;
+        }
+
+        if (value.StartsWith("{", StringComparison.Ordinal) || value.StartsWith("[", StringComparison.Ordinal))
+        {
+            return value;
         }
 
         string[] parts = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -1369,6 +1416,152 @@ Workflow:
 
         values = Array.Empty<string>();
         return false;
+    }
+
+    private static bool TryResolveQueriesArgument(
+        string commandId,
+        string[] positionalArgs,
+        Dictionary<string, object?> options,
+        out object? queriesValue,
+        out CommandEnvelope? error)
+    {
+        queriesValue = null;
+        error = null;
+
+        if (positionalArgs.Length > 1)
+        {
+            error = ErrorEnvelope(
+                commandId: "cli",
+                code: "invalid_args",
+                message: BuildUsageMessage(commandId, $"{commandId} [queries-json-or-file] [--queries @file.json] [--option value ...]"));
+            return false;
+        }
+
+        if (positionalArgs.Length == 1 && options.ContainsKey("queries"))
+        {
+            error = ErrorEnvelope(
+                commandId: "cli",
+                code: "invalid_args",
+                message: "Provide either positional queries payload/file or --queries, not both.");
+            return false;
+        }
+
+        object? rawQueries = null;
+        if (options.TryGetValue("queries", out object? optionsQueries))
+        {
+            rawQueries = optionsQueries;
+            options.Remove("queries");
+        }
+        else if (positionalArgs.Length == 1)
+        {
+            rawQueries = positionalArgs[0];
+        }
+
+        if (rawQueries is null)
+        {
+            error = ErrorEnvelope(
+                commandId: "cli",
+                code: "invalid_args",
+                message: BuildUsageMessage(commandId, $"{commandId} [queries-json-or-file] [--queries @file.json] [--option value ...]"));
+            return false;
+        }
+
+        if (!TryParseQueriesPayload(rawQueries, out queriesValue, out string payloadError))
+        {
+            error = ErrorEnvelope(
+                commandId: "cli",
+                code: "invalid_args",
+                message: payloadError);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseQueriesPayload(object rawQueries, out object queriesValue, out string error)
+    {
+        error = string.Empty;
+        queriesValue = Array.Empty<object>();
+
+        if (!TryNormalizeQueriesPayload(rawQueries, out string payloadText, out error))
+        {
+            return false;
+        }
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(payloadText);
+            JsonElement root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                queriesValue = JsonSerializer.Deserialize<object>(root.GetRawText()) ?? Array.Empty<object>();
+                return true;
+            }
+
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("queries", out JsonElement queriesProperty) &&
+                queriesProperty.ValueKind == JsonValueKind.Array)
+            {
+                queriesValue = JsonSerializer.Deserialize<object>(queriesProperty.GetRawText()) ?? Array.Empty<object>();
+                return true;
+            }
+
+            error = "Queries payload must be a JSON array or an object with a 'queries' array property.";
+            return false;
+        }
+        catch (JsonException ex)
+        {
+            error = $"Queries payload is invalid JSON: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryNormalizeQueriesPayload(object rawQueries, out string payloadText, out string error)
+    {
+        payloadText = string.Empty;
+        error = string.Empty;
+
+        if (rawQueries is List<object?> list)
+        {
+            for (int i = list.Count - 1; i >= 0; i--)
+            {
+                if (TryNormalizeQueriesPayload(list[i]!, out payloadText, out error))
+                {
+                    return true;
+                }
+            }
+
+            error = "Queries payload was provided multiple times but none were valid.";
+            return false;
+        }
+
+        if (rawQueries is not string stringValue || string.IsNullOrWhiteSpace(stringValue))
+        {
+            error = "Queries payload must be a non-empty JSON string or @file path.";
+            return false;
+        }
+
+        string candidate = stringValue.Trim();
+        bool explicitFile = candidate.StartsWith('@');
+        if (explicitFile)
+        {
+            candidate = candidate[1..].Trim();
+        }
+
+        if (explicitFile || File.Exists(candidate))
+        {
+            if (!File.Exists(candidate))
+            {
+                error = $"Queries input file '{candidate}' does not exist.";
+                return false;
+            }
+
+            payloadText = File.ReadAllText(candidate);
+            return true;
+        }
+
+        payloadText = candidate;
+        return true;
     }
 
     private static object? AppendOptionValue(object? existing, object? incoming)
@@ -1619,6 +1812,17 @@ Workflow:
         }
 
         if (string.Equals(commandId, "query.batch", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalExecuted = TryGetInt(element, "total_executed", out int executed) ? executed : -1;
+            int succeeded = TryGetInt(element, "succeeded", out int ok) ? ok : -1;
+            int failed = TryGetInt(element, "failed", out int fail) ? fail : -1;
+            if (totalExecuted >= 0)
+            {
+                return $"executed={totalExecuted}, ok={Math.Max(succeeded, 0)}, failed={Math.Max(failed, 0)}";
+            }
+        }
+
+        if (string.Equals(commandId, "nav.find_symbol_batch", StringComparison.OrdinalIgnoreCase))
         {
             int totalExecuted = TryGetInt(element, "total_executed", out int executed) ? executed : -1;
             int succeeded = TryGetInt(element, "succeeded", out int ok) ? ok : -1;
@@ -1882,12 +2086,31 @@ Workflow:
                 direct = "nav.find_symbol <file-path> <symbol-name> [--option value ...]",
                 run = "run nav.find_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"symbol_name\":\"Run\",\"brief\":true}'",
                 required_properties = new[] { "file_path", "symbol_name" },
-                optional_properties = new[] { "brief", "max_results", "context_lines", "workspace_path", "require_workspace" },
+                optional_properties = new[] { "brief", "max_results", "context_lines", "declarations_only", "first_declaration", "snippet_single_line", "max_snippet_chars", "workspace_path", "require_workspace" },
                 notes = new[]
                 {
+                    "Use declarations_only=true when you only want declaration anchors.",
+                    "Use first_declaration=true to prefer declaration match and fallback to first match when no declaration exists.",
                     "By default, roscli auto-resolves nearest .csproj/.vbproj/.sln/.slnx from file path.",
                     "If workspace_context.mode is 'ad_hoc', pass workspace_path explicitly.",
                     "Set require_workspace=true for project-backed files when ad_hoc fallback should fail closed.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.find_symbol_batch", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.find_symbol_batch [queries-json-or-file] [--queries @file.json] [--option value ...]",
+                run = "run nav.find_symbol_batch --input '{\"queries\":[{\"file_path\":\"src/A.cs\",\"symbol_name\":\"Run\"},{\"file_path\":\"src/B.cs\",\"symbol_name\":\"Run\"}],\"brief\":true,\"first_declaration\":true,\"continue_on_error\":true}'",
+                required_properties = new[] { "queries" },
+                optional_properties = new[] { "continue_on_error", "brief", "max_results", "context_lines", "declarations_only", "first_declaration", "snippet_single_line", "max_snippet_chars", "workspace_path", "require_workspace" },
+                notes = new[]
+                {
+                    "Top-level options are defaults for all queries; per-query properties override defaults.",
+                    "Each query item requires file_path and symbol_name and may include optional label.",
+                    "For shorthand, pass --queries @file.json or positional file path containing a JSON array.",
                 },
             };
         }
@@ -2073,6 +2296,7 @@ Workflow:
         {
             return new
             {
+                direct = "query.batch [queries-json-or-file] [--queries @file.json] [--option value ...]",
                 run = "run query.batch --input '{\"queries\":[{\"command_id\":\"ctx.search_text\",\"input\":{\"patterns\":[\"RemoteUserAction\"],\"roots\":[\"src\"]}},{\"command_id\":\"nav.find_invocations\",\"input\":{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":15}}],\"continue_on_error\":true}'",
                 required_properties = new[] { "queries" },
                 optional_properties = new[] { "continue_on_error" },
@@ -2080,6 +2304,7 @@ Workflow:
                 {
                     "query.batch supports read-only investigative commands only.",
                     "Each query item must provide command_id and input.",
+                    "For shorthand, pass --queries @file.json or positional file path containing a JSON array.",
                 },
             };
         }
@@ -2142,6 +2367,97 @@ Workflow:
         };
     }
 
+    private string BuildLlmstxt(bool full)
+    {
+        IReadOnlyList<CommandDescriptor> allCommands = _registry.ListCommands()
+            .OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        IReadOnlyList<CommandDescriptor> visibleCommands = full
+            ? allCommands
+            : allCommands.Where(c => string.Equals(c.Maturity, CommandMaturity.Stable, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        int stable = allCommands.Count(c => string.Equals(c.Maturity, CommandMaturity.Stable, StringComparison.OrdinalIgnoreCase));
+        int advanced = allCommands.Count(c => string.Equals(c.Maturity, CommandMaturity.Advanced, StringComparison.OrdinalIgnoreCase));
+        int experimental = allCommands.Count(c => string.Equals(c.Maturity, CommandMaturity.Experimental, StringComparison.OrdinalIgnoreCase));
+        (string version, _) = GetCliVersions();
+
+        StringBuilder sb = new();
+        sb.AppendLine("# roscli llmstxt");
+        sb.AppendLine();
+        sb.AppendLine("One-shot bootstrap guide for coding agents using RoslynSkills.");
+        sb.AppendLine();
+        sb.AppendLine("## Scope");
+        sb.AppendLine($"- cli version: `{version}`");
+        sb.AppendLine($"- catalog mode: `{(full ? "all" : "stable-only")}` ({visibleCommands.Count}/{allCommands.Count} commands shown)");
+        sb.AppendLine($"- maturity totals: stable={stable}, advanced={advanced}, experimental={experimental}");
+        if (!full && visibleCommands.Count < allCommands.Count)
+        {
+            sb.AppendLine($"- omitted {allCommands.Count - visibleCommands.Count} advanced/experimental commands; run `roscli llmstxt --full` for complete coverage.");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("## Fast Start (Low Round-Trips)");
+        sb.AppendLine("1. Pick a command from the catalog below and run it directly.");
+        sb.AppendLine("2. Call `roscli describe-command <command-id>` only when argument shape is unclear.");
+        sb.AppendLine("3. Use `diag.get_file_diagnostics` (or build/tests) before finalizing edits.");
+        sb.AppendLine();
+        sb.AppendLine("## Guardrails");
+        sb.AppendLine("- `session.open` supports only `.cs/.csx` files.");
+        sb.AppendLine("- For `nav.*` and `diag.*` file commands, check `workspace_context.mode`.");
+        sb.AppendLine("- If `workspace_context.mode=ad_hoc` and project context exists, rerun with `--workspace-path`.");
+        sb.AppendLine("- For fail-closed project semantics, set `--require-workspace true`.");
+        sb.AppendLine("- Prefer `--input-stdin` for complex JSON payloads.");
+        sb.AppendLine();
+        sb.AppendLine("## Quick Recipes");
+        sb.AppendLine("```text");
+        sb.AppendLine("roscli nav.find_symbol src/MyProject/Program.cs Process --first-declaration true --brief true --max-results 20 --require-workspace true");
+        sb.AppendLine("roscli nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true --require-workspace true");
+        sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 body --brief true");
+        sb.AppendLine("roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true");
+        sb.AppendLine("roscli diag.get_file_diagnostics src/MyProject/Program.cs --require-workspace true");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("## Command Catalog");
+        sb.AppendLine("Format: `command-id` (`maturity`, `read|write`) - summary");
+        sb.AppendLine();
+        AppendLlmstxtCatalog(sb, visibleCommands, includeTraits: full);
+        sb.AppendLine("## Complements");
+        sb.AppendLine("- Use `dnx dotnet-inspect -y -- <command>` for external package/framework API intelligence.");
+        sb.AppendLine("- Use `roscli` for in-repo semantic navigation, edits, diagnostics, and repair.");
+        sb.AppendLine("- `roscli` is not a package index/version-diff tool; treat dotnet tools as complementary helpers.");
+
+        return sb.ToString();
+    }
+
+    private static void AppendLlmstxtCatalog(StringBuilder sb, IReadOnlyList<CommandDescriptor> commands, bool includeTraits)
+    {
+        foreach (IGrouping<string, CommandDescriptor> group in commands
+            .GroupBy(c => GetCommandCategory(c.Id))
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"### {group.Key}.*");
+            foreach (CommandDescriptor command in group.OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase))
+            {
+                string access = command.MutatesState ? "write" : "read";
+                sb.Append($"- `{command.Id}` (`{command.Maturity}`, `{access}`) - {command.Summary}");
+                if (includeTraits && command.Traits is { Count: > 0 })
+                {
+                    sb.Append($" | traits: {string.Join(", ", command.Traits)}");
+                }
+
+                sb.AppendLine();
+            }
+
+            sb.AppendLine();
+        }
+    }
+
+    private static string GetCommandCategory(string commandId)
+    {
+        int separatorIndex = commandId.IndexOf('.');
+        return separatorIndex <= 0 ? "misc" : commandId[..separatorIndex];
+    }
+
     private static object BuildMaturityCounts(IReadOnlyList<CommandDescriptor> commands)
     {
         int stable = commands.Count(c => string.Equals(c.Maturity, CommandMaturity.Stable, StringComparison.OrdinalIgnoreCase));
@@ -2180,6 +2496,7 @@ Workflow:
               list-commands [--compact] [--ids-only] [--stable-only]
               describe-command <command-id>
               quickstart
+              llmstxt [--full]
               validate-input <command-id> [--input <json>|@<file>|-] [--input-stdin]
               run <command-id> [--input <json>|@<file>|-] [--input-stdin]
               <command-id> [simple positional args]
@@ -2187,7 +2504,9 @@ Workflow:
             Notes:
               - Use --version, -v, or version to print the installed roscli version.
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
+              - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
               - Recommended first minute:
+                roscli llmstxt
                 roscli list-commands --ids-only
                 roscli quickstart
                 roscli describe-command session.open
@@ -2201,6 +2520,7 @@ Workflow:
                 diag.get_workspace_snapshot [directory-path]
                 repair.propose_from_diagnostics <file-path>
                 nav.find_symbol <file-path> <symbol-name>
+                nav.find_symbol_batch [queries-json-or-file]
                 nav.find_invocations <file-path> <line> <column>
                 nav.call_hierarchy <file-path> <line> <column>
                 nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column>
@@ -2212,6 +2532,7 @@ Workflow:
                 analyze.override_coverage <workspace-path>
                 analyze.async_risk_scan <workspace-path>
                 ctx.search_text <pattern> [root-or-file]
+                query.batch [queries-json-or-file]
                 edit.rename_symbol <file-path> <line> <column> <new-name>
                 edit.create_file <file-path> [--content <text>]
                 session.open <file-path> [session-id]
@@ -2224,6 +2545,8 @@ Workflow:
                 ctx.file_outline <file-path> --include-members false --max-members 50
                 diag.get_file_diagnostics <file-path> --workspace-path src/MyProject/MyProject.csproj --require-workspace true
                 ctx.search_text "RemoteUserAction" src --mode literal --max-results 100
+                nav.find_symbol src/MyFile.cs Run --first-declaration true --brief true
+                nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true
                 nav.find_invocations <file-path> <line> <column> --brief true --require-workspace true
                 nav.call_hierarchy <file-path> <line> <column> --direction both --max-depth 2 --brief true
                 nav.call_path <source-file> <source-line> <source-column> <target-file> <target-line> <target-column> --max-depth 8 --brief true
@@ -2234,6 +2557,7 @@ Workflow:
                 analyze.impact_slice <file-path> <line> <column> --brief true --include-callers true --include-callees true
                 analyze.override_coverage src --coverage-threshold 0.6 --brief true
                 analyze.async_risk_scan src --max-findings 200 --severity-filter warning --severity-filter info
+                query.batch --queries @batch-queries.json --continue-on-error true
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - For nav/diag file commands, check response workspace_context.mode.
@@ -2248,10 +2572,8 @@ Workflow:
               - Use describe-command <command-id> when an agent is unsure about command arguments.
               - Use --input with raw JSON, @path-to-json-file, or '-' for stdin.
               - Use --input-stdin to read full JSON from stdin without temp files.
-              - Output is always JSON envelopes.
+              - Most commands output JSON envelopes. llmstxt outputs markdown text.
             """);
     }
 }
-
-
 

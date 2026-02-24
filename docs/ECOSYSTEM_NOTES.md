@@ -179,3 +179,43 @@ Future research item:
   - MCP/CLI invocation reliability,
   - transcript telemetry extractability,
   - token/latency overhead under identical Roslyn task prompts.
+
+## Future Work Backlog: roscli llmstxt (2026-02-19)
+
+Interesting `dotnet-inspect llmstxt` features worth adopting later in RoslynSkills:
+
+- Section targeting: add `roscli llmstxt --section <topic>` to return only one focused chunk (for example `guardrails`, `recipes`, `catalog`).
+- Output modes: keep current compact default, but consider `--full` + `--json` parity for machine parsers that prefer structured bootstrap docs.
+- Mistake-prevention block: include a compact "common mistakes" section sourced from frequent `validate-input`/`run` errors.
+- Compatibility hints: add a generated option-compatibility matrix for high-traffic commands to reduce retry loops.
+- Discovery workflow templates: add short "find -> inspect -> edit -> verify" trajectories for common task families.
+- XAML + Roslyn boundary: add a focused assessment of what Roslyn can cover for `.xaml`/`.xaml.cs` workflows, where extra tooling is required, and whether roscli should expose explicit guidance/commands.
+
+Rationale: preserve low context footprint by default while offering deeper, targeted guidance only when explicitly requested.
+
+
+
+## Field Note (2026-02-19): Claude roscli loop pattern
+
+Observed real usage fragment repeatedly calls `roscli nav.find_symbol <file> <symbol>` across a long query list, then performs local filtering (`is_declaration` selection, first match fallback) and snippet extraction in shell.
+
+Potential tool-surface improvements suggested by this pattern:
+
+- Add a batched symbol lookup command for many `(file,symbol)` queries in one round-trip (for example `nav.find_symbol_batch` or extending `query.batch` with a compact symbol mode).
+- Add a worklist input mode (--queries @file.json / stdin JSON array) so agents can submit many lookups without shell loop boilerplate and repeated ConvertFrom-Json.
+- Add declaration-first options on `nav.find_symbol` (`declarations_only=true`, `first_declaration=true`) to avoid client-side match filtering.
+- Add output projection/compact mode (`fields=symbol_display,line,column,snippet`) to reduce payload and parsing overhead.
+- Add bounded snippet formatting options (single-line snippet / max snippet chars) so shell scripts do not need post-processing.
+- Consider XAML-adjacent guidance for `.xaml.cs` workflows and mapping to paired `.xaml` artifacts where relevant.
+
+Implementation status (2026-02-24):
+
+- Implemented: `nav.find_symbol_batch` command (batch `(file,symbol)` lookup in one call).
+- Implemented: direct shorthand worklist input for `nav.find_symbol_batch` and `query.batch` via `--queries @file.json` (or positional file/json payload).
+- Implemented: `nav.find_symbol` options `declarations_only`, `first_declaration`, `snippet_single_line`, `max_snippet_chars`.
+- Remaining candidate: output projection mode (`fields=...`) for tighter payload shaping.
+- Remaining candidate: explicit `.xaml`/`.xaml.cs` bridge guidance and possible paired-artifact helpers.
+
+Research relevance:
+- This is a concrete example of treatment overhead coming from command-shape friction rather than model reasoning alone.
+

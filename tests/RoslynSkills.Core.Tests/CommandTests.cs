@@ -96,6 +96,128 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public async Task FindSymbolCommand_DeclarationsOnly_ReturnsDeclarationMatches()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Worker
+            {
+                public Worker Next => new Worker();
+            }
+            """);
+
+        try
+        {
+            FindSymbolCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                symbol_name = "Worker",
+                declarations_only = true,
+                brief = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement matches = doc.RootElement.GetProperty("matches");
+            Assert.Equal(1, matches.GetArrayLength());
+            Assert.True(matches[0].GetProperty("is_declaration").GetBoolean());
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task FindSymbolCommand_FirstDeclaration_FallsBackToFirstMatchWhenNoDeclarationExists()
+    {
+        string filePath = WriteTempFile(
+            """
+            using System;
+
+            public class Worker
+            {
+                public void Run()
+                {
+                    Console.WriteLine("one");
+                    Console.WriteLine("two");
+                }
+            }
+            """);
+
+        try
+        {
+            FindSymbolCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                symbol_name = "WriteLine",
+                first_declaration = true,
+                declarations_only = false,
+                brief = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement root = doc.RootElement;
+            Assert.Equal(1, root.GetProperty("total_matches").GetInt32());
+            JsonElement match = root.GetProperty("matches")[0];
+            Assert.False(match.GetProperty("is_declaration").GetBoolean());
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task FindSymbolCommand_SnippetSingleLineAndMaxChars_AreApplied()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Worker
+            {
+                public void Run()
+                {
+                    var worker = new Worker();
+                }
+            }
+            """);
+
+        try
+        {
+            FindSymbolCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                symbol_name = "Worker",
+                context_lines = 2,
+                snippet_single_line = true,
+                max_snippet_chars = 24,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement firstMatch = doc.RootElement.GetProperty("matches")[0];
+            string snippet = firstMatch.GetProperty("context").GetProperty("snippet").GetString() ?? string.Empty;
+            Assert.DoesNotContain("\n", snippet);
+            Assert.EndsWith("...", snippet);
+            Assert.True(snippet.Length <= 24);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task GetFileDiagnosticsCommand_ReturnsErrorsForBrokenCode()
     {
         string filePath = WriteTempFile(
