@@ -4,217 +4,224 @@
 
 # RoslynSkills
 
-Roslyn-powered C# tools for coding agents.
+`roscli` is a Roslyn-native CLI for coding agents working on C#/.NET repositories.
 
-Goal: help agents navigate, edit, and validate C# with semantic correctness, then measure whether this materially beats text-first workflows.
+It is designed to replace fragile text-only edits with semantic symbol targeting, structured edits, and workspace-aware diagnostics.
 
-Core principle: define a clear pit of success where semantic-first, brief-first, verify-before-finalize is the default path an agent naturally follows.
+## Why Roscli
 
-Pit-of-success guide: `docs/PIT_OF_SUCCESS.md`
+Text-first workflows are fast at first, then degrade on:
 
-## Start Here (5 Minutes)
+- ambiguous symbols and overloads
+- cross-file or signature-sensitive refactors
+- diagnostics that only make sense in project/solution context
 
-Use this path first.
+`roscli` focuses directly on those failure modes:
+
+- semantic navigation (`nav.*`)
+- structured edits (`edit.*`)
+- diagnostics/repair loops (`diag.*`, `repair.*`)
+- low-churn calls for agents (`--brief true`, `query.batch`, `nav.find_symbol_batch`)
+
+Canonical pit-of-success guide: `docs/PIT_OF_SUCCESS.md`
+
+## Start in 5 Minutes
 
 Prerequisites:
 
 - .NET 10 SDK
-- A C#/.NET repository
+- a C#/.NET repository
 
-Install `roscli` from NuGet preview:
+Install:
 
 ```powershell
 dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
 ```
 
-If install fails or NuGet cannot find the package yet, jump to `Troubleshooting`.
-
-Verify install:
+Bootstrap:
 
 ```powershell
 roscli --version
-roscli list-commands --ids-only
+roscli llmstxt
 roscli list-commands --stable-only --ids-only
 roscli quickstart
 ```
 
-You should see command ids like `nav.find_symbol`, `ctx.member_source`, `ctx.search_text`, `nav.find_invocations`, `nav.call_hierarchy`, `analyze.unused_private_symbols`, `analyze.impact_slice`, `query.batch`, `diag.get_file_diagnostics`, `edit.rename_symbol`, and `session.*`.
-You should also get an explicit pit-of-success brief from `roscli quickstart`.
+First semantic flow:
 
-Command maturity model:
+```powershell
+roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --first-declaration true --max-results 20 --workspace-path src/MyProject/MyProject.csproj --require-workspace true
+roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true --workspace-path src/MyProject/MyProject.csproj --require-workspace true
+roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path src/MyProject/MyProject.csproj --require-workspace true
+```
 
-- `stable`: default-safe contract for normal agent workflows.
-- `advanced`: deeper analysis/orchestration; can be slower or partially heuristic.
-- `experimental`: evolving contract; helpful signals with lower stability guarantees.
+## Best-Results Playbook (For Agents)
 
-## Tell Your Agent About `roscli`
+Use this sequence to reduce retries and avoid tool-learning churn:
 
-Paste this at the start of an agentic coding session:
+1. `roscli llmstxt` once at session start.
+2. `roscli list-commands --stable-only --ids-only`.
+3. Use direct commands (`nav.*`, `ctx.*`, `edit.*`, `diag.*`) before exploratory `describe-command`.
+4. Keep reads compact (`--brief true`, bounded `--max-results`).
+5. For project-backed code, force workspace semantics:
+`--workspace-path <.csproj|.sln|.slnx|dir> --require-workspace true`.
+6. Batch read-only discovery when possible:
+`query.batch`, `nav.find_symbol_batch`.
+7. Validate with diagnostics and build/tests before finalizing.
+
+High-call performance mode:
+
+```powershell
+scripts\roscli-warm.cmd
+$env:ROSCLI_USE_PUBLISHED = "1"
+```
+
+After changing RoslynSkills source, refresh published cache once:
+
+```powershell
+$env:ROSCLI_REFRESH_PUBLISHED = "1"
+```
+
+## Text-First vs Roscli (Real Run Fragments)
+
+These are from recorded paired runs under `artifacts/`.
+
+### Fragment A: roscli can be strictly cheaper
+
+Source: `artifacts/paired-guidance-surgical-codex-smoke-r2/paired-run-summary.md`
+
+- control (text-first): `round-trips=2`, `tokens=36914`, `duration=12.576s`
+- treatment (roscli): `round-trips=1`, `tokens=18646`, `duration=11.484s`, Roslyn `1/1`
+
+Result: with a surgical prompt posture, semantic tooling reduced both round-trips and tokens.
+
+### Fragment B: overhead appears when treatment starts with tool-learning loops
+
+Source family: `artifacts/real-agent-runs/*change-signature-named-args-v1*/paired-run-summary.json`
+
+| Profile | Control (rt/tokens/sec) | Treatment (rt/tokens/sec) | Roslyn Calls (ok/attempted) |
+| --- | --- | --- | --- |
+| `skill-minimal` | `1 / 25267 / 11.168` | `8 / 80681 / 50.986` | `7/7` |
+| `surgical` | `2 / 34722 / 18.157` | `4 / 57060 / 35.351` | `1/2` |
+| `tool-only-v1` | `3 / 44173 / 20.813` | `5 / 62988 / 37.187` | `3/3` |
+| `discovery-lite-v1` (r3) | `2 / 34793 / 16.442` | `4 / 57827 / 33.573` | `3/3` |
+
+Command-sequence fragment from the high-overhead `skill-minimal` treatment:
+
+- `roscli list-commands --ids-only`
+- `roscli describe-command nav.find_symbol`
+- `roscli describe-command edit.rename_symbol`
+- `roscli nav.find_symbol ... Process ...`
+- `roscli nav.find_symbol ... left ...`
+- `roscli edit.rename_symbol ...`
+- `roscli diag.get_file_diagnostics ...`
+
+Interpretation: Roslyn call success alone is not enough. Prompt posture and command-surface ergonomics determine whether semantic tooling is net-positive in end-to-end runs.
+
+Roadmap note:
+
+- TODO: evaluate first-class XAML-aware workflows alongside Roslyn C# semantics, and document recommended mixed-mode handling.
+
+## Agent Intro Prompt (Copy/Paste)
 
 ```text
-Use roscli for C# and VB.NET work in this session.
-Command: roscli
-
-Workflow:
-1) Run "roscli list-commands --ids-only" once.
-2) Prefer stable commands first via "roscli list-commands --stable-only --ids-only" when uncertainty is high.
-3) Run "roscli quickstart" to load the built-in pit-of-success brief.
-4) If command arguments are unclear, run "roscli describe-command <command-id>".
-5) Prefer direct command shorthand for common calls; use "run ... --input" for complex JSON payloads.
-6) Prefer nav.* / ctx.* / diag.* before text-only fallback.
-7) For external package/API questions, use "dnx dotnet-inspect -y -- ..." before editing local code.
-8) Keep diagnostics scoped; avoid full-solution snapshots unless needed.
-9) For nav/diag file commands, check response "workspace_context.mode". If it is "ad_hoc" for project code, rerun with "--workspace-path <.csproj|.vbproj|.sln|.slnx|dir>" and prefer "--require-workspace true" for fail-closed behavior.
-10) Run build/tests before finalizing changes.
-11) If roscli cannot answer a C# query, state why before falling back.
+Use roscli for C#/.NET repo edits and diagnostics.
+1) Run once: roscli llmstxt
+2) Use stable commands first: roscli list-commands --stable-only --ids-only
+3) Use describe-command only when argument shape is unclear
+4) For project files require workspace semantics:
+   --workspace-path <.csproj|.sln|.slnx|dir> --require-workspace true
+5) Prefer semantic nav/edit/diag commands before text fallback
+6) Keep calls brief/bounded, batch read-only discovery when possible
+7) Verify diagnostics/build/tests before final answer
 ```
 
-First useful commands:
+## Command Surface
 
-```powershell
-roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --max-results 20 --require-workspace true
-roscli ctx.member_source src/MyProject/File.cs 120 10 body --brief true
-roscli ctx.search_text "RemoteUserAction" src --mode literal --max-results 100
-roscli nav.find_invocations src/MyProject/File.cs 120 10 --brief true --require-workspace true
-roscli nav.call_hierarchy src/MyProject/File.cs 120 10 --direction both --max-depth 2 --brief true --require-workspace true
-roscli analyze.unused_private_symbols src --brief true --max-symbols 100
-roscli analyze.impact_slice src/MyProject/File.cs 120 10 --brief true --include-callers true --include-callees true
-roscli analyze.override_coverage src --coverage-threshold 0.6 --brief true
-roscli analyze.async_risk_scan src --max-findings 200 --severity-filter warning --severity-filter info
-roscli diag.get_file_diagnostics src/MyProject/File.cs
-roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path src/MyProject/MyProject.csproj --require-workspace true
-roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType { }"
-```
+Current catalog snapshot:
 
-Note: `session.open` is for C# source files (`.cs`/`.csx`) only. Do not use `session.open` on `.sln`, `.slnx`, or `.csproj`.
-Note: `nav.find_symbol` and `diag.get_file_diagnostics` return `workspace_context` metadata; treat `mode=workspace` as the expected state for project-backed files. Use `--require-workspace true` when ad-hoc fallback should fail closed.
-Tip: for simple rename/fix tasks, start with a minimal flow (`edit.rename_symbol` then `diag.get_file_diagnostics`) before broader exploration.
-Tip: when you need multiple read-only lookups, use `query.batch` to reduce round-trips.
-If command arguments are unclear in-session, run:
+- `roscli list-commands --ids-only` -> `47` commands
+- maturity counts: `stable=33`, `advanced=11`, `experimental=3`
+- `roscli llmstxt` defaults to stable-only startup guidance (`--full` for complete catalog)
 
-```powershell
-roscli describe-command session.open
-roscli describe-command edit.create_file
-```
+Command families:
 
-Deep guidance reference: `docs/PIT_OF_SUCCESS.md`
-
-## What You Get
-
-`roscli` currently exposes 46 commands across:
-
-- `nav.*`: semantic symbol/references/implementations/overrides
-- `ctx.*`: file/member/call-chain/dependency context
-- `analyze.*`: lightweight static analysis (control-flow graphs, dataflow slices, unused private symbols, dependency violations, impact slices, override coverage, async risk scan)
-- `diag.*`: diagnostics snapshots/diffs/after-edit checks
+- `nav.*`: symbol/references/invocations/call-graph/navigation
+- `ctx.*`: file/member/search context retrieval
+- `analyze.*`: analysis slices and risk scans
+- `diag.*`: diagnostics snapshots and diffs
 - `edit.*`: structured semantic edits and transactions
 - `repair.*`: diagnostics-driven repair planning/application
-- `session.*`: non-destructive edit/diagnostics/diff/commit loops for a single C# file (`.cs`/`.csx`)
+- `session.*`: non-destructive single-file edit loop (`.cs`/`.csx`)
 
 ## Complementary .NET Tooling
 
-For external package/assembly API intelligence, the strongest companion here is `dotnet-inspect` by Rich Lander (and related `dotnet-skills` work), which is designed for ecosystem/package inspection workflows rather than in-repo Roslyn edits.
+Use `roscli` for in-repo semantic coding tasks.
+Use `dotnet-inspect` for external package/framework API intelligence.
 
-Attribution and links:
+Attribution:
 
 - `dotnet-inspect`: https://github.com/richlander/dotnet-inspect
 - `dotnet-skills`: https://github.com/richlander/dotnet-skills
 
-Install companion tool (optional):
+Optional install:
 
 ```powershell
 dotnet tool install --global dotnet-inspect
 ```
 
-Practical split of responsibilities:
+Practical split:
 
-1. Use `dotnet-inspect` for package/assembly intelligence (external APIs, overload discovery, version diffs, vulnerability metadata).
-2. Use `roscli` for workspace-native Roslyn operations (symbol navigation, structured edits, diagnostics, repair) in your current repo.
+- package/API overload/version questions -> `dotnet-inspect`
+- workspace symbol edits/diagnostics -> `roscli`
+- migrations -> inspect external API first, then edit with roscli
 
-Quick "which tool" hints:
+## Optional: Release Bundle (CLI + MCP + Transport + Skills)
 
-- "What overloads/members does package X expose?" -> `dotnet-inspect`
-- "What changed from package version A to B?" -> `dotnet-inspect`
-- "Where is symbol Y used in this repo?" -> `roscli`
-- "Rename/update code safely across this workspace" -> `roscli`
-
-Agent session hint block (combined mode):
-
-```text
-Use both tools in this session:
-- dotnet-inspect for external package/library API intelligence.
-- roscli for local workspace semantic navigation, edits, and diagnostics.
-
-Rule of thumb:
-1) If the question is about a NuGet/package/framework API, start with:
-   dnx dotnet-inspect -y -- <command>
-2) If the task is editing/diagnosing this repo, use roscli commands.
-3) For migration/refactor tasks, do both: inspect external API first, then edit locally with roscli.
-```
-
-Example combined workflow:
-
-```powershell
-# External API discovery
-dnx dotnet-inspect -y -- api JsonSerializer --package System.Text.Json
-
-# Local workspace edit + verify
-roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true
-roscli diag.get_file_diagnostics src/MyProject/File.cs
-```
-
-## Optional: Release Bundle (CLI + MCP + Transport + Skill)
-
-If you want prebuilt binaries and wrappers, use the releases page:
+GitHub releases:
 
 - https://github.com/DNAKode/RoslynSkills/releases
 
-Pick the newest `RoslynSkills v*` entry (including preview releases) and download:
-
-Main artifacts:
+Typical artifacts:
 
 - `roslynskills-bundle-<version>.zip`
 - `DNAKode.RoslynSkills.Cli.<version>.nupkg`
 - `roslynskills-research-skill-<version>.zip`
 - `roslynskills-tight-skill-<version>.zip`
 
-Bundle contents include:
+Bundle includes:
 
 - `bin/roscli(.cmd)`
 - `mcp/RoslynSkills.McpServer.dll`
 - `transport/RoslynSkills.TransportServer.dll`
 - `PIT_OF_SUCCESS.md`
-- `skills/roslynskills-research/SKILL.md`
-- `skills/roslynskills-research/references/`
-- `skills/roslynskills-tight/SKILL.md`
+- skills + references
 
-### Install Skills (Claude.ai / Claude Code)
+## Install Skills (Claude.ai / Claude Code)
 
-The `roslynskills-*-skill-<version>.zip` artifacts are uploadable "Claude skills" (a folder with `SKILL.md` and optional `references/`).
-
-- Claude.ai: Settings -> Capabilities -> Skills -> Upload the skill zip.
-- Claude Code: unzip the folder into your Claude Code skills directory (see Claude Code docs), then restart Claude Code.
+- Claude.ai: Settings -> Capabilities -> Skills -> upload zip
+- Claude Code: unzip into skills directory, then restart
 
 Recommended:
 
-- `roslynskills-tight-skill-<version>.zip`: minimal-call, low-churn guidance.
-- `roslynskills-research-skill-<version>.zip`: deeper workflows + progressive disclosure via `references/`.
+- `roslynskills-tight-skill-<version>.zip` for low-churn production loops
+- `roslynskills-research-skill-<version>.zip` for deeper guided workflows
 
 ## Troubleshooting
 
-If `dotnet tool install` cannot find `DNAKode.RoslynSkills.Cli`:
+If NuGet preview is not visible yet:
 
 ```powershell
 dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
 ```
 
-If a just-published preview is still indexing:
+If you need an explicit version:
 
 ```powershell
 dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source https://api.nuget.org/v3/index.json --ignore-failed-sources
 ```
 
-If you downloaded `DNAKode.RoslynSkills.Cli.<version>.nupkg` from GitHub Releases and want local install:
+If installing from downloaded local nupkg:
 
 ```powershell
 dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-source <folder-containing-nupkg> --ignore-failed-sources
@@ -222,9 +229,7 @@ dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-
 
 ## Optional: MCP Mode
 
-MCP support is available for clients that can run local MCP servers.
-
-Example server wiring:
+Example MCP server wiring:
 
 - command: `dotnet`
 - args: `"<unzipped>/mcp/RoslynSkills.McpServer.dll"`
@@ -244,32 +249,23 @@ Example `claude-mcp.json`:
 }
 ```
 
-For Claude users, MCP works best paired with a skill:
-
-- Connect the MCP server (above) so Claude has the tools.
-- Install `roslynskills-tight-skill-<version>.zip` so Claude reliably uses the tools with a low-churn, minimal-call workflow.
+Best results for Claude: MCP server + `roslynskills-tight` skill.
 
 ## Gemini CLI Compatibility (Early Support)
 
 Current status:
 
-- Benchmark preflight now probes `gemini` availability (plus Windows shims `gemini.cmd` / `gemini.exe`).
-- Recommended integration path is MCP + concise RoslynSkills startup guidance (`list-commands` -> `quickstart` -> `describe-command`).
+- benchmark preflight probes `gemini` plus Windows shims
+- recommended startup remains `llmstxt` -> `list-commands` -> targeted commands
 
-Practical first check:
+Quick check:
 
 ```powershell
 gemini --version
 roscli list-commands --stable-only --ids-only
 ```
 
-Guidance/compliance notes:
-
-- Keep extension/tool instructions concise and example-driven.
-- Prefer low-flag, brief-first commands for first interactions.
-- Expand detail only after initial success.
-
-See `docs/ECOSYSTEM_NOTES.md` for the Gemini guideline mapping and OpenCode follow-up backlog item.
+Reference: `docs/ECOSYSTEM_NOTES.md`
 
 ## For Maintainers
 
@@ -279,59 +275,37 @@ Release/build pipelines:
 - `.github/workflows/publish-nuget-preview.yml`
 - `scripts/release/Build-ReleaseArtifacts.ps1`
 
-Regular preview release process:
+Preview release process:
 
-1. Run `Publish NuGet Preview` (`.github/workflows/publish-nuget-preview.yml`).
+1. Run `Publish NuGet Preview` workflow.
 2. Set:
-   - `version`: e.g. `0.1.6-preview.6`
-   - `run_tests`: `true` (recommended)
-   - `publish`: `true` (pushes NuGet package)
-   - `publish_release`: `true` (refreshes GitHub Release assets for the same version)
-3. The workflow now builds one artifact set and reuses it for both NuGet publish and GitHub Release assets.
+   - `version`: e.g. `0.1.6-preview.18`
+   - `run_tests`: `true`
+   - `publish`: `true`
+   - `publish_release`: `true`
 
-Tag-driven release process:
+Tag release process:
 
-- Pushing a `v*` tag triggers `Release Artifacts` (`.github/workflows/release-artifacts.yml`), which rebuilds and publishes GitHub release assets.
+- push `v*` tag -> `Release Artifacts` workflow
 
-Required secret for NuGet publish workflow:
+Required secret:
 
-- `NUGET_API_KEY` (NuGet.org API key with push permission for `DNAKode.RoslynSkills.Cli`)
+- `NUGET_API_KEY`
 
-Local validation baseline:
+Local baseline validation:
 
 ```powershell
 dotnet test RoslynSkills.slnx -c Release
 ```
 
-Claude skill validation (load + adoption smoke):
+Claude skill validation scripts:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/skills/Validate-Skills.ps1
 powershell -ExecutionPolicy Bypass -File scripts/skills/SmokeTest-ClaudeSkillLoad.ps1 -SkillName roslynskills-tight
-
-# Produces artifacts/*/skill-trigger-summary.md and transcripts.
-powershell -ExecutionPolicy Bypass -Command "& benchmarks/scripts/Test-ClaudeSkillTriggering.ps1 `
-  -OutputRoot artifacts/skill-tests/checkpoint-skill-trigger `
-  -ClaudeModel sonnet `
-  -Replicates 1 `
-  -TaskId @('rename-overload-collision-nested-v1') `
-  -IncludeExplicitInvocation `
-  -ClaudeTimeoutSeconds 180 `
-  -IncludeDotnetBuildGate"
-
-# Wider operation scope:
-powershell -ExecutionPolicy Bypass -Command "& benchmarks/scripts/Test-ClaudeSkillTriggering.ps1 `
-  -OutputRoot artifacts/skill-tests/wide-scope-v1 `
-  -ClaudeModel sonnet `
-  -Replicates 1 `
-  -TaskId @('change-signature-named-args-v1','update-usings-cleanup-v1','add-member-threshold-v1','replace-member-body-guard-v1','create-file-audit-log-v1','rename-multifile-collision-v1') `
-  -ClaudeTimeoutSeconds 180 `
-  -IncludeDotnetBuildGate"
 ```
 
-`Test-ClaudeSkillTriggering.ps1` fails closed on Claude authentication/access errors by default to prevent misleading all-zero summaries. Use `-IgnoreAuthenticationError` only for fixture/build validation.
-
-LSP comparator research lane (Claude `csharp-lsp` vs RoslynSkills):
+LSP comparator lane:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 `
@@ -340,36 +314,39 @@ powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.
   -RoslynGuidanceProfile standard
 ```
 
-Design notes: `benchmarks/LSP_COMPARATOR_PLAN.md`.
+Design notes: `benchmarks/LSP_COMPARATOR_PLAN.md`
 
 ## For Contributors (Developing RoslynSkills)
 
-Dual-lane local launcher flow (dogfooding while evolving roscli):
+Dual-lane local wrappers:
 
-- Stable lane (pinned published cache): `scripts\roscli-stable.cmd ...`
-- Dev lane (current source via `dotnet run`): `scripts\roscli-dev.cmd ...`
-- Stable cache location defaults to `artifacts\roscli-stable-cache`.
-- Refresh stable cache explicitly when desired:
-  - one call: `set ROSCLI_STABLE_REFRESH=1 && scripts\roscli-stable.cmd list-commands --ids-only`
-  - then reset/omit `ROSCLI_STABLE_REFRESH`.
+- stable lane: `scripts\roscli-stable.cmd ...`
+- dev lane: `scripts\roscli-dev.cmd ...`
 
-Generic wrapper envs now support custom cache roots:
+Stable cache refresh:
 
-- `ROSCLI_CACHE_DIR` for `scripts/roscli(.cmd)` and `scripts/roscli-warm(.cmd)`.
-- Keep `ROSCLI_USE_PUBLISHED`, `ROSCLI_REFRESH_PUBLISHED`, and `ROSCLI_STALE_CHECK` behavior unchanged.
+```powershell
+set ROSCLI_STABLE_REFRESH=1 && scripts\roscli-stable.cmd list-commands --ids-only
+```
+
+Wrapper envs:
+
+- `ROSCLI_CACHE_DIR`
+- `ROSCLI_USE_PUBLISHED`
+- `ROSCLI_REFRESH_PUBLISHED`
+- `ROSCLI_STALE_CHECK`
 
 Repository layout:
 
 - `src/`: contracts, core commands, CLI, benchmark tooling
 - `tests/`: command/CLI/benchmark test suites
 - `benchmarks/`: manifests, scripts, prompts, scoring, reports
-- `docs/PIT_OF_SUCCESS.md`: canonical pit-of-success guidance for agents
-- `skills/roslynskills-research/`: Roslyn-first operating guidance
-- `skills/roslynskills-tight/`: a tighter, low-churn Roslyn usage skill (minimal calls, progressive disclosure)
+- `docs/PIT_OF_SUCCESS.md`: canonical pit-of-success guidance
+- `skills/`: reusable agent skill packs
 - `AGENTS.md`: execution doctrine and meta-learning log
 - `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md`: research design and gates
 
-Run CLI directly from source:
+Run CLI from source:
 
 ```powershell
 dotnet run --project src/RoslynSkills.Cli -- list-commands --ids-only
@@ -385,4 +362,3 @@ scripts\roscli.cmd ctx.file_outline src/RoslynSkills.Core/DefaultRegistryFactory
 ## License
 
 MIT (`LICENSE`).
-
