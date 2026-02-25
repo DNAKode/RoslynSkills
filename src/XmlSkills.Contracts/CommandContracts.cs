@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace RoslynSkills.Contracts;
+namespace XmlSkills.Contracts;
 
 public sealed record CommandDescriptor(
     string Id,
@@ -59,4 +59,3 @@ public interface IAgentCommand
 
     Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken);
 }
-

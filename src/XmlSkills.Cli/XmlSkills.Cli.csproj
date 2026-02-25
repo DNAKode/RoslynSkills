@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\XmlSkills.Contracts\XmlSkills.Contracts.csproj" />
+    <ProjectReference Include="..\XmlSkills.Core\XmlSkills.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>xmlcli</ToolCommandName>
+    <PackageId>DNAKode.XmlSkills.Cli</PackageId>
+    <Authors>DNA Kode</Authors>
+    <Description>XML-native agentic coding CLI primitives for XML/XAML-oriented workflows.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/DNAKode/RoslynSkills</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>xml;xaml;dotnet;agentic-coding;refactoring</PackageTags>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

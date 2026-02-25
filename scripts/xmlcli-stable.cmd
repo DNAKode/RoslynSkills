@@ -1,0 +1,18 @@
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
+
+set "XMLCLI_USE_PUBLISHED=1"
+set "XMLCLI_CACHE_DIR=%XMLCLI_STABLE_CACHE_DIR%"
+if "%XMLCLI_CACHE_DIR%"=="" set "XMLCLI_CACHE_DIR=%REPO_ROOT%\artifacts\xmlcli-stable-cache"
+
+set "XMLCLI_REFRESH_PUBLISHED=%XMLCLI_STABLE_REFRESH%"
+if "%XMLCLI_REFRESH_PUBLISHED%"=="" set "XMLCLI_REFRESH_PUBLISHED=0"
+
+set "XMLCLI_STALE_CHECK=%XMLCLI_STABLE_STALE_CHECK%"
+if "%XMLCLI_STALE_CHECK%"=="" set "XMLCLI_STALE_CHECK=0"
+
+call "%SCRIPT_DIR%xmlcli.cmd" %*
+set "EXIT_CODE=%ERRORLEVEL%"
+endlocal & exit /b %EXIT_CODE%

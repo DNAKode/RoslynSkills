@@ -154,15 +154,70 @@ Command families:
 - `repair.*`: diagnostics-driven repair planning/application
 - `session.*`: non-destructive single-file edit loop (`.cs`/`.csx`)
 
+## XmlSkills Preview (`xmlcli`)
+
+This repo now also includes an XML/XAML-focused CLI lane, `XmlSkills`, with separate projects:
+
+- `src/XmlSkills.Contracts`
+- `src/XmlSkills.Core`
+- `src/XmlSkills.Cli`
+- `tests/XmlSkills.Cli.Tests`
+
+Install preview tool:
+
+```powershell
+dotnet tool install --global DNAKode.XmlSkills.Cli --prerelease
+```
+
+Startup sequence:
+
+```powershell
+xmlcli llmstxt
+xmlcli list-commands --ids-only
+xmlcli xml.validate_document App.xaml
+xmlcli xml.file_outline App.xaml --brief true --max-nodes 120
+```
+
+Current stable commands:
+
+- `xml.backend_capabilities`
+- `xml.validate_document`
+- `xml.file_outline`
+- `xml.find_elements`
+- `xml.replace_element_text` (dry-run by default, `--apply true` to persist)
+
+Experimental research command:
+
+- `xml.parse_compare` (strict `xdocument` vs tolerant `language_xml` output)
+
+Feature flag for experimental backend mode:
+
+```powershell
+$env:XMLCLI_ENABLE_LANGUAGE_XML = "1"
+```
+
+Research script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-XmlParserBackendComparison.ps1 -EnableLanguageXml
+```
+
+Guide: `docs/xml/PIT_OF_SUCCESS.md`
+
 ## Complementary .NET Tooling
 
 Use `roscli` for in-repo semantic coding tasks.
 Use `dotnet-inspect` for external package/framework API intelligence.
+Default Rich Lander companion tool for day-to-day .NET API/dependency questions: `dotnet-inspect`.
 
 Attribution:
 
 - `dotnet-inspect`: https://github.com/richlander/dotnet-inspect
 - `dotnet-skills`: https://github.com/richlander/dotnet-skills
+
+Note:
+
+- `dotnet-skills` is skill/package distribution around `dotnet-inspect`, not the primary interactive inspection CLI.
 
 Optional install:
 
@@ -186,12 +241,14 @@ Typical artifacts:
 
 - `roslynskills-bundle-<version>.zip`
 - `DNAKode.RoslynSkills.Cli.<version>.nupkg`
+- `DNAKode.XmlSkills.Cli.<version>.nupkg`
 - `roslynskills-research-skill-<version>.zip`
 - `roslynskills-tight-skill-<version>.zip`
 
 Bundle includes:
 
 - `bin/roscli(.cmd)`
+- `bin/xmlcli(.cmd)`
 - `mcp/RoslynSkills.McpServer.dll`
 - `transport/RoslynSkills.TransportServer.dll`
 - `PIT_OF_SUCCESS.md`
@@ -322,6 +379,7 @@ Dual-lane local wrappers:
 
 - stable lane: `scripts\roscli-stable.cmd ...`
 - dev lane: `scripts\roscli-dev.cmd ...`
+- XML lane: `scripts\xmlcli.cmd ...` (`xmlcli-stable`, `xmlcli-dev`, `xmlcli-warm`)
 
 Stable cache refresh:
 

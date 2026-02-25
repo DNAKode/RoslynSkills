@@ -4,7 +4,7 @@ param(
     [string]$CodexModel = "",
     [AllowEmptyString()][ValidateSet("", "low", "medium", "high", "xhigh")][string]$CodexReasoningEffort = "",
     [string]$ClaudeModel = "",
-    [ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$RoslynGuidanceProfile = "standard",
+    [ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1", "discovery-lite-v2")][string]$RoslynGuidanceProfile = "standard",
     [string]$CliPublishConfiguration = "Release",
     [switch]$IncludeMcpTreatment,
     [switch]$IncludeClaudeLspTreatment,
@@ -3371,7 +3371,7 @@ $programContent = [string]$taskDefinition.program_content
 function Get-CliRoslynGuidanceBlock {
     param(
         [Parameter(Mandatory = $true)][ValidateSet("codex", "claude")][string]$Agent,
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1", "discovery-lite-v2")][string]$Profile
     )
 
     switch ($Profile) {
@@ -3902,6 +3902,54 @@ Required sequence for this task:
 Do not run list-commands in this profile.
 "@
         }
+        "discovery-lite-v2" {
+            if ($Agent -eq "codex") {
+                return @"
+Roslyn tooling is available via scripts\roscli.cmd.
+Use discovery-lite-v2 mode:
+- Skip discovery unless the command shape is unclear.
+- If discovery is needed, run exactly ONE command (`llmstxt` or one `describe-command`).
+- Run the first mutating Roslyn command within the first 2 Roslyn calls.
+- Post-edit diagnostics: run at most ONE diagnostics call, and only if edit output shows errors/warnings or missing diagnostics.
+- Keep calls sequential.
+
+Suggested flow for this task:
+1) Optional one-time discovery (only if needed):
+   - scripts\roscli.cmd llmstxt
+   OR
+   - scripts\roscli.cmd describe-command edit.change_signature
+2) Mutating semantic edit (workspace-bound):
+   $payload = '{"file_path":"Target.cs","line":4,"column":16,"parameters":"int primary, int right","apply":true}'
+   $payload | scripts\roscli.cmd run edit.change_signature --input-stdin --workspace-path TargetHarness.csproj --require-workspace true
+3) Conditional verification (only if needed):
+   scripts\roscli.cmd diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+Do not run list-commands in this profile.
+"@
+            }
+
+            return @"
+Roslyn tooling is available via bash scripts/roscli.
+Use discovery-lite-v2 mode:
+- Skip discovery unless the command shape is unclear.
+- If discovery is needed, run exactly ONE command (`llmstxt` or one `describe-command`).
+- Run the first mutating Roslyn command within the first 2 Roslyn calls.
+- Post-edit diagnostics: run at most ONE diagnostics call, and only if edit output shows errors/warnings or missing diagnostics.
+- Keep calls sequential.
+
+Suggested flow for this task:
+1) Optional one-time discovery (only if needed):
+   - bash scripts/roscli llmstxt
+   OR
+   - bash scripts/roscli describe-command edit.change_signature
+2) Mutating semantic edit (workspace-bound):
+   printf '%s\n' '{"file_path":"Target.cs","line":4,"column":16,"parameters":"int primary, int right","apply":true}' | bash scripts/roscli run edit.change_signature --input-stdin --workspace-path TargetHarness.csproj --require-workspace true
+3) Conditional verification (only if needed):
+   bash scripts/roscli diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+Do not run list-commands in this profile.
+"@
+        }
         "tool-only-v1" {
             if ($Agent -eq "codex") {
                 return @"
@@ -3971,7 +4019,7 @@ If validation fails, fix payload shape before continuing.
 
 function Get-McpRoslynGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1", "discovery-lite-v2")][string]$Profile
     )
 
     switch ($Profile) {
@@ -4198,6 +4246,25 @@ For this task, prefer:
    read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&workspace_path=TargetHarness.csproj&require_workspace=true
 "@
         }
+        "discovery-lite-v2" {
+            return @"
+Roslyn MCP resources are available.
+Use discovery-lite-v2 mode:
+- Skip discovery unless command shape is unclear.
+- If discovery is needed, run exactly one metadata/catalog call.
+- Run the first mutating edit URI call within the first 2 Roslyn MCP calls.
+- Run at most one post-edit diagnostics call, and only when edit output indicates errors/warnings or lacks diagnostics.
+- Keep calls sequential.
+
+For this task, prefer:
+1) Optional one-time discovery:
+   read_mcp_resource server=roslyn uri=roslyn://command-meta/edit.change_signature
+2) Mutating edit call:
+   read_mcp_resource server=roslyn uri=roslyn://command/edit.change_signature?file_path=Target.cs&line=4&column=16&parameters=int%20primary%2C%20int%20right&apply=true&workspace_path=TargetHarness.csproj&require_workspace=true
+3) Conditional verification:
+   read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&workspace_path=TargetHarness.csproj&require_workspace=true
+"@
+        }
         "tool-only-v1" {
             return @"
 Roslyn MCP resources are available on `server=roslyn`.
@@ -4226,7 +4293,7 @@ If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&re
 
 function Get-ClaudeLspGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1", "discovery-lite-v2")][string]$Profile
     )
 
     switch ($Profile) {
@@ -4298,6 +4365,18 @@ C# LSP tools/plugins may be available.
 Use discovery-lite mode:
 - Run at most ONE discovery-oriented LSP call before the first edit.
 - Make the first mutating edit within the first 3 LSP/tool calls.
+- Keep calls sequential.
+Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
+"@
+        }
+        "discovery-lite-v2" {
+            return @"
+C# LSP tools/plugins may be available.
+Use discovery-lite-v2 mode:
+- Skip discovery unless tool shape is unclear.
+- If discovery is required, do exactly one discovery-oriented LSP call.
+- Make the first mutating edit within the first 2 LSP/tool calls.
+- Run at most one post-edit diagnostics call unless errors remain.
 - Keep calls sequential.
 Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
 "@

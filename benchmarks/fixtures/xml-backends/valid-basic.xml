@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<catalog>
+  <book id="b1">
+    <title>Roslyn in Practice</title>
+    <author>DNK</author>
+  </book>
+</catalog>

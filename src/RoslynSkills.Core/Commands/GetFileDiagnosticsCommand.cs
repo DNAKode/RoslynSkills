@@ -81,7 +81,7 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         object data = new
         {
             file_path = analysis.FilePath,
-            workspace_context = BuildWorkspaceContextPayload(analysis.WorkspaceContext),
+            workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             require_workspace = requireWorkspace,
             total = payload.Length,
             errors = payload.Count(d => string.Equals(d.severity, "Error", StringComparison.OrdinalIgnoreCase)),
@@ -134,19 +134,5 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), comparison);
     }
 
-    private static object BuildWorkspaceContextPayload(WorkspaceContextInfo context)
-    {
-        return new
-        {
-            mode = context.mode,
-            resolution_source = context.resolution_source,
-            requested_workspace_path = context.requested_workspace_path,
-            resolved_workspace_path = context.resolved_workspace_path,
-            project_path = context.project_path,
-            fallback_reason = context.fallback_reason,
-            attempted_workspace_paths = context.attempted_workspace_paths,
-            workspace_diagnostics = context.workspace_diagnostics,
-        };
-    }
 }
 

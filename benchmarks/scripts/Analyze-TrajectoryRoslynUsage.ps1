@@ -67,6 +67,19 @@ function Test-IsRoscliCommandText {
     )
 }
 
+function Test-IsLlmstxtCommandText {
+    param([Parameter(Mandatory = $true)][string]$CommandText)
+
+    if ([string]::IsNullOrWhiteSpace($CommandText)) {
+        return $false
+    }
+
+    return (
+        $CommandText -match "roscli(\.cmd)?\b.*\bllmstxt\b" -or
+        $CommandText -match "RoslynSkills\.Cli.*\bllmstxt\b"
+    )
+}
+
 function Get-ExplicitBriefFlag {
     param([Parameter(Mandatory = $true)][string]$CommandText)
 
@@ -108,6 +121,23 @@ function Test-IsCatalogCommand {
     param([Parameter(Mandatory = $true)][string]$CommandId)
 
     return ($CommandId -eq "cli.list_commands")
+}
+
+function Test-RunHasNonEmptyDiff {
+    param([Parameter(Mandatory = $true)][string]$TranscriptPath)
+
+    $runDirectory = Split-Path -Parent $TranscriptPath
+    $diffPath = Join-Path $runDirectory "diff.patch"
+    if (-not (Test-Path -LiteralPath $diffPath -PathType Leaf)) {
+        return $false
+    }
+
+    try {
+        $rawDiff = Get-Content -LiteralPath $diffPath -Raw
+        return (-not [string]::IsNullOrWhiteSpace($rawDiff))
+    } catch {
+        return $false
+    }
 }
 
 function Try-ParseRoscliEnvelope {
@@ -254,6 +284,36 @@ function Add-RoscliResultRecord {
         return
     }
 
+    $isLlmstxt = Test-IsLlmstxtCommandText -CommandText $CommandText
+
+    if ($isLlmstxt) {
+        $Records.Add([pscustomobject]@{
+                lane = $Lane
+                task = $Task
+                source = $Source
+                transcript_path = $TranscriptPath
+                event_index = $EventIndex
+                command_id = "cli.llmstxt"
+                command_family = "cli"
+                is_discovery_call = $true
+                is_edit_like_call = $false
+                is_catalog_call = $false
+                is_llmstxt_call = $true
+                brief_field = $false
+                brief_value = $null
+                input_brief_field = $false
+                input_brief_value = $null
+                effective_brief_field = $false
+                effective_brief_value = $null
+                explicit_brief_flag = $false
+                output_chars = if ([string]::IsNullOrWhiteSpace($OutputText)) { 0 } else { $OutputText.Length }
+                source_chars = $null
+                command_text = $CommandText
+                parse_mode = "llmstxt_text"
+            }) | Out-Null
+        return
+    }
+
     if ([string]::IsNullOrWhiteSpace($OutputText)) {
         return
     }
@@ -319,6 +379,7 @@ function Add-RoscliResultRecord {
             is_discovery_call = (Test-IsDiscoveryFamily -Family $commandFamily)
             is_edit_like_call = (Test-IsEditLikeFamily -Family $commandFamily)
             is_catalog_call = (Test-IsCatalogCommand -CommandId $commandId)
+            is_llmstxt_call = ($commandId -eq "cli.llmstxt")
             brief_field = $briefField
             brief_value = $briefValue
             input_brief_field = $inputBriefField
@@ -386,11 +447,24 @@ function Get-TranscriptTimelineRows {
         $first = $ordered[0]
         $firstEdit = @($ordered | Where-Object { $_.is_edit_like_call } | Select-Object -First 1)
         $firstEditIndex = if ($firstEdit.Count -eq 0) { $null } else { [int]$firstEdit[0].event_index }
+        $firstLlmstxt = @($ordered | Where-Object { $_.is_llmstxt_call } | Select-Object -First 1)
+        $firstLlmstxtIndex = if ($firstLlmstxt.Count -eq 0) { $null } else { [int]$firstLlmstxt[0].event_index }
+        $runHasDiff = Test-RunHasNonEmptyDiff -TranscriptPath ([string]$group.Name)
 
         $rowsBeforeEdit = if ($firstEdit.Count -eq 0) {
             @($ordered)
         } else {
             @($ordered | Where-Object { [int]$_.event_index -lt $firstEditIndex })
+        }
+
+        $llmstxtTotal = @($ordered | Where-Object { $_.is_llmstxt_call }).Count
+        $llmstxtBeforeFirstEdit = @($rowsBeforeEdit | Where-Object { $_.is_llmstxt_call }).Count
+        $mutationChannel = if ($null -ne $firstEditIndex) {
+            "roslyn_semantic_edit"
+        } elseif ($runHasDiff) {
+            "text_patch_or_non_roslyn_edit"
+        } else {
+            "no_mutation_observed"
         }
 
         $timeline.Add([pscustomobject]@{
@@ -399,12 +473,19 @@ function Get-TranscriptTimelineRows {
                 task = [string]$first.task
                 source = [string]$first.source
                 first_roslyn_event_index = [int]$first.event_index
+                first_llmstxt_event_index = $firstLlmstxtIndex
                 first_edit_event_index = $firstEditIndex
                 has_edit_call = ($null -ne $firstEditIndex)
                 roslyn_calls_total = (($ordered | Measure-Object).Count)
                 roslyn_calls_before_first_edit = (($rowsBeforeEdit | Measure-Object).Count)
                 discovery_calls_before_first_edit = @($rowsBeforeEdit | Where-Object { $_.is_discovery_call }).Count
                 list_commands_before_first_edit = @($rowsBeforeEdit | Where-Object { $_.is_catalog_call }).Count
+                llmstxt_calls_total = $llmstxtTotal
+                llmstxt_calls_before_first_edit = $llmstxtBeforeFirstEdit
+                has_llmstxt_call = ($llmstxtTotal -gt 0)
+                has_llmstxt_before_first_edit = ($llmstxtBeforeFirstEdit -gt 0)
+                run_has_diff = $runHasDiff
+                mutation_channel = $mutationChannel
             }) | Out-Null
     }
 
@@ -421,10 +502,17 @@ function Get-TimelineSummary {
         return [ordered]@{
             transcript_count = 0
             transcripts_with_edit_calls = 0
+            transcripts_with_llmstxt_calls = 0
+            transcripts_with_llmstxt_before_first_edit = 0
             avg_roslyn_calls_per_transcript = $null
             avg_roslyn_calls_before_first_edit = $null
             avg_discovery_calls_before_first_edit = $null
             avg_list_commands_before_first_edit = $null
+            avg_llmstxt_calls_per_transcript = $null
+            avg_llmstxt_calls_before_first_edit = $null
+            mutation_channel_roslyn_semantic_edit = 0
+            mutation_channel_text_patch_or_non_roslyn_edit = 0
+            mutation_channel_no_mutation_observed = 0
         }
     }
 
@@ -435,10 +523,17 @@ function Get-TimelineSummary {
     return [ordered]@{
         transcript_count = $timelineCount
         transcripts_with_edit_calls = $withEditCount
+        transcripts_with_llmstxt_calls = @($timelineRows | Where-Object { $_.has_llmstxt_call }).Count
+        transcripts_with_llmstxt_before_first_edit = @($timelineRows | Where-Object { $_.has_llmstxt_before_first_edit }).Count
         avg_roslyn_calls_per_transcript = Get-NullableAverage -Values @($timelineRows | ForEach-Object { [double]$_.roslyn_calls_total })
         avg_roslyn_calls_before_first_edit = Get-NullableAverage -Values @($rowsForBeforeEdit | ForEach-Object { [double]$_.roslyn_calls_before_first_edit })
         avg_discovery_calls_before_first_edit = Get-NullableAverage -Values @($rowsForBeforeEdit | ForEach-Object { [double]$_.discovery_calls_before_first_edit })
         avg_list_commands_before_first_edit = Get-NullableAverage -Values @($rowsForBeforeEdit | ForEach-Object { [double]$_.list_commands_before_first_edit })
+        avg_llmstxt_calls_per_transcript = Get-NullableAverage -Values @($timelineRows | ForEach-Object { [double]$_.llmstxt_calls_total })
+        avg_llmstxt_calls_before_first_edit = Get-NullableAverage -Values @($rowsForBeforeEdit | ForEach-Object { [double]$_.llmstxt_calls_before_first_edit })
+        mutation_channel_roslyn_semantic_edit = @($timelineRows | Where-Object { $_.mutation_channel -eq "roslyn_semantic_edit" }).Count
+        mutation_channel_text_patch_or_non_roslyn_edit = @($timelineRows | Where-Object { $_.mutation_channel -eq "text_patch_or_non_roslyn_edit" }).Count
+        mutation_channel_no_mutation_observed = @($timelineRows | Where-Object { $_.mutation_channel -eq "no_mutation_observed" }).Count
     }
 }
 
@@ -479,10 +574,17 @@ function Get-GroupSummary {
         discovery_to_edit_ratio = if ($editLikeCalls -eq 0) { $null } else { [Math]::Round(([double]$discoveryCalls / [double]$editLikeCalls), 3) }
         transcript_count = $timeline.transcript_count
         transcripts_with_edit_calls = $timeline.transcripts_with_edit_calls
+        transcripts_with_llmstxt_calls = $timeline.transcripts_with_llmstxt_calls
+        transcripts_with_llmstxt_before_first_edit = $timeline.transcripts_with_llmstxt_before_first_edit
         avg_roslyn_calls_per_transcript = $timeline.avg_roslyn_calls_per_transcript
         avg_roslyn_calls_before_first_edit = $timeline.avg_roslyn_calls_before_first_edit
         avg_discovery_calls_before_first_edit = $timeline.avg_discovery_calls_before_first_edit
         avg_list_commands_before_first_edit = $timeline.avg_list_commands_before_first_edit
+        avg_llmstxt_calls_per_transcript = $timeline.avg_llmstxt_calls_per_transcript
+        avg_llmstxt_calls_before_first_edit = $timeline.avg_llmstxt_calls_before_first_edit
+        mutation_channel_roslyn_semantic_edit = $timeline.mutation_channel_roslyn_semantic_edit
+        mutation_channel_text_patch_or_non_roslyn_edit = $timeline.mutation_channel_text_patch_or_non_roslyn_edit
+        mutation_channel_no_mutation_observed = $timeline.mutation_channel_no_mutation_observed
     }
 }
 
@@ -596,7 +698,7 @@ $timelineRows = @(Get-TranscriptTimelineRows -Rows $records)
 $timelineExamples = @(
     $timelineRows |
     Sort-Object -Property @{ Expression = "discovery_calls_before_first_edit"; Descending = $true }, @{ Expression = "roslyn_calls_total"; Descending = $true } |
-    Select-Object -First 10 lane, task, source, roslyn_calls_total, roslyn_calls_before_first_edit, discovery_calls_before_first_edit, list_commands_before_first_edit, first_edit_event_index
+    Select-Object -First 10 lane, task, source, roslyn_calls_total, roslyn_calls_before_first_edit, discovery_calls_before_first_edit, list_commands_before_first_edit, llmstxt_calls_before_first_edit, first_edit_event_index, mutation_channel
 )
 
 $examples = @(
@@ -659,6 +761,8 @@ $markdown.Add("| Discovery calls | $($report.overall.discovery_calls) |")
 $markdown.Add("| Edit-like calls | $($report.overall.edit_like_calls) |")
 $markdown.Add("| Helper calls | $($report.overall.helper_calls) |")
 $markdown.Add("| list-commands calls | $($report.overall.list_commands_calls) |")
+$markdown.Add("| Transcripts with llmstxt calls | $($report.overall.transcripts_with_llmstxt_calls) |")
+$markdown.Add("| Transcripts with llmstxt before first edit | $($report.overall.transcripts_with_llmstxt_before_first_edit) |")
 $markdown.Add("| Discovery/Edit ratio | $($report.overall.discovery_to_edit_ratio) |")
 $markdown.Add("| Transcript count | $($report.overall.transcript_count) |")
 $markdown.Add("| Transcripts with edit calls | $($report.overall.transcripts_with_edit_calls) |")
@@ -666,23 +770,28 @@ $markdown.Add("| Avg Roslyn calls/transcript | $($report.overall.avg_roslyn_call
 $markdown.Add("| Avg Roslyn calls before first edit | $($report.overall.avg_roslyn_calls_before_first_edit) |")
 $markdown.Add("| Avg discovery calls before first edit | $($report.overall.avg_discovery_calls_before_first_edit) |")
 $markdown.Add("| Avg list-commands before first edit | $($report.overall.avg_list_commands_before_first_edit) |")
+$markdown.Add("| Avg llmstxt calls/transcript | $($report.overall.avg_llmstxt_calls_per_transcript) |")
+$markdown.Add("| Avg llmstxt calls before first edit | $($report.overall.avg_llmstxt_calls_before_first_edit) |")
+$markdown.Add("| Mutation channel: roslyn_semantic_edit | $($report.overall.mutation_channel_roslyn_semantic_edit) |")
+$markdown.Add("| Mutation channel: text_patch_or_non_roslyn_edit | $($report.overall.mutation_channel_text_patch_or_non_roslyn_edit) |")
+$markdown.Add("| Mutation channel: no_mutation_observed | $($report.overall.mutation_channel_no_mutation_observed) |")
 $markdown.Add("| Avg output chars | $($report.overall.avg_output_chars) |")
 $markdown.Add("| Avg source chars | $($report.overall.avg_source_chars) |")
 $markdown.Add("")
 $markdown.Add("## By Lane")
 $markdown.Add("")
-$markdown.Add("| Lane | Count | Discovery Calls | Edit-like Calls | list-commands | Discovery/Edit | Avg discovery before first edit | Avg output chars |")
-$markdown.Add("|---|---:|---:|---:|---:|---:|---:|---:|")
+$markdown.Add("| Lane | Count | Discovery Calls | Edit-like Calls | list-commands | llmstxt tx | Discovery/Edit | Avg discovery before first edit | Avg llmstxt before first edit | Avg output chars |")
+$markdown.Add("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 foreach ($lane in $report.by_lane) {
-    $markdown.Add("| $($lane.lane) | $($lane.summary.count) | $($lane.summary.discovery_calls) | $($lane.summary.edit_like_calls) | $($lane.summary.list_commands_calls) | $($lane.summary.discovery_to_edit_ratio) | $($lane.summary.avg_discovery_calls_before_first_edit) | $($lane.summary.avg_output_chars) |")
+    $markdown.Add("| $($lane.lane) | $($lane.summary.count) | $($lane.summary.discovery_calls) | $($lane.summary.edit_like_calls) | $($lane.summary.list_commands_calls) | $($lane.summary.transcripts_with_llmstxt_calls) | $($lane.summary.discovery_to_edit_ratio) | $($lane.summary.avg_discovery_calls_before_first_edit) | $($lane.summary.avg_llmstxt_calls_before_first_edit) | $($lane.summary.avg_output_chars) |")
 }
 $markdown.Add("")
 $markdown.Add("## By Source")
 $markdown.Add("")
-$markdown.Add("| Source | Count | Effective brief=true | Discovery Calls | Edit-like Calls | list-commands | Discovery/Edit |")
-$markdown.Add("|---|---:|---:|---:|---:|---:|---:|")
+$markdown.Add("| Source | Count | Effective brief=true | Discovery Calls | Edit-like Calls | list-commands | llmstxt tx | Discovery/Edit |")
+$markdown.Add("|---|---:|---:|---:|---:|---:|---:|---:|")
 foreach ($source in $report.by_source) {
-    $markdown.Add("| $($source.source) | $($source.summary.count) | $($source.summary.effective_brief_true) | $($source.summary.discovery_calls) | $($source.summary.edit_like_calls) | $($source.summary.list_commands_calls) | $($source.summary.discovery_to_edit_ratio) |")
+    $markdown.Add("| $($source.source) | $($source.summary.count) | $($source.summary.effective_brief_true) | $($source.summary.discovery_calls) | $($source.summary.edit_like_calls) | $($source.summary.list_commands_calls) | $($source.summary.transcripts_with_llmstxt_calls) | $($source.summary.discovery_to_edit_ratio) |")
 }
 $markdown.Add("")
 $markdown.Add("## By Command")
@@ -696,10 +805,10 @@ foreach ($command in $report.by_command) {
 $markdown.Add("")
 $markdown.Add("## High Exploration Examples")
 $markdown.Add("")
-$markdown.Add("| Lane | Task | Source | Roslyn Calls | Calls Before First Edit | Discovery Before First Edit | list-commands Before First Edit | First Edit Event Index |")
-$markdown.Add("|---|---|---|---:|---:|---:|---:|---:|")
+$markdown.Add("| Lane | Task | Source | Roslyn Calls | Calls Before First Edit | Discovery Before First Edit | list-commands Before First Edit | llmstxt Before First Edit | First Edit Event Index | Mutation Channel |")
+$markdown.Add("|---|---|---|---:|---:|---:|---:|---:|---:|---|")
 foreach ($row in $report.timeline_examples) {
-    $markdown.Add("| $($row.lane) | $($row.task) | $($row.source) | $($row.roslyn_calls_total) | $($row.roslyn_calls_before_first_edit) | $($row.discovery_calls_before_first_edit) | $($row.list_commands_before_first_edit) | $($row.first_edit_event_index) |")
+    $markdown.Add("| $($row.lane) | $($row.task) | $($row.source) | $($row.roslyn_calls_total) | $($row.roslyn_calls_before_first_edit) | $($row.discovery_calls_before_first_edit) | $($row.list_commands_before_first_edit) | $($row.llmstxt_calls_before_first_edit) | $($row.first_edit_event_index) | $($row.mutation_channel) |")
 }
 
 $markdown | Set-Content -Path $OutputMarkdownPath

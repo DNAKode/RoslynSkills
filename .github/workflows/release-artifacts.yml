@@ -63,6 +63,29 @@ jobs:
             -Version '${{ steps.vars.outputs.version }}' `
             -OutputRoot '${{ steps.vars.outputs.artifact_dir }}'
 
+      - name: Verify expected release outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir='${{ steps.vars.outputs.artifact_dir }}'
+          version='${{ steps.vars.outputs.version }}'
+
+          expected=(
+            "$artifact_dir/roslynskills-bundle-$version.zip"
+            "$artifact_dir/DNAKode.RoslynSkills.Cli.$version.nupkg"
+            "$artifact_dir/DNAKode.XmlSkills.Cli.$version.nupkg"
+            "$artifact_dir/release-manifest.json"
+            "$artifact_dir/checksums.sha256"
+          )
+
+          for path in "${expected[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              echo "missing expected release output: $path" >&2
+              exit 1
+            fi
+            echo "verified: $path"
+          done
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:

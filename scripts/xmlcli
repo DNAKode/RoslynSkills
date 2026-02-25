@@ -4,26 +4,19 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
-cli_project="RoslynSkills.Cli"
-cli_project_path="$repo_root/src/RoslynSkills.Cli"
-cli_dll_name="RoslynSkills.Cli.dll"
-if [[ -f "$repo_root/src/RoslynSkills.Cli/RoslynSkills.Cli.csproj" ]]; then
-  :
-elif [[ -f "$repo_root/src/RoslynAgent.Cli/RoslynAgent.Cli.csproj" ]]; then
-  cli_project="RoslynAgent.Cli"
-  cli_project_path="$repo_root/src/RoslynAgent.Cli"
-  cli_dll_name="RoslynAgent.Cli.dll"
-else
-  echo "Could not resolve Roslyn CLI project under '$repo_root/src'." >&2
+cli_project_path="$repo_root/src/XmlSkills.Cli"
+cli_dll_name="XmlSkills.Cli.dll"
+if [[ ! -f "$repo_root/src/XmlSkills.Cli/XmlSkills.Cli.csproj" ]]; then
+  echo "Could not resolve XML CLI project under '$repo_root/src'." >&2
   exit 2
 fi
 
-use_published="${ROSCLI_USE_PUBLISHED:-}"
-refresh_published="${ROSCLI_REFRESH_PUBLISHED:-}"
-stale_check="${ROSCLI_STALE_CHECK:-0}"
+use_published="${XMLCLI_USE_PUBLISHED:-}"
+refresh_published="${XMLCLI_REFRESH_PUBLISHED:-}"
+stale_check="${XMLCLI_STALE_CHECK:-0}"
 
 if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" == "yes" || "$use_published" == "on" ]]; then
-  cache_dir="${ROSCLI_CACHE_DIR:-$repo_root/artifacts/roscli-cache}"
+  cache_dir="${XMLCLI_CACHE_DIR:-$repo_root/artifacts/xmlcli-cache}"
   cli_dll="$cache_dir/$cli_dll_name"
   stamp_file="$cache_dir/publish.stamp"
   need_publish=0
@@ -44,7 +37,7 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
       -print -quit | grep -q .; then
       need_publish=1
     else
-      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkills.slnx" "RoslynSkill.slnx"; do
+      for file in "Directory.Build.props" "Directory.Build.targets" "Directory.Packages.props" "global.json" "NuGet.config" "RoslynSkills.slnx"; do
         if [[ -f "$repo_root/$file" && "$repo_root/$file" -nt "$stamp_file" ]]; then
           need_publish=1
           break
@@ -60,8 +53,8 @@ if [[ "$use_published" == "1" || "$use_published" == "true" || "$use_published" 
   fi
   dotnet "$cli_dll" "$@"
 else
-  dotnet_run_no_build="${ROSCLI_DOTNET_RUN_NO_BUILD:-}"
-  dotnet_run_configuration="${ROSCLI_DOTNET_RUN_CONFIGURATION:-}"
+  dotnet_run_no_build="${XMLCLI_DOTNET_RUN_NO_BUILD:-}"
+  dotnet_run_configuration="${XMLCLI_DOTNET_RUN_CONFIGURATION:-}"
   run_args=(run --project "$cli_project_path")
   if [[ -n "$dotnet_run_configuration" ]]; then
     run_args+=(-c "$dotnet_run_configuration")

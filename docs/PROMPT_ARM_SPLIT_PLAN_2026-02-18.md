@@ -104,6 +104,15 @@ powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.
   -RoslynGuidanceProfile discovery-lite-v1 -FailOnMissingTreatmentRoslynUsage -CodexReasoningEffort low
 ```
 
+A2c tightened discovery-lite arm (`A2c`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 `
+  -OutputRoot artifacts/real-agent-runs/<bundle-discovery-lite-v2> `
+  -SkipClaude -TaskShape project -TaskId change-signature-named-args-v1 `
+  -RoslynGuidanceProfile discovery-lite-v2 -FailOnMissingTreatmentRoslynUsage -CodexReasoningEffort low
+```
+
 Trajectory analysis:
 
 ```powershell
@@ -139,6 +148,14 @@ powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Analyze-TrajectoryRo
 - 2026-02-19 (replicate rerun): ran discovery-lite bundle `20260219-arm-discovery-lite-v1-changesig-r3` (valid).
   - treatment: `round_trips=4`, `total_tokens=57827`, `duration_seconds=33.573`, `roslyn_successful_calls=3/3`.
   - trajectory: `discovery_calls=2`, `edit_like_calls=1`, `avg_roslyn_calls_before_first_edit=1`.
+- 2026-02-25 (N6 complete): upgraded trajectory analyzer to classify direct `llmstxt` bootstrap calls and transcript-level `mutation_channel` (`roslyn_semantic_edit` vs `text_patch_or_non_roslyn_edit` vs `no_mutation_observed`).
+  - re-analysis bundles (`trajectory-roslyn-analysis.v2.json`) confirm both valid `A3 tool-only-v1` runs used `llmstxt` bootstrap (`transcripts_with_llmstxt_calls=1`) and mutated via text patch (`mutation_channel_text_patch_or_non_roslyn_edit=1`, `edit_like_calls=0`).
+  - `A2b discovery-lite-v1` valid runs preserved semantic edit channel (`mutation_channel_roslyn_semantic_edit=1`), with lower pre-edit churn than `A2 skill-minimal`.
+- 2026-02-25 (N7 prep): added `discovery-lite-v2` harness profile in `Run-PairedAgentRuns.ps1` for CLI/MCP/LSP lanes with:
+  - optional single discovery call,
+  - first mutation within first 2 Roslyn calls,
+  - at-most-one conditional post-edit diagnostics call.
+  - smoke-validated profile selection via `Run-PairedAgentRuns.ps1 -RoslynGuidanceProfile discovery-lite-v2 -SkipCodex -SkipClaude`.
 
 Current interpretation:
 
@@ -146,7 +163,7 @@ Current interpretation:
 - Replicate-backed mean (`valid runs`): `A2b discovery-lite-v1` => `rt=4.5`, `tokens=68048`, `duration=42.143` (n=2; one invalid replicate excluded).
 - `A3` remains better on overhead than `A2` and slightly better than `A2b` on mean tokens/duration, but still shows semantic-edit underuse (`edit_like_calls=0` across both valid runs).
 - `A2b` preserves semantic-edit usage (`edit_like_calls=1` in both valid runs) but still incurs overhead from discovery/bootstrap and extra verification loops.
-- Reliability gap remains: success counters can overstate semantic-edit adoption unless mutation channel is tracked explicitly.
+- Reliability gap is now instrumented: mutation channel explicitly distinguishes Roslyn semantic edits from text-patch mutation paths.
 
 ## Current A1/A2/A3/A2b Snapshot (Replicate-Aware)
 
@@ -159,6 +176,6 @@ Current interpretation:
 
 ## Next Node Recommendation
 
+- `N7` (active): tighten discovery-lite prompt to cap diagnostics loops (single post-edit diagnostics pass unless errors) and compare against `tool-only-v1`.
 - `N5` (active): implement constrained bootstrap experiments (`llmstxt` section-targeting or one concise contract hint) and rerun A2b vs A3 with normalized control baselines.
-- `N7` (queued): tighten discovery-lite prompt to cap diagnostics loops (single post-edit diagnostics pass unless errors) and compare again.
-- `N6` (queued telemetry hardening): extend trajectory scoring to classify `llmstxt` bootstrap calls and to report a `mutation_channel` field (`roslyn_semantic_edit` vs `text_patch`) per treatment run.
+- `N6` (complete): trajectory scoring now classifies `llmstxt` bootstrap calls and reports transcript-level `mutation_channel`.

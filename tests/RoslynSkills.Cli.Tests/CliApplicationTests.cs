@@ -145,6 +145,11 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("\"Ok\": true", output);
         Assert.Contains("\"CommandId\": \"system.ping\"", output);
+        Assert.Contains("\"Telemetry\": {", output);
+        Assert.Contains("\"validate_ms\":", output);
+        Assert.Contains("\"execute_ms\":", output);
+        Assert.Contains("\"total_ms\":", output);
+        Assert.Contains("\"binary_launch_mode\":", output);
         Assert.Contains("\"Preview\": \"system.ping ok\"", output);
         Assert.Contains("\"Summary\": \"system.ping ok\"", output);
     }
@@ -978,6 +983,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("\"CommandId\": \"cli.quickstart\"", output);
         Assert.Contains("pit_of_success", output);
+        Assert.Contains("dotnet-inspect", output);
         Assert.Contains("session.open only supports .cs/.csx files", output);
         Assert.Contains("workspace_context.mode", output);
         Assert.Contains("--require-workspace true", output);
@@ -1004,6 +1010,9 @@ public sealed class CliApplicationTests
         Assert.Contains("catalog mode: `stable-only`", output);
         Assert.Contains("## Fast Start (Low Round-Trips)", output);
         Assert.Contains("`nav.find_symbol`", output);
+        Assert.Contains("Default Rich Lander companion", output);
+        Assert.Contains("dotnet-inspect", output);
+        Assert.Contains("dotnet-skills", output);
         Assert.Contains("`session.open` supports only `.cs/.csx` files.", output);
         Assert.DoesNotContain("`ctx.call_chain_slice`", output);
     }

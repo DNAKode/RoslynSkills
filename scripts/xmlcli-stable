@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+
+export XMLCLI_USE_PUBLISHED=1
+export XMLCLI_CACHE_DIR="${XMLCLI_STABLE_CACHE_DIR:-$repo_root/artifacts/xmlcli-stable-cache}"
+export XMLCLI_REFRESH_PUBLISHED="${XMLCLI_STABLE_REFRESH:-0}"
+export XMLCLI_STALE_CHECK="${XMLCLI_STABLE_STALE_CHECK:-0}"
+
+"$script_dir/xmlcli" "$@"

@@ -142,7 +142,7 @@ public sealed class FindSymbolCommand : IAgentCommand
                 max_snippet_chars = maxSnippetChars,
                 semantic_enrichment = true,
                 require_workspace = requireWorkspace,
-                workspace_context = BuildWorkspaceContextPayload(analysis.WorkspaceContext),
+                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             },
             total_matches = resultMatches.Count,
             matches = matchesPayload,
@@ -311,21 +311,6 @@ public sealed class FindSymbolCommand : IAgentCommand
             symbol_display: symbol.ToDisplayString(),
             symbol_id: symbolId,
             containing_symbol: symbol.ContainingSymbol?.ToDisplayString());
-    }
-
-    private static object BuildWorkspaceContextPayload(WorkspaceContextInfo context)
-    {
-        return new
-        {
-            mode = context.mode,
-            resolution_source = context.resolution_source,
-            requested_workspace_path = context.requested_workspace_path,
-            resolved_workspace_path = context.resolved_workspace_path,
-            project_path = context.project_path,
-            fallback_reason = context.fallback_reason,
-            attempted_workspace_paths = context.attempted_workspace_paths,
-            workspace_diagnostics = context.workspace_diagnostics,
-        };
     }
 
     private sealed record SymbolMatch(

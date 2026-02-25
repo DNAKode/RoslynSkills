@@ -75,6 +75,29 @@ jobs:
               -SkipTests
           }
 
+      - name: Verify expected release outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir='${{ steps.vars.outputs.artifact_dir }}'
+          version='${{ steps.vars.outputs.version }}'
+
+          expected=(
+            "$artifact_dir/roslynskills-bundle-$version.zip"
+            "$artifact_dir/DNAKode.RoslynSkills.Cli.$version.nupkg"
+            "$artifact_dir/DNAKode.XmlSkills.Cli.$version.nupkg"
+            "$artifact_dir/release-manifest.json"
+            "$artifact_dir/checksums.sha256"
+          )
+
+          for path in "${expected[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              echo "missing expected release output: $path" >&2
+              exit 1
+            fi
+            echo "verified: $path"
+          done
+
       - name: Upload release artifact bundle
         uses: actions/upload-artifact@v4
         with:
@@ -85,8 +108,10 @@ jobs:
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nuget-preview-${{ steps.vars.outputs.version }}
-          path: ${{ steps.vars.outputs.artifact_dir }}/*.nupkg
+          name: nuget-preview-packages-${{ steps.vars.outputs.version }}
+          path: |
+            ${{ steps.vars.outputs.artifact_dir }}/DNAKode.RoslynSkills.Cli.${{ steps.vars.outputs.version }}.nupkg
+            ${{ steps.vars.outputs.artifact_dir }}/DNAKode.XmlSkills.Cli.${{ steps.vars.outputs.version }}.nupkg
           if-no-files-found: error
 
       - name: Publish to NuGet.org
@@ -98,10 +123,23 @@ jobs:
             echo "NUGET_API_KEY secret is not set" >&2
             exit 1
           fi
-          dotnet nuget push ${{ steps.vars.outputs.artifact_dir }}/*.nupkg \
-            --api-key "$NUGET_API_KEY" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+
+          packages=(
+            "${{ steps.vars.outputs.artifact_dir }}/DNAKode.RoslynSkills.Cli.${{ steps.vars.outputs.version }}.nupkg"
+            "${{ steps.vars.outputs.artifact_dir }}/DNAKode.XmlSkills.Cli.${{ steps.vars.outputs.version }}.nupkg"
+          )
+
+          for package in "${packages[@]}"; do
+            if [ ! -f "$package" ]; then
+              echo "missing package for publish: $package" >&2
+              exit 1
+            fi
+
+            dotnet nuget push "$package" \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
 
       - name: Publish GitHub Release
         if: inputs.publish_release

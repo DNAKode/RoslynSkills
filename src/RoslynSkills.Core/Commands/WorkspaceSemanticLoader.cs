@@ -2,6 +2,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
+using System.Diagnostics;
 using System.Xml.Linq;
 
 namespace RoslynSkills.Core.Commands;
@@ -14,7 +15,11 @@ internal sealed record WorkspaceContextInfo(
     string? project_path,
     string? fallback_reason,
     IReadOnlyList<string> attempted_workspace_paths,
-    IReadOnlyList<string> workspace_diagnostics);
+    IReadOnlyList<string> workspace_diagnostics,
+    int workspace_load_duration_ms = 0,
+    int msbuild_registration_duration_ms = 0,
+    string workspace_cache_mode = "none",
+    bool workspace_cache_hit = false);
 
 internal sealed record WorkspaceSemanticLoadResult(
     string file_path,
@@ -42,16 +47,21 @@ internal static class WorkspaceSemanticLoader
         string? workspacePath,
         CancellationToken cancellationToken)
     {
+        Stopwatch workspaceLoadTimer = Stopwatch.StartNew();
         string normalizedFilePath = NormalizePath(filePath);
         WorkspaceCandidatePlan candidatePlan = BuildCandidatePlan(normalizedFilePath, workspacePath);
         List<string> attemptedWorkspacePaths = new();
         List<string> workspaceDiagnostics = new();
         string? fallbackReason = candidatePlan.plan_error;
+        int msbuildRegistrationDurationMs = 0;
 
         if (candidatePlan.candidates.Count > 0)
         {
+            Stopwatch registrationTimer = Stopwatch.StartNew();
             if (TryEnsureMsBuildRegistered(out string? registrationError))
             {
+                registrationTimer.Stop();
+                msbuildRegistrationDurationMs = (int)registrationTimer.ElapsedMilliseconds;
                 foreach (WorkspaceCandidate candidate in candidatePlan.candidates)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -116,7 +126,9 @@ internal static class WorkspaceSemanticLoader
                             workspace_diagnostics: candidateDiagnostics
                                 .Distinct(StringComparer.Ordinal)
                                 .Take(30)
-                                .ToArray());
+                                .ToArray(),
+                            workspace_load_duration_ms: (int)workspaceLoadTimer.ElapsedMilliseconds,
+                            msbuild_registration_duration_ms: msbuildRegistrationDurationMs);
 
                         return new WorkspaceSemanticLoadResult(
                             file_path: normalizedFilePath,
@@ -139,6 +151,8 @@ internal static class WorkspaceSemanticLoader
             }
             else
             {
+                registrationTimer.Stop();
+                msbuildRegistrationDurationMs = (int)registrationTimer.ElapsedMilliseconds;
                 fallbackReason = registrationError;
             }
         }
@@ -173,7 +187,9 @@ internal static class WorkspaceSemanticLoader
             project_path: null,
             fallback_reason: fallbackReason,
             attempted_workspace_paths: attemptedWorkspacePaths.ToArray(),
-            workspace_diagnostics: workspaceDiagnostics.ToArray());
+            workspace_diagnostics: workspaceDiagnostics.ToArray(),
+            workspace_load_duration_ms: (int)workspaceLoadTimer.ElapsedMilliseconds,
+            msbuild_registration_duration_ms: msbuildRegistrationDurationMs);
 
         return new WorkspaceSemanticLoadResult(
             file_path: normalizedFilePath,

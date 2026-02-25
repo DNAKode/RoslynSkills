@@ -6,11 +6,15 @@
     <Project Path="src/RoslynSkills.Core/RoslynSkills.Core.csproj" />
     <Project Path="src/RoslynSkills.McpServer/RoslynSkills.McpServer.csproj" />
     <Project Path="src/RoslynSkills.TransportServer/RoslynSkills.TransportServer.csproj" />
+    <Project Path="src/XmlSkills.Cli/XmlSkills.Cli.csproj" />
+    <Project Path="src/XmlSkills.Contracts/XmlSkills.Contracts.csproj" />
+    <Project Path="src/XmlSkills.Core/XmlSkills.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RoslynSkills.Benchmark.Tests/RoslynSkills.Benchmark.Tests.csproj" />
     <Project Path="tests/RoslynSkills.Cli.Tests/RoslynSkills.Cli.Tests.csproj" />
     <Project Path="tests/RoslynSkills.Core.Tests/RoslynSkills.Core.Tests.csproj" />
+    <Project Path="tests/XmlSkills.Cli.Tests/XmlSkills.Cli.Tests.csproj" />
   </Folder>
 </Solution>
 

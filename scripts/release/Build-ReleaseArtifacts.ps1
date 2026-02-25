@@ -80,21 +80,24 @@ $OutputRoot = (Resolve-Path $OutputRoot).Path
 
 $bundleRoot = Join-Path $OutputRoot "roslynskills-bundle"
 $cliPublishDir = Join-Path $bundleRoot "cli"
+$xmlCliPublishDir = Join-Path $bundleRoot "xmlcli"
 $mcpPublishDir = Join-Path $bundleRoot "mcp"
 $transportPublishDir = Join-Path $bundleRoot "transport"
 $binDir = Join-Path $bundleRoot "bin"
 $skillDir = Join-Path $bundleRoot "skills\roslynskills-research"
 $tightSkillDir = Join-Path $bundleRoot "skills\roslynskills-tight"
 
-foreach ($path in @($bundleRoot, $cliPublishDir, $mcpPublishDir, $transportPublishDir, $binDir, $skillDir, $tightSkillDir)) {
+foreach ($path in @($bundleRoot, $cliPublishDir, $xmlCliPublishDir, $mcpPublishDir, $transportPublishDir, $binDir, $skillDir, $tightSkillDir)) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
 $solutionPath = Join-Path $repoRoot "RoslynSkills.slnx"
 $cliProjectPath = Join-Path $repoRoot "src\RoslynSkills.Cli\RoslynSkills.Cli.csproj"
+$xmlCliProjectPath = Join-Path $repoRoot "src\XmlSkills.Cli\XmlSkills.Cli.csproj"
 $mcpProjectPath = Join-Path $repoRoot "src\RoslynSkills.McpServer\RoslynSkills.McpServer.csproj"
 $transportProjectPath = Join-Path $repoRoot "src\RoslynSkills.TransportServer\RoslynSkills.TransportServer.csproj"
 $toolPackageId = "DNAKode.RoslynSkills.Cli"
+$xmlToolPackageId = "DNAKode.XmlSkills.Cli"
 
 Write-Host ("VERSION={0}" -f $normalizedVersion)
 Write-Host ("OUTPUT_ROOT={0}" -f $OutputRoot)
@@ -108,12 +111,22 @@ if (-not $SkipTests) {
 & (Join-Path $repoRoot "scripts\\skills\\Validate-Skills.ps1")
 
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $cliProjectPath, "-c", $Configuration, "-o", $cliPublishDir, "--nologo")
+Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $xmlCliProjectPath, "-c", $Configuration, "-o", $xmlCliPublishDir, "--nologo")
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $mcpProjectPath, "-c", $Configuration, "-o", $mcpPublishDir, "--nologo")
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $transportProjectPath, "-c", $Configuration, "-o", $transportPublishDir, "--nologo")
 
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @(
     "pack",
     $cliProjectPath,
+    "-c", $Configuration,
+    "-o", $OutputRoot,
+    "--nologo",
+    "-p:Version=$normalizedVersion",
+    "-p:PackageVersion=$normalizedVersion"
+)
+Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @(
+    "pack",
+    $xmlCliProjectPath,
     "-c", $Configuration,
     "-o", $OutputRoot,
     "--nologo",
@@ -136,6 +149,23 @@ $roscliSh = @'
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dotnet "$script_dir/../cli/RoslynSkills.Cli.dll" "$@"
+'@
+
+$xmlcliCmd = @"
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+set "CLI_DLL=%SCRIPT_DIR%..\xmlcli\XmlSkills.Cli.dll"
+dotnet "%CLI_DLL%" %*
+set "EXIT_CODE=%ERRORLEVEL%"
+endlocal & exit /b %EXIT_CODE%
+"@
+
+$xmlcliSh = @'
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dotnet "$script_dir/../xmlcli/XmlSkills.Cli.dll" "$@"
 '@
 
 $mcpCmd = @"
@@ -174,6 +204,8 @@ dotnet "$script_dir/../transport/RoslynSkills.TransportServer.dll"
 
 $roscliCmdPath = Join-Path $binDir "roscli.cmd"
 $roscliShPath = Join-Path $binDir "roscli"
+$xmlcliCmdPath = Join-Path $binDir "xmlcli.cmd"
+$xmlcliShPath = Join-Path $binDir "xmlcli"
 $mcpCmdPath = Join-Path $binDir "roslyn-mcp.cmd"
 $mcpShPath = Join-Path $binDir "roslyn-mcp"
 $transportCmdPath = Join-Path $binDir "roslyn-transport.cmd"
@@ -181,12 +213,15 @@ $transportShPath = Join-Path $binDir "roslyn-transport"
 
 Set-Content -Path $roscliCmdPath -Value $roscliCmd -NoNewline
 Set-Content -Path $roscliShPath -Value $roscliSh -NoNewline
+Set-Content -Path $xmlcliCmdPath -Value $xmlcliCmd -NoNewline
+Set-Content -Path $xmlcliShPath -Value $xmlcliSh -NoNewline
 Set-Content -Path $mcpCmdPath -Value $mcpCmd -NoNewline
 Set-Content -Path $mcpShPath -Value $mcpSh -NoNewline
 Set-Content -Path $transportCmdPath -Value $transportCmd -NoNewline
 Set-Content -Path $transportShPath -Value $transportSh -NoNewline
 
 Set-ExecutableIfSupported -Path $roscliShPath
+Set-ExecutableIfSupported -Path $xmlcliShPath
 Set-ExecutableIfSupported -Path $mcpShPath
 Set-ExecutableIfSupported -Path $transportShPath
 
@@ -212,10 +247,12 @@ Version: $normalizedVersion
 
 Contents:
 - cli/: published RoslynSkills CLI tool package
+- xmlcli/: published XmlSkills CLI tool package
 - mcp/: published Roslyn MCP server
 - transport/: published persistent transport server
 - bin/: launchers
   - roscli(.cmd)
+  - xmlcli(.cmd)
   - roslyn-mcp(.cmd)
   - roslyn-transport(.cmd)
 - PIT_OF_SUCCESS.md
@@ -225,6 +262,7 @@ Contents:
 
 First command:
 - bin/roscli quickstart
+- bin/xmlcli llmstxt
 "@
 Set-Content -Path (Join-Path $bundleRoot "README.txt") -Value $bundleReadme
 
@@ -237,7 +275,8 @@ $manifest = [ordered]@{
         "roslynskills-bundle-$normalizedVersion.zip",
         "roslynskills-research-skill-$normalizedVersion.zip",
         "roslynskills-tight-skill-$normalizedVersion.zip",
-        "$toolPackageId.$normalizedVersion.nupkg"
+        "$toolPackageId.$normalizedVersion.nupkg",
+        "$xmlToolPackageId.$normalizedVersion.nupkg"
     )
 }
 $manifestPath = Join-Path $OutputRoot "release-manifest.json"

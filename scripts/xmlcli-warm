@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+cache_dir="${XMLCLI_CACHE_DIR:-$repo_root/artifacts/xmlcli-cache}"
+stamp_file="$cache_dir/publish.stamp"
+
+dotnet publish "$repo_root/src/XmlSkills.Cli" -c Release -o "$cache_dir" --nologo
+mkdir -p "$cache_dir"
+date -u +"%Y-%m-%dT%H:%M:%SZ" > "$stamp_file"
+echo "Xmlcli cache warmed: $cache_dir"

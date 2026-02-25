@@ -2,6 +2,7 @@ using RoslynSkills.Contracts;
 using RoslynSkills.Core;
 using System.Reflection;
 using System.Globalization;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -293,7 +294,8 @@ Workflow:
 """,
                     complementary_tools = new[]
                     {
-                        "For external package/framework API intelligence, use: dnx dotnet-inspect -y -- <command>",
+                        "Default Rich Lander .NET companion for API/dependency intelligence: dotnet-inspect (<command>, or dnx dotnet-inspect -y -- <command> if not installed).",
+                        "dotnet-skills packages assistant skills around dotnet-inspect; it is not the primary inspection CLI.",
                         "For in-repo semantic edits and diagnostics, use roscli.",
                     },
                     guardrails = new[]
@@ -385,6 +387,7 @@ Workflow:
         CancellationToken cancellationToken,
         TextReader stdin)
     {
+        Stopwatch totalTimer = Stopwatch.StartNew();
         (bool ok, string commandId, JsonElement input, CommandEnvelope? error) =
             await TryGetCommandAndInputAsync(args, stdin).ConfigureAwait(false);
         if (!ok)
@@ -402,9 +405,12 @@ Workflow:
             return 1;
         }
 
+        Stopwatch validateTimer = Stopwatch.StartNew();
         IReadOnlyList<CommandError> validationErrors = command.Validate(input);
+        validateTimer.Stop();
         if (validationErrors.Count > 0)
         {
+            totalTimer.Stop();
             await WriteEnvelopeAsync(
                 stdout,
                 new CommandEnvelope(
@@ -413,11 +419,19 @@ Workflow:
                     Version: EnvelopeVersion,
                     Data: null,
                     Errors: validationErrors,
-                    TraceId: null)).ConfigureAwait(false);
+                    TraceId: null,
+                    Telemetry: BuildCliTelemetry(
+                        validateMs: (int)validateTimer.ElapsedMilliseconds,
+                        executeMs: null,
+                        totalMs: (int)totalTimer.ElapsedMilliseconds,
+                        commandTelemetry: null))).ConfigureAwait(false);
             return 1;
         }
 
+        Stopwatch executeTimer = Stopwatch.StartNew();
         CommandExecutionResult result = await command.ExecuteAsync(input, cancellationToken).ConfigureAwait(false);
+        executeTimer.Stop();
+        totalTimer.Stop();
         await WriteEnvelopeAsync(
             stdout,
             new CommandEnvelope(
@@ -426,7 +440,12 @@ Workflow:
                 Version: EnvelopeVersion,
                 Data: result.Data,
                 Errors: result.Errors,
-                TraceId: null)).ConfigureAwait(false);
+                TraceId: null,
+                Telemetry: BuildCliTelemetry(
+                    validateMs: (int)validateTimer.ElapsedMilliseconds,
+                    executeMs: (int)executeTimer.ElapsedMilliseconds,
+                    totalMs: (int)totalTimer.ElapsedMilliseconds,
+                    commandTelemetry: result.Telemetry))).ConfigureAwait(false);
 
         return result.Ok ? 0 : 1;
     }
@@ -2422,7 +2441,8 @@ Workflow:
         sb.AppendLine();
         AppendLlmstxtCatalog(sb, visibleCommands, includeTraits: full);
         sb.AppendLine("## Complements");
-        sb.AppendLine("- Use `dnx dotnet-inspect -y -- <command>` for external package/framework API intelligence.");
+        sb.AppendLine("- Default Rich Lander companion for .NET API/dependency intelligence: `dotnet-inspect <command>` (or `dnx dotnet-inspect -y -- <command>` if not installed).");
+        sb.AppendLine("- `dotnet-skills` packages assistant skills around `dotnet-inspect`; it is not the primary inspection CLI.");
         sb.AppendLine("- Use `roscli` for in-repo semantic navigation, edits, diagnostics, and repair.");
         sb.AppendLine("- `roscli` is not a package index/version-diff tool; treat dotnet tools as complementary helpers.");
 
@@ -2470,6 +2490,48 @@ Workflow:
             advanced,
             experimental,
             unknown = commands.Count - stable - advanced - experimental,
+        };
+    }
+
+    private static object BuildCliTelemetry(
+        int validateMs,
+        int? executeMs,
+        int totalMs,
+        object? commandTelemetry)
+    {
+        return new
+        {
+            timing = new
+            {
+                validate_ms = validateMs,
+                execute_ms = executeMs,
+                total_ms = totalMs,
+            },
+            cache_context = new
+            {
+                binary_launch_mode = IsPublishedModeEnabled("ROSCLI_USE_PUBLISHED")
+                    ? "published_cache"
+                    : "dotnet_run",
+            },
+            command_telemetry = commandTelemetry,
+        };
+    }
+
+    private static bool IsPublishedModeEnabled(string envVarName)
+    {
+        string? raw = Environment.GetEnvironmentVariable(envVarName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "1" => true,
+            "true" => true,
+            "yes" => true,
+            "on" => true,
+            _ => false,
         };
     }
 
