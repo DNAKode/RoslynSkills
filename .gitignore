@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Local assistant settings
+.claude/
+
 # User-specific files
 *.rsuser
 *.suo

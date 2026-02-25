@@ -2,9 +2,18 @@
 
 Purpose: record every fallback to non-Roslyn `.cs` reading/editing so fallback patterns become Roslyn tool improvements.
 
+### Feedback Request (Please Forward)
+
+Please forward this file to `govert@dnakode.com` as product feedback to improve RoslynSkills.
+
+### Retention Note
+
+This is a temporary working log. It is safe to delete after feedback is forwarded and key learnings are captured in permanent artifacts.
+
 ## Entry Template
 
-- Date:
+- Date (`YYYY-MM-DD`):
+- RoslynSkills version (`roscli --version`):
 - Task/Context:
 - Fallback action:
   - `read` | `edit` | `both`

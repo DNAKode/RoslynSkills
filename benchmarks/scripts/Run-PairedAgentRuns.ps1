@@ -4,7 +4,7 @@ param(
     [string]$CodexModel = "",
     [AllowEmptyString()][ValidateSet("", "low", "medium", "high", "xhigh")][string]$CodexReasoningEffort = "",
     [string]$ClaudeModel = "",
-    [ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$RoslynGuidanceProfile = "standard",
+    [ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$RoslynGuidanceProfile = "standard",
     [string]$CliPublishConfiguration = "Release",
     [switch]$IncludeMcpTreatment,
     [switch]$IncludeClaudeLspTreatment,
@@ -3371,7 +3371,7 @@ $programContent = [string]$taskDefinition.program_content
 function Get-CliRoslynGuidanceBlock {
     param(
         [Parameter(Mandatory = $true)][ValidateSet("codex", "claude")][string]$Agent,
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$Profile
     )
 
     switch ($Profile) {
@@ -3562,27 +3562,70 @@ Only if blocked, run nav.find_symbol once.
         }
 
         "surgical" {
+            $taskEditHint = switch ($TaskId) {
+                "change-signature-named-args-v1" { "Use one focused edit.change_signature call for the Combine parameter rename (left -> primary)." }
+                "update-usings-cleanup-v1" { "Use one focused edit.update_usings call for Target.cs." }
+                "add-member-threshold-v1" { "Use one focused edit.add_member call on Profile." }
+                "replace-member-body-guard-v1" { "Use one focused edit.replace_member_body call on ParseCount." }
+                "create-file-audit-log-v1" { "Use one focused edit.create_file call for AuditLog.cs." }
+                default { "Use one focused edit.rename_symbol call for the requested symbol rename." }
+            }
+
+            $taskEditCommandCodex = switch ($TaskId) {
+                "change-signature-named-args-v1" {
+                    @"
+$payload = '{"file_path":"Target.cs","line":4,"column":16,"parameters":"int primary, int right","apply":true}'
+$payload | scripts\roscli.cmd run edit.change_signature --input-stdin --workspace-path TargetHarness.csproj --require-workspace true
+"@
+                }
+                default { $null }
+            }
+
+            $taskEditCommandBash = switch ($TaskId) {
+                "change-signature-named-args-v1" {
+                    @"
+printf '%s\n' '{"file_path":"Target.cs","line":4,"column":16,"parameters":"int primary, int right","apply":true}' | bash scripts/roscli run edit.change_signature --input-stdin --workspace-path TargetHarness.csproj --require-workspace true
+"@
+                }
+                default { $null }
+            }
+
+            $diagnosticHint = if ($TaskId -eq "create-file-audit-log-v1") {
+                "Run exactly one diagnostics verification pass covering both Target.cs and AuditLog.cs."
+            } else {
+                "Run exactly one diagnostics verification call with diag.get_file_diagnostics Target.cs."
+            }
+
             if ($Agent -eq "codex") {
                 return @"
-Roslyn helper scripts are available in this directory and recommended.
-Use the minimum Roslyn sequence:
-1) Run exactly one semantic rename+verify command first:
-- powershell.exe -ExecutionPolicy Bypass -File .\roslyn-rename-and-verify.ps1 -FilePath Target.cs -Line 3 -Column 17 -NewName Handle -OldName Process -ExpectedNewExact 2 -ExpectedOldExact 2 -RequireNoDiagnostics
-2) Do not call list-commands unless rename+verify fails.
-3) If fallback is required, use only:
-- scripts\roscli.cmd edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
-- scripts\roscli.cmd diag.get_file_diagnostics Target.cs
+Roslyn tooling is available via scripts\roscli.cmd and should be used before manual edits.
+Use the minimum task-aware Roslyn sequence:
+1) Run exactly one edit.* command that matches this task.
+- $taskEditHint
+$(if ($taskEditCommandCodex) { "Known-good command form (use as-is):`n$taskEditCommandCodex" } else { "" })
+2) $diagnosticHint
+3) Only if blocked, run one focused nav.find_symbol lookup to disambiguate, then retry the edit exactly once.
+Hard rules:
+- Do not call list-commands unless the first edit.* call fails.
+- Do not call describe-command unless the first edit.* call fails due argument/schema mismatch.
+- For change-signature tasks, prefer `run edit.change_signature --input-stdin` over positional argument forms.
+- Keep Roslyn calls sequential and bounded.
 "@
             }
 
             return @"
-Roslyn helper scripts are available in this directory and recommended.
-Use the minimum Roslyn sequence for Bash:
-1) Run semantic rename directly:
-- bash scripts/roscli edit.rename_symbol Target.cs 3 17 Handle --apply true --max-diagnostics 50
-2) Verify diagnostics:
-- bash scripts/roscli diag.get_file_diagnostics Target.cs
-3) Do not call list-commands unless these fail.
+Roslyn tooling is available via bash scripts/roscli and should be used before manual edits.
+Use the minimum task-aware Roslyn sequence:
+1) Run exactly one edit.* command that matches this task.
+- $taskEditHint
+$(if ($taskEditCommandBash) { "Known-good command form (use as-is):`n$taskEditCommandBash" } else { "" })
+2) $diagnosticHint
+3) Only if blocked, run one focused nav.find_symbol lookup to disambiguate, then retry the edit exactly once.
+Hard rules:
+- Do not call list-commands unless the first edit.* call fails.
+- Do not call describe-command unless the first edit.* call fails due argument/schema mismatch.
+- For change-signature tasks, prefer `run edit.change_signature --input-stdin` over positional argument forms.
+- Keep Roslyn calls sequential and bounded.
 "@
         }
         "skill-minimal" {
@@ -3815,6 +3858,69 @@ If blocked (pick exactly one):
 - roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
 "@
         }
+        "discovery-lite-v1" {
+            if ($Agent -eq "codex") {
+                return @"
+Roslyn tooling is available via scripts\roscli.cmd.
+Use discovery-lite mode:
+- Run at most ONE discovery command total (`llmstxt` or one `describe-command`, not both).
+- Make the first mutating Roslyn call within the first 3 Roslyn calls.
+- Keep calls sequential.
+
+Required sequence for this task:
+1) Discovery (choose exactly one):
+   - scripts\roscli.cmd llmstxt
+   OR
+   - scripts\roscli.cmd describe-command edit.change_signature
+2) Mutating semantic edit (workspace-bound):
+   $payload = '{"file_path":"Target.cs","line":4,"column":16,"parameters":"int primary, int right","apply":true}'
+   $payload | scripts\roscli.cmd run edit.change_signature --input-stdin --workspace-path TargetHarness.csproj --require-workspace true
+3) Verification (workspace-bound):
+   scripts\roscli.cmd diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+Do not run list-commands in this profile.
+"@
+            }
+
+            return @"
+Roslyn tooling is available via bash scripts/roscli.
+Use discovery-lite mode:
+- Run at most ONE discovery command total (`llmstxt` or one `describe-command`, not both).
+- Make the first mutating Roslyn call within the first 3 Roslyn calls.
+- Keep calls sequential.
+
+Required sequence for this task:
+1) Discovery (choose exactly one):
+   - bash scripts/roscli llmstxt
+   OR
+   - bash scripts/roscli describe-command edit.change_signature
+2) Mutating semantic edit (workspace-bound):
+   printf '%s\n' '{"file_path":"Target.cs","line":4,"column":16,"parameters":"int primary, int right","apply":true}' | bash scripts/roscli run edit.change_signature --input-stdin --workspace-path TargetHarness.csproj --require-workspace true
+3) Verification (workspace-bound):
+   bash scripts/roscli diag.get_file_diagnostics Target.cs --workspace-path TargetHarness.csproj --require-workspace true
+
+Do not run list-commands in this profile.
+"@
+        }
+        "tool-only-v1" {
+            if ($Agent -eq "codex") {
+                return @"
+Roslyn tooling is available at `scripts\roscli.cmd`.
+No command recipe is provided in this condition.
+If you choose to use Roslyn, bootstrap with one command:
+- scripts\roscli.cmd llmstxt
+Then continue with your own command discovery and task execution.
+"@
+            }
+
+            return @"
+Roslyn tooling is available at `bash scripts/roscli` (or `scripts\roscli.cmd` in PowerShell).
+No command recipe is provided in this condition.
+If you choose to use Roslyn, bootstrap with one command:
+- bash scripts/roscli llmstxt
+Then continue with your own command discovery and task execution.
+"@
+        }
         "schema-first" {
             if ($Agent -eq "codex") {
                 return @"
@@ -3865,7 +3971,7 @@ If validation fails, fix payload shape before continuing.
 
 function Get-McpRoslynGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$Profile
     )
 
     switch ($Profile) {
@@ -4075,6 +4181,32 @@ Final response must be 2 lines:
 - roslyn: attempted=<n_attempts> workspace_mode=<workspace|ad_hoc|unknown> diagnostics=<n_errors>/<n_warnings>
 "@
         }
+        "discovery-lite-v1" {
+            return @"
+Roslyn MCP resources are available.
+Use discovery-lite mode:
+- Run at most ONE discovery call (`roslyn://commands` OR one `roslyn://command-meta/*`, not both).
+- Make the first mutating edit URI call within the first 3 Roslyn MCP calls.
+- Keep calls sequential.
+
+For this task, prefer:
+1) Optional one-time discovery:
+   read_mcp_resource server=roslyn uri=roslyn://command-meta/edit.change_signature
+2) Mutating edit call:
+   read_mcp_resource server=roslyn uri=roslyn://command/edit.change_signature?file_path=Target.cs&line=4&column=16&parameters=int%20primary%2C%20int%20right&apply=true&workspace_path=TargetHarness.csproj&require_workspace=true
+3) Verification:
+   read_mcp_resource server=roslyn uri=roslyn://command/diag.get_file_diagnostics?file_path=Target.cs&workspace_path=TargetHarness.csproj&require_workspace=true
+"@
+        }
+        "tool-only-v1" {
+            return @"
+Roslyn MCP resources are available on `server=roslyn`.
+No command recipe is provided in this condition.
+If you choose to use MCP discovery, start with one catalog read:
+- read_mcp_resource server=roslyn uri=roslyn://commands
+Then continue with your own command selection and execution.
+"@
+        }
         "schema-first" {
             return @"
 Roslyn MCP resources are available and should be used contract-first.
@@ -4094,7 +4226,7 @@ If `TargetHarness.csproj` exists, append `workspace_path=TargetHarness.csproj&re
 
 function Get-ClaudeLspGuidanceBlock {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1")][string]$Profile
+        [Parameter(Mandatory = $true)][ValidateSet("standard", "brief-first", "brief-first-v2", "brief-first-v3", "brief-first-v4", "workspace-locked", "diagnostics-first", "edit-then-verify", "surgical", "skill-minimal", "skill-tight-v1", "skill-tight-v2", "skill-tight-v3", "schema-first", "operation-neutral-v1", "tool-only-v1", "discovery-lite-v1")][string]$Profile
     )
 
     switch ($Profile) {
@@ -4160,6 +4292,24 @@ If LSP tools are missing, continue with plain text edits only.
         "skill-tight-v2" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
         "skill-tight-v3" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
         "operation-neutral-v1" { return (Get-ClaudeLspGuidanceBlock -Profile "brief-first") }
+        "discovery-lite-v1" {
+            return @"
+C# LSP tools/plugins may be available.
+Use discovery-lite mode:
+- Run at most ONE discovery-oriented LSP call before the first edit.
+- Make the first mutating edit within the first 3 LSP/tool calls.
+- Keep calls sequential.
+Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
+"@
+        }
+        "tool-only-v1" {
+            return @"
+C# LSP tools/plugins may be available in this run.
+No command recipe is provided in this condition.
+Use your own tool discovery and execution strategy.
+Hard rule: do not call `roscli`, `scripts/roscli`, or `roslyn-*` helper scripts in this treatment-lsp lane.
+"@
+        }
         "schema-first" {
             return @"
 Use csharp-lsp tools contract-first:
@@ -4313,11 +4463,4 @@ $summaryMarkdownPath = Join-Path $bundleDirectory "paired-run-summary.md"
 Write-PairedRunSummaryMarkdown -Runs $runs.ToArray() -MarkdownPath $summaryMarkdownPath
 $summaryMarkdownFullPath = [System.IO.Path]::GetFullPath($summaryMarkdownPath)
 Write-Host ("SUMMARY_MARKDOWN={0}" -f $summaryMarkdownFullPath)
-
-
-
-
-
-
-
 

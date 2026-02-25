@@ -237,6 +237,8 @@ Acceptance gate:
 
 ### P8.1 Next Steps (2026-02-13): Roscli vs Base Comparator Refresh
 
+> **Note (2026-02-19):** Execution-priority tasks from this section are now tracked in the short-horizon DAG/arm-plan artifacts under `docs/`, while this section remains the long-form rationale and acceptance/validity gate reference.
+
 Objective:
 
 - Re-run roscli vs base comparisons with systematic variation across prompt posture, model, and reasoning effort.
@@ -281,6 +283,21 @@ Acceptance/validity gates (must hold before interpreting deltas):
 Outputs:
 
 - New version-stamped matrix markdown in `benchmarks/experiments/` and corresponding `RESEARCH_FINDINGS.md` update with artifact links.
+
+Feedback/logging governance to-do items (new):
+
+- Review how fallback feedback is handled end-to-end (capture, triage, retention, escalation path) and document ownership.
+- Validate whether `ROSLYN_FALLBACK_REFLECTION_LOG.md` is the right long-term artifact versus structured run artifacts, or should remain a temporary/session-local file.
+- Define write policy for fallback reflections: auto-write vs confirm-before-write (at least first write per session), including user-control and privacy expectations.
+- Run a focused web/docs review on agentic coding logging/state management patterns (state persistence, consent/confirmation, retention/deletion, auditability) and convert findings into concrete RoslynSkills policy updates.
+- Add acceptance gates for the decided policy (for example: explicit prompt wording, schema fields, deletion guidance, and tests/docs updates).
+
+Command-surface and state-management to-do items (new):
+
+- Evaluate adding a non-JSON, Unix/CLI-friendly output mode for selected commands so results can be piped and filtered in shell workflows (for example with `grep`), and decide whether to pair this with a global `--verbose`/`--diagnostic` style flag.
+- Revisit running-state/session-state management and validate whether current state lifecycle/isolation/cleanup behavior is working well in real agent loops.
+- Review command-result display redundancy in agent transcripts (starting with Codex CLI): keep `Ok` and value-bearing summary details, reduce repeated static command-name/status text, and compare Codex vs Claude display behavior before changing defaults.
+
 ## P9. Production Hardening and Distribution
 
 Objective:
@@ -354,8 +371,9 @@ Parallelization notes:
 `R-015` Define agent-in-loop run manifest schema with control/treatment conditions (P6/P8)  
 `R-016` Add Codex CLI and Claude Code runner logging for tool offered/used events (P6)  
 `R-017` Implement scorer for adoption metrics and post-run agent self-report fields (P6/P8)  
-`R-018` Build first realistic A/B trial pack on public OSS tasks (P8)
-`R-019` Read and reflect on arXiv:2602.12670; extract actionable implications for RoslynSkills benchmark/task design and command-surface evolution (P8/P10)
+`R-018` Build first realistic A/B trial pack on public OSS tasks (P8)  
+`R-019` Read and reflect on arXiv:2602.12670; extract actionable implications for RoslynSkills benchmark/task design and command-surface evolution (P8/P10)  
+`R-020` Investigate `nav.call_hierarchy` scope semantics: verify whether results remain project-scoped under workspace resolution even when `workspace_path` targets a solution, then decide expected behavior/docs/tests updates (P5/P8)
 
 ## 6. Command Language Design Work (Deep Focus)
 
