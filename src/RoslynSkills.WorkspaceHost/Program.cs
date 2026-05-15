@@ -620,6 +620,8 @@ internal static class Program
         }
 
         bool dirty = GetBoolProperty(dataElement, "dirty", defaultValue: false);
+        bool dirtyBefore = GetBoolProperty(dataElement, "dirty_before", defaultValue: dirty);
+        bool dirtyAfter = GetBoolProperty(dataElement, "dirty_after", defaultValue: dirty);
         bool requiresReload = GetBoolProperty(dataElement, "requires_reload", defaultValue: false);
         int projectCount = GetIntProperty(dataElement, "projects_loaded", defaultValue: 0);
         int documentCount = GetIntProperty(dataElement, "documents_loaded", defaultValue: 0);
@@ -634,8 +636,8 @@ internal static class Program
                 : "workspace_handle",
             RefreshPolicy: GetStringProperty(requestRoot, "refresh_policy") ?? WorkspaceHostProtocol.RefreshPolicy.Auto,
             RefreshAction: GetStringProperty(dataElement, "refresh_action") ?? WorkspaceHostProtocol.RefreshAction.None,
-            DirtyBefore: dirty,
-            DirtyAfter: dirty,
+            DirtyBefore: dirtyBefore,
+            DirtyAfter: dirtyAfter,
             RequiresReload: requiresReload,
             RequiresDesignTimeBuild: false,
             WorkspaceFingerprint: GetStringProperty(dataElement, "workspace_fingerprint"),

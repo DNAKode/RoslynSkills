@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using RoslynSkills.Contracts;
 
 namespace RoslynSkills.Core.Commands;
 
@@ -16,6 +17,11 @@ internal interface IWorkspaceHostStore
     IReadOnlyList<HostedWorkspace> List();
 
     WorkspaceStatus BuildStatus(HostedWorkspace hosted);
+
+    Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshAsync(
+        string handle,
+        WorkspaceStatus status,
+        CancellationToken cancellationToken);
 }
 
 internal static class WorkspaceHostStoreProvider
@@ -170,6 +176,89 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             CanIncrementallyUpdate: dirtyEntries.Length > 0 && !requiresReload);
     }
 
+    public async Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshAsync(
+        string handle,
+        WorkspaceStatus status,
+        CancellationToken cancellationToken)
+    {
+        HostedWorkspace hosted;
+        lock (_gate)
+        {
+            if (!_workspaces.TryGetValue(handle, out HostedWorkspace? current))
+            {
+                return new WorkspaceRefreshResult(
+                    Applied: false,
+                    RefreshAction: "none",
+                    UpdatedPaths: Array.Empty<string>(),
+                    StatusBefore: status,
+                    StatusAfter: status,
+                    Error: new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found."));
+            }
+
+            hosted = current;
+        }
+
+        string[] sourcePaths = status.Changes
+            .Where(change => string.Equals(change.DirtyKind, "source_change", StringComparison.OrdinalIgnoreCase) &&
+                             change.CanIncrementallyUpdate &&
+                             !change.RequiresReload &&
+                             change.Exists)
+            .Select(change => change.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (sourcePaths.Length == 0)
+        {
+            return new WorkspaceRefreshResult(
+                Applied: false,
+                RefreshAction: "none",
+                UpdatedPaths: Array.Empty<string>(),
+                StatusBefore: status,
+                StatusAfter: status);
+        }
+
+        (StaticAnalysisWorkspace? updatedWorkspace, IReadOnlyList<string> updatedPaths, CommandError? error) =
+            await hosted.Workspace.ApplyDocumentTextUpdatesAsync(
+                    sourcePaths,
+                    hosted.IncludeGenerated,
+                    Math.Max(1, hosted.TrackedSourcePaths.Count),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        if (error is not null || updatedWorkspace is null)
+        {
+            return new WorkspaceRefreshResult(
+                Applied: false,
+                RefreshAction: "none",
+                UpdatedPaths: updatedPaths,
+                StatusBefore: status,
+                StatusAfter: status,
+                Error: error ?? new CommandError("workspace_update_failed", "Incremental source refresh failed."));
+        }
+
+        IReadOnlyDictionary<string, DateTimeOffset?> trackedWriteTimes = SnapshotWriteTimes(hosted.TrackedPaths);
+        string fingerprint = ComputeFingerprint(updatedWorkspace, trackedWriteTimes);
+        hosted.ChangeTracker.ClearPaths(updatedPaths);
+        HostedWorkspace refreshed = hosted with
+        {
+            Workspace = updatedWorkspace,
+            LastRefreshUtc = DateTimeOffset.UtcNow,
+            WorkspaceFingerprint = fingerprint,
+            TrackedWriteTimes = trackedWriteTimes,
+        };
+
+        lock (_gate)
+        {
+            _workspaces[handle] = refreshed;
+        }
+
+        WorkspaceStatus statusAfter = BuildStatus(refreshed);
+        return new WorkspaceRefreshResult(
+            Applied: true,
+            RefreshAction: "incremental_document_update",
+            UpdatedPaths: updatedPaths,
+            StatusBefore: status,
+            StatusAfter: statusAfter);
+    }
+
     private static IReadOnlyDictionary<string, DateTimeOffset?> SnapshotWriteTimes(IEnumerable<string> paths)
     {
         Dictionary<string, DateTimeOffset?> snapshot = new(StringComparer.OrdinalIgnoreCase);
@@ -252,6 +341,14 @@ internal sealed record WorkspaceStatus(
     bool RequiresReload,
     bool CanIncrementallyUpdate);
 
+internal sealed record WorkspaceRefreshResult(
+    bool Applied,
+    string RefreshAction,
+    IReadOnlyList<string> UpdatedPaths,
+    WorkspaceStatus StatusBefore,
+    WorkspaceStatus StatusAfter,
+    CommandError? Error = null);
+
 internal sealed record WorkspaceChange(
     string Path,
     string DirtyKind,
@@ -327,6 +424,17 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         lock (_gate)
         {
             return _changes.Values.ToArray();
+        }
+    }
+
+    public void ClearPaths(IEnumerable<string> paths)
+    {
+        lock (_gate)
+        {
+            foreach (string path in paths.Select(Path.GetFullPath))
+            {
+                _changes.Remove(path);
+            }
         }
     }
 

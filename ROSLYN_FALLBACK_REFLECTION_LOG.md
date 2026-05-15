@@ -723,3 +723,28 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Core/Commands/WorkspaceStatusCommand.cs`
     - `src/RoslynSkills.WorkspaceHost/Program.cs`
     - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`
+
+- `2026-05-16`: Added incremental source refresh using Roslyn solution document text updates
+  - Task/Context: implement sequence item 11 by retaining a Roslyn `Solution` in hot workspace state, applying known source changes with `Solution.WithDocumentText`, rebuilding semantic indexes from the updated solution, clearing refreshed dirty paths, and validating daemon-routed semantic lookup after refresh.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+7a3af1eda8b1b09810fe4408f24eb4f8500ca4fb`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changes the workspace loader's retained semantic state, hot store mutation contract, refresh command behavior, daemon metadata projection, and tests. Current RoslynSkills commands do not provide a self-hosted workflow for evolving the hot workspace state model while simultaneously validating cross-process daemon behavior.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding Roslyn-backed incremental workspace mutations, including solution-state retention, document-id update wiring, dirty-entry cleanup, and post-refresh semantic lookup smoke tests.
+  - Proposed improvement:
+    - Add `maint.add_incremental_workspace_refresh` to generate solution-retention fields, refresh-state transitions, dirty path clearing, and hot semantic lookup validation for source-only changes.
+  - Expected impact:
+    - correctness: higher (known source edits now update the hot Roslyn solution instead of leaving stale semantic state).
+    - latency: lower because source-only edits avoid full solution reloads.
+    - token_count: lower because agents can use `workspace.refresh` as a compact semantic validation step after file edits.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Core/Commands/StaticAnalysisWorkspace.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceHostStore.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceRefreshCommand.cs`
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`

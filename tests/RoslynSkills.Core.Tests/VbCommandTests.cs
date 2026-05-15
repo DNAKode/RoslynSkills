@@ -761,10 +761,28 @@ public sealed class VbCommandTests
             Assert.True(sourceRefresh.Ok);
             using JsonDocument sourceDoc = JsonDocument.Parse(JsonSerializer.Serialize(sourceRefresh.Data));
             JsonElement sourceRoot = sourceDoc.RootElement;
-            Assert.True(sourceRoot.GetProperty("dirty").GetBoolean());
-            Assert.True(sourceRoot.GetProperty("can_incrementally_update").GetBoolean());
+            Assert.True(sourceRoot.GetProperty("dirty_before").GetBoolean());
+            Assert.False(sourceRoot.GetProperty("dirty_after").GetBoolean());
+            Assert.False(sourceRoot.GetProperty("dirty").GetBoolean());
+            Assert.Equal("incremental_document_update", sourceRoot.GetProperty("refresh_action").GetString());
             Assert.False(sourceRoot.GetProperty("requires_reload").GetBoolean());
-            Assert.Contains("source_change", sourceRoot.GetProperty("dirty_kinds").EnumerateArray().Select(item => item.GetString()));
+            Assert.Contains(Path.GetFullPath(appPath), sourceRoot.GetProperty("updated_paths").EnumerateArray().Select(item => item.GetString()));
+
+            FindSymbolCommand findAdded = new();
+            CommandExecutionResult addedSymbol = await findAdded.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    file_path = appPath,
+                    symbol_name = "AddedSourceMarker",
+                    workspace_handle = sourceHandle,
+                    require_workspace = true,
+                    brief = true,
+                }),
+                CancellationToken.None);
+
+            Assert.True(addedSymbol.Ok);
+            using JsonDocument addedDoc = JsonDocument.Parse(JsonSerializer.Serialize(addedSymbol.Data));
+            Assert.True(addedDoc.RootElement.GetProperty("total_matches").GetInt32() >= 1);
 
             await new WorkspaceCloseCommand().ExecuteAsync(
                 ToJsonElement(new { workspace_handle = sourceHandle }),

@@ -25,6 +25,7 @@ internal sealed class StaticAnalysisWorkspace
     public IReadOnlyDictionary<SyntaxTree, SemanticModel> SemanticModelsByTree { get; }
     public IReadOnlyDictionary<SyntaxTree, SourceText> SourceTextsByTree { get; }
     public IReadOnlyDictionary<string, SyntaxTree> SyntaxTreesByPath { get; }
+    public Solution? Solution { get; }
 
     private StaticAnalysisWorkspace(
         string workspacePath,
@@ -39,7 +40,8 @@ internal sealed class StaticAnalysisWorkspace
         IReadOnlyList<string> projectFilePaths,
         IReadOnlyDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
         IReadOnlyDictionary<SyntaxTree, SourceText> sourceTextsByTree,
-        IReadOnlyDictionary<string, SyntaxTree> syntaxTreesByPath)
+        IReadOnlyDictionary<string, SyntaxTree> syntaxTreesByPath,
+        Solution? solution)
     {
         WorkspacePath = workspacePath;
         ResolvedWorkspacePath = resolvedWorkspacePath;
@@ -54,6 +56,7 @@ internal sealed class StaticAnalysisWorkspace
         SemanticModelsByTree = semanticModelsByTree;
         SourceTextsByTree = sourceTextsByTree;
         SyntaxTreesByPath = syntaxTreesByPath;
+        Solution = solution;
     }
 
     public static async Task<(StaticAnalysisWorkspace? Workspace, CommandError? Error)> LoadAsync(
@@ -145,7 +148,8 @@ internal sealed class StaticAnalysisWorkspace
             projectFilePaths: Array.Empty<string>(),
             semanticModelsByTree: semanticModelsByTree,
             sourceTextsByTree: sourceTextsByTree,
-            syntaxTreesByPath: treesByPath);
+            syntaxTreesByPath: treesByPath,
+            solution: null);
         return (workspace, null);
     }
 
@@ -209,11 +213,91 @@ internal sealed class StaticAnalysisWorkspace
             return (null, new CommandError("workspace_load_failed", $"Failed to load workspace '{workspaceFilePath}': {ex.Message}"));
         }
 
+        Project[] projects = solution.Projects
+            .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (projects.Length == 0)
+        {
+            return (null, new CommandError("workspace_load_failed", $"Workspace '{workspaceFilePath}' did not load any projects."));
+        }
+
+        return await FromSolutionAsync(
+                solution,
+                requestedWorkspacePath,
+                workspaceFilePath,
+                rootDirectory,
+                analysisMode,
+                workspaceKind,
+                diagnostics.Distinct(StringComparer.Ordinal).Take(30).ToArray(),
+                includeGenerated,
+                maxFiles,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<(StaticAnalysisWorkspace? Workspace, IReadOnlyList<string> UpdatedPaths, CommandError? Error)> ApplyDocumentTextUpdatesAsync(
+        IEnumerable<string> sourcePaths,
+        bool includeGenerated,
+        int maxFiles,
+        CancellationToken cancellationToken)
+    {
+        if (Solution is null)
+        {
+            return (null, Array.Empty<string>(), new CommandError("workspace_update_not_supported", "Incremental document text update requires a solution-backed hot workspace."));
+        }
+
+        Solution updatedSolution = Solution;
+        List<string> updatedPaths = new();
+        foreach (string sourcePath in sourcePaths.Select(Path.GetFullPath).Distinct(PathComparer))
+        {
+            Document[] documents = FindDocuments(updatedSolution, sourcePath).ToArray();
+            if (documents.Length == 0)
+            {
+                return (null, updatedPaths, new CommandError("document_not_found", $"Document '{sourcePath}' was not found in the loaded solution."));
+            }
+
+            string source = await File.ReadAllTextAsync(sourcePath, cancellationToken).ConfigureAwait(false);
+            SourceText? previousText = await documents[0].GetTextAsync(cancellationToken).ConfigureAwait(false);
+            SourceText newText = SourceText.From(source, previousText.Encoding ?? System.Text.Encoding.UTF8);
+            foreach (Document document in documents)
+            {
+                updatedSolution = updatedSolution.WithDocumentText(document.Id, newText);
+            }
+
+            updatedPaths.Add(sourcePath);
+        }
+
+        (StaticAnalysisWorkspace? workspace, CommandError? error) = await FromSolutionAsync(
+                updatedSolution,
+                WorkspacePath,
+                ResolvedWorkspacePath,
+                RootDirectory,
+                AnalysisMode,
+                WorkspaceKind,
+                WorkspaceDiagnostics,
+                includeGenerated,
+                maxFiles,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return (workspace, updatedPaths, error);
+    }
+
+    private static async Task<(StaticAnalysisWorkspace? Workspace, CommandError? Error)> FromSolutionAsync(
+        Solution solution,
+        string requestedWorkspacePath,
+        string workspaceFilePath,
+        string rootDirectory,
+        string analysisMode,
+        string workspaceKind,
+        IReadOnlyList<string> diagnostics,
+        bool includeGenerated,
+        int maxFiles,
+        CancellationToken cancellationToken)
+    {
         List<SyntaxTree> trees = new();
         Dictionary<string, SyntaxTree> treesByPath = new(PathComparer);
         Dictionary<SyntaxTree, SemanticModel> semanticModelsByTree = new();
         Dictionary<SyntaxTree, SourceText> sourceTextsByTree = new();
-
         Project[] projects = solution.Projects
             .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -289,8 +373,25 @@ internal sealed class StaticAnalysisWorkspace
             projectFilePaths: projectFilePaths,
             semanticModelsByTree: semanticModelsByTree,
             sourceTextsByTree: sourceTextsByTree,
-            syntaxTreesByPath: treesByPath);
+            syntaxTreesByPath: treesByPath,
+            solution: solution);
         return (workspace, null);
+    }
+
+    private static IEnumerable<Document> FindDocuments(Solution solution, string filePath)
+    {
+        string normalizedPath = Path.GetFullPath(filePath);
+        foreach (Project project in solution.Projects)
+        {
+            foreach (Document document in project.Documents)
+            {
+                if (!string.IsNullOrWhiteSpace(document.FilePath) &&
+                    PathComparer.Equals(Path.GetFullPath(document.FilePath), normalizedPath))
+                {
+                    yield return document;
+                }
+            }
+        }
     }
 
     public bool TryGetTreeByPath(string filePath, out SyntaxTree? syntaxTree)
