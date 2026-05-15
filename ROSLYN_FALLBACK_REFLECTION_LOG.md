@@ -601,3 +601,27 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - Follow-up issue/test link:
     - `src/RoslynSkills.Cli/WorkspaceHostClient.cs`
     - `tests/RoslynSkills.Cli.Tests/WorkspaceHostClientTests.cs`
+
+- `2026-05-15`: Added daemon lifecycle commands using direct source edits
+  - Task/Context: implement sequence item 6 by adding `roscli daemon.start`, `daemon.status`, `daemon.stop`, and `daemon.restart`, plus a per-repo endpoint manifest and multi-client host loop so a daemon survives status probes until explicit shutdown.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+490641040d37ab4de12f7709f8495549743afd0c`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work spans CLI argument routing, daemon process management, cross-platform endpoint selection, host transport lifetime behavior, tests, and manual process validation. Current RoslynSkills commands do not provide a self-hosted workflow for lifecycle command addition plus host-loop refactoring.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding daemon lifecycle verbs from a host protocol, including endpoint manifest shape, process start/stop validation, and stale-daemon handling tests.
+  - Proposed improvement:
+    - Add `maint.add_daemon_lifecycle` to generate lifecycle command handlers, endpoint identity helpers, process manifests, and start/status/stop smoke tests.
+  - Expected impact:
+    - correctness: higher (daemon process state is now explicit and status/stop are protocol-backed).
+    - latency: lower once workspace commands and read-only commands route through the daemon.
+    - token_count: lower later because agents can start a hot host once and reuse it through stable lifecycle commands.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Cli/CliApplication.cs`
+    - `src/RoslynSkills.Cli/WorkspaceHostDaemonManager.cs`
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`

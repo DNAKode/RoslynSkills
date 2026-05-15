@@ -129,6 +129,45 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DaemonStartHelp_ReturnsLifecycleUsage()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "daemon.start", "--help" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("daemon.start", output);
+        Assert.Contains("--repo-root", output);
+        Assert.Contains("--host-path", output);
+    }
+
+    [Fact]
+    public async Task DaemonStatus_RejectsUnknownOption()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "daemon.status", "--bogus" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(1, exitCode);
+        Assert.Contains("\"CommandId\": \"daemon\"", output);
+        Assert.Contains("\"Code\": \"invalid_args\"", output);
+    }
+
+    [Fact]
     public async Task RunPing_ReturnsSuccessEnvelope()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());

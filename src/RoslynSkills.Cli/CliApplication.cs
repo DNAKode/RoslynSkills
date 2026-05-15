@@ -53,6 +53,10 @@ public sealed class CliApplication
             "describe-command" => await HandleDescribeCommandAsync(remainder, stdout).ConfigureAwait(false),
             "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
             "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
+            "daemon.start" => await HandleDaemonStartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "daemon.stop" => await HandleDaemonStopAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "daemon.restart" => await HandleDaemonRestartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "validate-input" => await HandleValidateInputAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
@@ -345,6 +349,144 @@ Workflow:
         }
 
         return 0;
+    }
+
+    private async Task<int> HandleDaemonStartAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+                Ok: true,
+                CommandId: "daemon.start",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    usage = "daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]",
+                    options = new[]
+                    {
+                        new { name = "--repo-root", summary = "Repo/workspace root used to derive the default daemon endpoint." },
+                        new { name = "--host-path", summary = "Explicit RoslynSkills.WorkspaceHost.dll path." },
+                    },
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+            return 0;
+        }
+
+        if (!TryGetDaemonOptions(args, allowHostPath: true, out string? repoRoot, out string? hostPath, out CommandEnvelope? error))
+        {
+            await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        CommandEnvelope envelope = await manager.StartAsync(repoRoot, hostPath, cancellationToken).ConfigureAwait(false);
+        await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
+        return envelope.Ok ? 0 : 1;
+    }
+
+    private async Task<int> HandleDaemonStatusAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+                Ok: true,
+                CommandId: "daemon.status",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    usage = "daemon.status [--repo-root <path>]",
+                    options = new[]
+                    {
+                        new { name = "--repo-root", summary = "Repo/workspace root used to derive the default daemon endpoint." },
+                    },
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+            return 0;
+        }
+
+        if (!TryGetDaemonOptions(args, allowHostPath: false, out string? repoRoot, out _, out CommandEnvelope? error))
+        {
+            await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        CommandEnvelope envelope = await manager.StatusAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
+        return envelope.Ok ? 0 : 1;
+    }
+
+    private async Task<int> HandleDaemonStopAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+                Ok: true,
+                CommandId: "daemon.stop",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    usage = "daemon.stop [--repo-root <path>]",
+                    options = new[]
+                    {
+                        new { name = "--repo-root", summary = "Repo/workspace root used to derive the default daemon endpoint." },
+                    },
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+            return 0;
+        }
+
+        if (!TryGetDaemonOptions(args, allowHostPath: false, out string? repoRoot, out _, out CommandEnvelope? error))
+        {
+            await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        CommandEnvelope envelope = await manager.StopAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
+        return envelope.Ok ? 0 : 1;
+    }
+
+    private async Task<int> HandleDaemonRestartAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetDaemonOptions(args, allowHostPath: true, out string? repoRoot, out string? hostPath, out CommandEnvelope? error))
+        {
+            await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        CommandEnvelope stop = await manager.StopAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        CommandEnvelope start = await manager.StartAsync(repoRoot, hostPath, cancellationToken).ConfigureAwait(false);
+        CommandEnvelope envelope = new(
+            Ok: start.Ok,
+            CommandId: "daemon.restart",
+            Version: EnvelopeVersion,
+            Data: new
+            {
+                stop = stop.Data,
+                start = start.Data,
+            },
+            Errors: start.Errors,
+            TraceId: null);
+        await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
+        return envelope.Ok ? 0 : 1;
     }
 
     private async Task<int> HandleValidateInputAsync(
@@ -643,6 +785,86 @@ Workflow:
         }
 
         return false;
+    }
+
+    private static bool TryGetDaemonOptions(
+        string[] args,
+        bool allowHostPath,
+        out string? repoRoot,
+        out string? hostPath,
+        out CommandEnvelope? error)
+    {
+        repoRoot = null;
+        hostPath = null;
+        error = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            string? inlineValue = null;
+            int equalsIndex = arg.IndexOf('=', StringComparison.Ordinal);
+            if (equalsIndex >= 0)
+            {
+                inlineValue = arg[(equalsIndex + 1)..];
+                arg = arg[..equalsIndex];
+            }
+
+            if (string.Equals(arg, "--repo-root", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out repoRoot))
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--repo-root' requires a value.");
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (string.Equals(arg, "--host-path", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!allowHostPath)
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--host-path' is only supported by daemon.start and daemon.restart.");
+                    return false;
+                }
+
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out hostPath))
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--host-path' requires a value.");
+                    return false;
+                }
+
+                continue;
+            }
+
+            error = ErrorEnvelope("daemon", "invalid_args", $"Unknown daemon option '{arg}'.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryReadCliOptionValue(
+        string[] args,
+        ref int index,
+        string? inlineValue,
+        out string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(inlineValue))
+        {
+            value = inlineValue;
+            return true;
+        }
+
+        if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            value = null;
+            return false;
+        }
+
+        index++;
+        value = args[index];
+        return true;
     }
 
     private static bool IsHelp(string value)
@@ -2645,6 +2867,10 @@ Workflow:
               describe-command <command-id>
               quickstart
               llmstxt [--full]
+              daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
+              daemon.status [--repo-root <path>]
+              daemon.stop [--repo-root <path>]
+              daemon.restart [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
               validate-input <command-id> [--input <json>|@<file>|-] [--input-stdin]
               run <command-id> [--input <json>|@<file>|-] [--input-stdin]
               <command-id> [simple positional args]

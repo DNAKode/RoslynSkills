@@ -41,14 +41,20 @@ internal static class Program
 
         return options.Transport switch
         {
-            "stdio" => await RunJsonLinesAsync(registry, Console.In, Console.Out, "stdio-jsonl").ConfigureAwait(false),
+            "stdio" => await RunStdioAsync(registry).ConfigureAwait(false),
             "named-pipe" => await RunNamedPipeAsync(registry, options.PipeName!).ConfigureAwait(false),
             "unix-socket" => await RunUnixSocketAsync(registry, options.SocketPath!).ConfigureAwait(false),
             _ => 2,
         };
     }
 
-    private static async Task<int> RunJsonLinesAsync(
+    private static async Task<int> RunStdioAsync(ICommandRegistry registry)
+    {
+        _ = await RunJsonLinesAsync(registry, Console.In, Console.Out, "stdio-jsonl").ConfigureAwait(false);
+        return 0;
+    }
+
+    private static async Task<bool> RunJsonLinesAsync(
         ICommandRegistry registry,
         TextReader input,
         TextWriter output,
@@ -73,30 +79,37 @@ internal static class Program
             bool shouldExit = await HandleRequestLineAsync(registry, line).ConfigureAwait(false);
             if (shouldExit)
             {
-                break;
+                return true;
             }
         }
 
-        return 0;
+        return false;
     }
 
     private static async Task<int> RunNamedPipeAsync(ICommandRegistry registry, string pipeName)
     {
-        using NamedPipeServerStream pipe = new(
-            pipeName,
-            PipeDirection.InOut,
-            maxNumberOfServerInstances: 1,
-            PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous);
-
-        await pipe.WaitForConnectionAsync().ConfigureAwait(false);
-        using StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-        await using StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+        while (true)
         {
-            AutoFlush = true,
-        };
+            using NamedPipeServerStream pipe = new(
+                pipeName,
+                PipeDirection.InOut,
+                maxNumberOfServerInstances: 1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous);
 
-        return await RunJsonLinesAsync(registry, reader, writer, "named-pipe-jsonl").ConfigureAwait(false);
+            await pipe.WaitForConnectionAsync().ConfigureAwait(false);
+            StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+            StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+            {
+                AutoFlush = true,
+            };
+
+            bool shouldExit = await RunJsonLinesAsync(registry, reader, writer, "named-pipe-jsonl").ConfigureAwait(false);
+            if (shouldExit)
+            {
+                return 0;
+            }
+        }
     }
 
     private static async Task<int> RunUnixSocketAsync(ICommandRegistry registry, string socketPath)
@@ -109,15 +122,22 @@ internal static class Program
             bound = true;
             listener.Listen(backlog: 1);
 
-            using Socket connection = await listener.AcceptAsync().ConfigureAwait(false);
-            await using NetworkStream stream = new(connection, ownsSocket: false);
-            using StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-            await using StreamWriter writer = new(stream, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+            while (true)
             {
-                AutoFlush = true,
-            };
+                using Socket connection = await listener.AcceptAsync().ConfigureAwait(false);
+                await using NetworkStream stream = new(connection, ownsSocket: false);
+                StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+                StreamWriter writer = new(stream, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+                {
+                    AutoFlush = true,
+                };
 
-            return await RunJsonLinesAsync(registry, reader, writer, "unix-socket-jsonl").ConfigureAwait(false);
+                bool shouldExit = await RunJsonLinesAsync(registry, reader, writer, "unix-socket-jsonl").ConfigureAwait(false);
+                if (shouldExit)
+                {
+                    return 0;
+                }
+            }
         }
         finally
         {
