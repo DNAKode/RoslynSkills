@@ -509,3 +509,26 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Contracts/WorkspaceHostProtocolContracts.cs`
     - `tests/RoslynSkills.Core.Tests/WorkspaceHostProtocolContractTests.cs`
     - `docs/ROSCLI_WORKSPACE_HOST_PROTOCOL_2026-05-15.md`
+
+- `2026-05-15`: Created initial hot workspace host executable using direct source edits
+  - Task/Context: implement sequence item 2 by adding `RoslynSkills.WorkspaceHost`, wiring it into the solution, exposing JSON-lines stdio handshake/status/tool-call/workspace lifecycle routing, and adding a process smoke test.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+984aa7e30f176655314fb7b513f9e953def9a14a`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The change creates a new executable project, solution entry, process-level test, and protocol adapter around existing command registry behavior. Current RoslynSkills commands do not provide a self-hosted workflow for adding a new project plus executable entry point and cross-project test reference.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for scaffolding a new RoslynSkills process host from an existing protocol contract, including solution registration, stdio harness, and smoke test.
+  - Proposed improvement:
+    - Add `maint.add_host_project` to create host projects from protocol contracts, wire solution/test references, and generate JSON-lines process tests.
+  - Expected impact:
+    - correctness: higher (new host surfaces can be scaffolded with protocol-conformant responses and process coverage).
+    - latency: lower (agents can create host-process slices without manual solution/test wiring).
+    - token_count: lower (fewer source sweeps for project scaffolding and protocol boilerplate).
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `src/RoslynSkills.WorkspaceHost/RoslynSkills.WorkspaceHost.csproj`
+    - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`

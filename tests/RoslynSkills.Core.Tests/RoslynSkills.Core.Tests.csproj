@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\RoslynSkills.Core\RoslynSkills.Core.csproj" />
+    <ProjectReference Include="..\..\src\RoslynSkills.WorkspaceHost\RoslynSkills.WorkspaceHost.csproj" />
   </ItemGroup>
 
 </Project>
