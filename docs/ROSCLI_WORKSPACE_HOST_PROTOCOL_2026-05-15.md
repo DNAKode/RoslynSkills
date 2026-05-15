@@ -1,0 +1,193 @@
+# Roscli Workspace Host Protocol
+
+Date: 2026-05-15
+
+Status: initial contract for `RoslynSkills.WorkspaceHost`
+
+## Purpose
+
+This protocol lets short-lived `roscli` invocations talk to a long-running local host that keeps a Roslyn solution hot. The host owns workspace lifetime and freshness. Commands still return normal RoslynSkills command envelopes.
+
+The machine-readable contract lives in:
+
+- `src/RoslynSkills.Contracts/WorkspaceHostProtocolContracts.cs`
+
+## Version
+
+Current protocol version:
+
+```text
+1.0
+```
+
+Clients and hosts must handshake before command execution.
+
+```json
+{
+  "protocol_version": "1.0",
+  "cli_version": "1.0.0",
+  "host_version": "1.0.0",
+  "command_schema_version": "1.0",
+  "capabilities": [
+    "workspace.preload",
+    "workspace.refresh",
+    "tool.call"
+  ]
+}
+```
+
+Compatible minor versions may proceed. Incompatible major versions must fail with `daemon_protocol_mismatch` or restart a compatible host when safe.
+
+## Request Envelope
+
+```json
+{
+  "id": "req-001",
+  "method": "tool/call",
+  "workspace_alias": "default",
+  "workspace_handle": "ws_abc",
+  "refresh_policy": "auto",
+  "command_id": "nav.find_symbol",
+  "input": {
+    "file_path": "src/App/Foo.cs",
+    "symbol_name": "Foo",
+    "require_workspace": true
+  }
+}
+```
+
+Required fields:
+
+- `id`
+- `method`
+
+Command calls also require:
+
+- `command_id`
+- `input`
+
+Workspace binding fields:
+
+- `workspace_alias`: human-stable local alias such as `default`
+- `workspace_handle`: opaque handle returned by `workspace.preload`
+
+The host should prefer `workspace_handle` when both alias and handle are supplied.
+
+## Methods
+
+```text
+host/handshake
+tool/list
+tool/call
+workspace/preload
+workspace/status
+workspace/refresh
+workspace/close
+daemon/status
+shutdown
+```
+
+## Refresh Policy
+
+```text
+none
+auto
+strict
+```
+
+`none` reports dirty state but does not refresh.
+
+`auto` applies incremental source updates when Roslyn can safely accept them. It fails if the host classifies the workspace as requiring reload.
+
+`strict` refreshes or reloads as needed and fails if freshness cannot be guaranteed.
+
+## Response Envelope
+
+```json
+{
+  "id": "req-001",
+  "ok": true,
+  "protocol_version": "1.0",
+  "method": "tool/call",
+  "elapsed_ms": 12.5,
+  "workspace": {
+    "alias": "default",
+    "workspace_handle": "ws_abc",
+    "workspace_kind": "slnx",
+    "solution_scoped": true,
+    "resolution_source": "workspace_handle",
+    "refresh_policy": "auto",
+    "refresh_action": "incremental_document_update",
+    "dirty_before": true,
+    "dirty_after": false,
+    "requires_reload": false,
+    "requires_design_time_build": false,
+    "workspace_fingerprint": "abc123",
+    "project_count": 3,
+    "document_count": 42,
+    "invalidated_paths": [
+      "src/App/Foo.cs"
+    ],
+    "workspace_diagnostics": []
+  },
+  "envelope": {
+    "Ok": true,
+    "CommandId": "nav.find_symbol",
+    "Version": "1.0",
+    "Data": {
+      "total_matches": 1
+    },
+    "Errors": [],
+    "TraceId": null
+  },
+  "errors": []
+}
+```
+
+`workspace` metadata is required for any request that binds or attempts to bind a hot workspace.
+
+## Refresh Actions
+
+```text
+none
+incremental_document_update
+reload
+failed
+```
+
+The host should use `incremental_document_update` only when it pushed changed source text into the current Roslyn `Solution`, for example via `WithDocumentText` or an equivalent workspace update API.
+
+## Failure Codes
+
+```text
+daemon_unavailable
+daemon_protocol_mismatch
+workspace_handle_not_found
+workspace_stale
+workspace_reload_required
+solution_required
+```
+
+Every failure should include a human/actionable next step. Examples:
+
+- `workspace_handle_not_found`: run `roscli workspace.status` or `roscli workspace.preload <solution>`.
+- `workspace_reload_required`: run `roscli workspace.refresh --mode reload`.
+- `solution_required`: rerun `workspace.preload` with a `.sln` or `.slnx` path.
+
+## Correctness Requirements
+
+For solution-scoped hot workspace claims:
+
+- `workspace_kind` must be `solution` or `slnx`.
+- `solution_scoped` must be `true`.
+- semantic commands must report `resolution_source = workspace_handle`.
+- hot reuse must report `refresh_policy` and `refresh_action`.
+- commands with `require_workspace=true` must not silently fall back to ad-hoc compilation.
+- dirty/reload state must be explicit in the response.
+
+## Implementation Notes
+
+The protocol intentionally keeps Roslyn invalidation inside Roslyn. The host only classifies filesystem changes and either:
+
+- applies source text changes to the loaded Roslyn `Solution`, or
+- marks the workspace as requiring reload for structural/configuration changes.

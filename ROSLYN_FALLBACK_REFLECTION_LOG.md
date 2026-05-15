@@ -486,3 +486,26 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`
     - `tests/RoslynSkills.Benchmark.Tests/AgentEvalRunValidatorTests.cs`
     - `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`
+
+- `2026-05-15`: Formalized hot workspace host protocol using direct source/docs edits
+  - Task/Context: start the comprehensive hot workspace implementation sequence by creating a versioned request/response/freshness protocol contract and a protocol spec document.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+47546a5b193f1c98002161054fb0985ff9e50fdc`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The change adds new shared protocol record types, contract tests, and docs. Current RoslynSkills commands do not provide a self-hosted workflow for creating cross-project protocol contracts and matching tests.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for creating a protocol contract from a design document and generating JSON shape tests.
+  - Proposed improvement:
+    - Add a maintainer command that scaffolds versioned contract records, protocol docs, and serialization tests from a schema description.
+  - Expected impact:
+    - correctness: higher (future daemon/client implementation has a tested contract).
+    - latency: neutral now, lower later once client/host can share stable metadata.
+    - token_count: lower in later implementation steps because protocol field names and failure modes are pinned.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Contracts/WorkspaceHostProtocolContracts.cs`
+    - `tests/RoslynSkills.Core.Tests/WorkspaceHostProtocolContractTests.cs`
+    - `docs/ROSCLI_WORKSPACE_HOST_PROTOCOL_2026-05-15.md`
