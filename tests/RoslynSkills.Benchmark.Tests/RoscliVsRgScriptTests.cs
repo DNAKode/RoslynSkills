@@ -55,6 +55,49 @@ public sealed class RoscliVsRgScriptTests
     }
 
     [Fact]
+    public void BenchmarkHotWorkspaceHost_IncludesCorrectnessGateFields()
+    {
+        string script = ReadScript("Benchmark-HotWorkspaceHost.ps1");
+
+        Assert.Contains("daemon_hot_workspace", script, StringComparison.Ordinal);
+        Assert.Contains("direct_workspace", script, StringComparison.Ordinal);
+        Assert.Contains("hot_uses_workspace_handle", script, StringComparison.Ordinal);
+        Assert.Contains("hot_uses_process_hot_cache", script, StringComparison.Ordinal);
+        Assert.Contains("hot_no_ad_hoc_fallback", script, StringComparison.Ordinal);
+        Assert.Contains("workspace.refresh", script, StringComparison.Ordinal);
+        Assert.Contains("--mode", script, StringComparison.Ordinal);
+        Assert.Contains("strict", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BenchmarkHotWorkspaceHost_IsValidPowerShell()
+    {
+        string repoRoot = FindRepoRoot();
+        string scriptPath = Path.Combine(repoRoot, "benchmarks", "scripts", "Benchmark-HotWorkspaceHost.ps1");
+
+        ProcessStartInfo psi = new()
+        {
+            FileName = ResolvePowerShellExecutable(),
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("-NoLogo");
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-Command");
+        psi.ArgumentList.Add("$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile($env:ROSLYNSKILLS_SCRIPT_UNDER_TEST, [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }");
+        psi.Environment["ROSLYNSKILLS_SCRIPT_UNDER_TEST"] = scriptPath;
+
+        using Process process = Process.Start(psi)!;
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.True(process.ExitCode == 0, $"PowerShell parse failed.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+    }
+
+    [Fact]
     public void AimsScenario_AnchorsTheKnownMemberLookupQueries()
     {
         string scenario = ReadScenario("roscli-vs-rg-aims-symbol-queries.json");

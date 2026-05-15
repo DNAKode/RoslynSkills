@@ -798,3 +798,25 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Core/Commands/WorkspaceHostStore.cs`
     - `src/RoslynSkills.WorkspaceHost/Program.cs`
     - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`
+
+- `2026-05-16`: Added hot-workspace benchmark gate and reports using direct source edits
+  - Task/Context: implement sequence item 14 by adding a benchmark script that compares direct workspace calls against daemon hot-workspace calls, emits JSON/Markdown reports, and gates the hot path on `workspace_handle`, `process_hot`, no ad-hoc fallback, direct success, and strict refresh success.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+84d997eca6cb5f55903111617e6c0f66ac199953`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work creates a PowerShell benchmark harness and updates benchmark script tests. Current RoslynSkills commands do not provide a self-hosted workflow for creating benchmark/report scripts and validating PowerShell parser/runtime behavior.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding benchmark gates that ties a plan's correctness claims to script output, parser tests, runtime smoke checks, and report fields.
+  - Proposed improvement:
+    - Add `maint.add_benchmark_gate` to scaffold benchmark scripts with JSON/Markdown outputs, correctness gate declarations, parser tests, and one-iteration smoke validation.
+  - Expected impact:
+    - correctness: higher because hot-workspace claims now have explicit pass/fail gate fields rather than informal smoke notes.
+    - latency: measurable because the report records direct and daemon hot elapsed samples side by side.
+    - token_count: neutral directly, lower indirectly by making benchmark evidence easier to consume from compact JSON/Markdown summaries.
+  - Follow-up issue/test link:
+    - `benchmarks/scripts/Benchmark-HotWorkspaceHost.ps1`
+    - `tests/RoslynSkills.Benchmark.Tests/RoscliVsRgScriptTests.cs`
