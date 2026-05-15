@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using RoslynSkills.Contracts;
 using RoslynSkills.Core;
+using RoslynSkills.Core.Commands;
 
 namespace RoslynSkills.WorkspaceHost;
 
@@ -534,6 +535,11 @@ internal static class Program
         }
 
         CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None).ConfigureAwait(false);
+        if (result.Ok)
+        {
+            await RefreshHotWorkspaceAfterStructuredEditAsync(command, input, result.Data).ConfigureAwait(false);
+        }
+
         UpdateAliasBindings(root, method, result.Data, result.Ok);
         object? responseData = BuildResponseData(commandId, result.Data, result.Ok);
         WorkspaceHostWorkspaceMetadata? workspaceMetadata = BuildWorkspaceMetadata(
@@ -582,6 +588,57 @@ internal static class Program
                 .ToArray(),
         };
     }
+
+    private static async Task RefreshHotWorkspaceAfterStructuredEditAsync(
+        IAgentCommand command,
+        JsonElement input,
+        object? data)
+    {
+        if (!command.Descriptor.MutatesState ||
+            data is null ||
+            !IsHotStructuredEditCommand(command.Descriptor.Id) ||
+            !TryGetProperty(input, "workspace_handle", out JsonElement workspaceHandleProperty) ||
+            workspaceHandleProperty.ValueKind != JsonValueKind.String)
+        {
+            return;
+        }
+
+        string? workspaceHandle = workspaceHandleProperty.GetString();
+        if (string.IsNullOrWhiteSpace(workspaceHandle))
+        {
+            return;
+        }
+
+        JsonElement dataElement = JsonSerializer.SerializeToElement(data, JsonOptions);
+        if (!GetBoolProperty(dataElement, "wrote_file", defaultValue: false))
+        {
+            return;
+        }
+
+        string? filePath = GetStringProperty(dataElement, "file_path");
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return;
+        }
+
+        IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
+        if (!workspaceStore.TryGet(workspaceHandle, out HostedWorkspace? hosted) || hosted is null)
+        {
+            return;
+        }
+
+        WorkspaceStatus status = workspaceStore.BuildStatus(hosted);
+        await workspaceStore.ApplyIncrementalSourceRefreshForPathsAsync(
+                workspaceHandle,
+                status,
+                new[] { filePath },
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private static bool IsHotStructuredEditCommand(string commandId)
+        => string.Equals(commandId, "edit.rename_symbol", StringComparison.Ordinal) ||
+           string.Equals(commandId, "edit.change_signature", StringComparison.Ordinal);
 
     private static IReadOnlyList<KeyValuePair<string, string>> SnapshotAliases()
     {

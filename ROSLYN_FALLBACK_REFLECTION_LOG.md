@@ -772,3 +772,29 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Core/Commands/WorkspaceRefreshCommand.cs`
     - `src/RoslynSkills.Cli/CliApplication.cs`
     - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`
+
+- `2026-05-16`: Added hot-workspace structured edit support using direct source edits
+  - Task/Context: implement sequence item 13 by routing `edit.rename_symbol` and `edit.change_signature` through the daemon, allowing those commands to consume `workspace_handle`, and refreshing the process-hot workspace after an applied structured edit.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+330db906f88834bb14ea503908a96e8468c4ce99`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changes daemon routing, command input contracts, internal hot-workspace store APIs, host post-command lifecycle behavior, and host-process tests. Current RoslynSkills commands do not provide a self-hosted workflow for changing the tool's own cross-process edit lifecycle and validating that hot semantic state is refreshed after disk writes.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for promoting a structured edit command to hot-workspace support, including CLI routing, `workspace_handle` contract updates, post-edit state refresh, and stale-state regression tests.
+  - Proposed improvement:
+    - Add `maint.promote_structured_edit_to_hot_workspace` to declare edit commands as daemon-capable, update command schemas/help, wire post-edit refresh from written file paths, and generate host-process stale-state tests.
+  - Expected impact:
+    - correctness: higher because applied structured edits no longer leave the daemon's semantic workspace stale for the next symbol query.
+    - latency: lower because edit/read/edit loops can stay on the process-hot solution instead of reloading after each edit.
+    - token_count: lower because agents can keep using `ROSCLI_WORKSPACE_ALIAS=default` and short edit/read commands without carrying workspace paths or handles repeatedly.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Cli/CliApplication.cs`
+    - `src/RoslynSkills.Core/Commands/RenameSymbolCommand.cs`
+    - `src/RoslynSkills.Core/Commands/ChangeSignatureCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceHostStore.cs`
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`

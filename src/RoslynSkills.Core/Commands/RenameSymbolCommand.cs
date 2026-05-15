@@ -30,6 +30,7 @@ public sealed class RenameSymbolCommand : IAgentCommand
         }
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!SyntaxFacts.IsValidIdentifier(newName))
@@ -81,12 +82,18 @@ public sealed class RenameSymbolCommand : IAgentCommand
         }
 
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
         bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 500);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
+                filePath,
+                cancellationToken,
+                workspacePath,
+                workspaceHandle)
+            .ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {
@@ -179,6 +186,7 @@ public sealed class RenameSymbolCommand : IAgentCommand
         {
             file_path = analysis.FilePath,
             workspace_path = workspacePath,
+            workspace_handle = workspaceHandle,
             require_workspace = requireWorkspace,
             workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             line,

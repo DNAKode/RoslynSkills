@@ -26,6 +26,9 @@ public sealed class ChangeSignatureCommand : IAgentCommand
         InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredString(input, "parameters", errors, out _);
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         if (!File.Exists(filePath))
         {
             errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
@@ -65,6 +68,9 @@ public sealed class ChangeSignatureCommand : IAgentCommand
 
         bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 500);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
         string? newName = null;
         if (input.TryGetProperty("new_name", out JsonElement newNameProperty) && newNameProperty.ValueKind == JsonValueKind.String)
@@ -112,7 +118,18 @@ public sealed class ChangeSignatureCommand : IAgentCommand
             }
         }
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
+                filePath,
+                cancellationToken,
+                workspacePath,
+                workspaceHandle)
+            .ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
+
         if (line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
@@ -171,6 +188,10 @@ public sealed class ChangeSignatureCommand : IAgentCommand
         object data = new
         {
             file_path = filePath,
+            workspace_path = workspacePath,
+            workspace_handle = workspaceHandle,
+            require_workspace = requireWorkspace,
+            workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             line,
             column,
             member_name = method.Identifier.ValueText,

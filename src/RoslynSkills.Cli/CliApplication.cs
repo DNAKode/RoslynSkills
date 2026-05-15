@@ -651,7 +651,9 @@ Workflow:
             "nav.find_invocations" or
             "ctx.member_source" or
             "diag.get_file_diagnostics" or
-            "query.batch";
+            "query.batch" or
+            "edit.rename_symbol" or
+            "edit.change_signature";
 
     private static string GetDaemonRoutingMode()
     {
@@ -3560,7 +3562,7 @@ Workflow:
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
               - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
               - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
-              - Daemon-capable read-only commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
+              - Daemon-capable semantic commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
               - Set ROSCLI_DAEMON=required and ROSCLI_WORKSPACE_ALIAS=default to fail closed when a hot workspace is required.
               - Recommended first minute:
                 roscli llmstxt

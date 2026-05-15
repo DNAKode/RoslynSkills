@@ -23,6 +23,12 @@ internal interface IWorkspaceHostStore
         WorkspaceStatus status,
         CancellationToken cancellationToken);
 
+    Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshForPathsAsync(
+        string handle,
+        WorkspaceStatus status,
+        IReadOnlyList<string> sourcePaths,
+        CancellationToken cancellationToken);
+
     Task<WorkspaceRefreshResult> ReloadAsync(
         string handle,
         WorkspaceStatus statusBefore,
@@ -200,6 +206,29 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         WorkspaceStatus status,
         CancellationToken cancellationToken)
     {
+        string[] sourcePaths = status.Changes
+            .Where(change => string.Equals(change.DirtyKind, "source_change", StringComparison.OrdinalIgnoreCase) &&
+                             change.CanIncrementallyUpdate &&
+                             !change.RequiresReload &&
+                             change.Exists)
+            .Select(change => change.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return await ApplyIncrementalSourceRefreshForPathsAsync(
+                handle,
+                status,
+                sourcePaths,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshForPathsAsync(
+        string handle,
+        WorkspaceStatus status,
+        IReadOnlyList<string> sourcePaths,
+        CancellationToken cancellationToken)
+    {
         HostedWorkspace hosted;
         lock (_gate)
         {
@@ -217,15 +246,12 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             hosted = current;
         }
 
-        string[] sourcePaths = status.Changes
-            .Where(change => string.Equals(change.DirtyKind, "source_change", StringComparison.OrdinalIgnoreCase) &&
-                             change.CanIncrementallyUpdate &&
-                             !change.RequiresReload &&
-                             change.Exists)
-            .Select(change => change.Path)
+        string[] normalizedSourcePaths = sourcePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (sourcePaths.Length == 0)
+        if (normalizedSourcePaths.Length == 0)
         {
             return new WorkspaceRefreshResult(
                 Applied: false,
@@ -237,7 +263,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 
         (StaticAnalysisWorkspace? updatedWorkspace, IReadOnlyList<string> updatedPaths, CommandError? error) =
             await hosted.Workspace.ApplyDocumentTextUpdatesAsync(
-                    sourcePaths,
+                    normalizedSourcePaths,
                     hosted.IncludeGenerated,
                     Math.Max(1, hosted.TrackedSourcePaths.Count),
                     cancellationToken)
