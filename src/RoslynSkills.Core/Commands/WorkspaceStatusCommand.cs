@@ -28,14 +28,15 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
             return Task.FromResult(new CommandExecutionResult(null, errors));
         }
 
-        if (!WorkspaceHostStore.TryGet(handle, out HostedWorkspace? hosted) || hosted is null)
+        IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
+        if (!workspaceStore.TryGet(handle, out HostedWorkspace? hosted) || hosted is null)
         {
             return Task.FromResult(new CommandExecutionResult(
                 null,
                 new[] { new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found.") }));
         }
 
-        WorkspaceStatus status = WorkspaceHostStore.BuildStatus(hosted);
+        WorkspaceStatus status = workspaceStore.BuildStatus(hosted);
         object data = new
         {
             workspace_handle = hosted.Handle,
@@ -59,7 +60,7 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
             tracked_paths = hosted.TrackedPaths.Count,
             loaded_at_utc = hosted.LoadedAtUtc,
             last_refresh_utc = hosted.LastRefreshUtc,
-            store_workspace_count = WorkspaceHostStore.Count,
+            store_workspace_count = workspaceStore.Count,
         };
 
         return Task.FromResult(new CommandExecutionResult(data, Array.Empty<CommandError>()));

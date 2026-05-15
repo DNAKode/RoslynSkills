@@ -532,3 +532,28 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.WorkspaceHost/Program.cs`
     - `src/RoslynSkills.WorkspaceHost/RoslynSkills.WorkspaceHost.csproj`
     - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`
+
+- `2026-05-15`: Moved hot workspace handle storage behind a service abstraction using direct source edits
+  - Task/Context: implement sequence item 3 by replacing direct static handle-store access with an `IWorkspaceHostStore` abstraction, a default provider, and an in-memory implementation used by preload/status/close and semantic handle resolution.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+c38e7caabb86432f0be8995364da08589b496212`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The change is a self-hosted architectural refactor across internal store types, command implementations, and semantic loader plumbing. Current RoslynSkills commands do not yet provide a safe symbol-aware extract-interface/move-implementation workflow for its own command internals.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for extracting an internal service abstraction from an existing static helper and updating all same-symbol call sites with compile/test verification.
+  - Proposed improvement:
+    - Add `maint.extract_internal_service` with symbol-backed target selection, constructor/provider strategy options, and automatic same-solution usage validation.
+  - Expected impact:
+    - correctness: higher (future daemon, transport, and command layers can share the same workspace-store contract).
+    - latency: neutral now, lower later when long-running hosts can reuse a hot store cleanly.
+    - token_count: lower (future store changes can target an interface boundary instead of rediscovering static call sites).
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Core/Commands/WorkspaceHostStore.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspacePreloadCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceStatusCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceCloseCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceSemanticLoader.cs`

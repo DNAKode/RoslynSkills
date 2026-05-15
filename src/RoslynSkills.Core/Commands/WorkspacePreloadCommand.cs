@@ -80,8 +80,9 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
                 });
         }
 
-        HostedWorkspace hosted = WorkspaceHostStore.Add(loaded.Workspace, mode, includeGenerated);
-        WorkspaceStatus status = WorkspaceHostStore.BuildStatus(hosted);
+        IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
+        HostedWorkspace hosted = workspaceStore.Add(loaded.Workspace, mode, includeGenerated);
+        WorkspaceStatus status = workspaceStore.BuildStatus(hosted);
 
         object data = new
         {
@@ -107,7 +108,7 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
             invalidated_paths = status.InvalidatedPaths,
             loaded_at_utc = hosted.LoadedAtUtc,
             workspace_diagnostics = loaded.Workspace.WorkspaceDiagnostics,
-            store_workspace_count = WorkspaceHostStore.Count,
+            store_workspace_count = workspaceStore.Count,
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());

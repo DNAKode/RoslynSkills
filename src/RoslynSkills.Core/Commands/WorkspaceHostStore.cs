@@ -3,23 +3,41 @@ using System.Text;
 
 namespace RoslynSkills.Core.Commands;
 
-internal static class WorkspaceHostStore
+internal interface IWorkspaceHostStore
 {
-    private static readonly Dictionary<string, HostedWorkspace> Workspaces = new(StringComparer.Ordinal);
-    private static readonly object Gate = new();
+    int Count { get; }
 
-    public static int Count
+    HostedWorkspace Add(StaticAnalysisWorkspace workspace, string mode, bool includeGenerated);
+
+    bool TryGet(string handle, out HostedWorkspace? workspace);
+
+    bool TryRemove(string handle, out HostedWorkspace? workspace);
+
+    WorkspaceStatus BuildStatus(HostedWorkspace hosted);
+}
+
+internal static class WorkspaceHostStoreProvider
+{
+    public static IWorkspaceHostStore Current { get; } = new InMemoryWorkspaceHostStore();
+}
+
+internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
+{
+    private readonly Dictionary<string, HostedWorkspace> _workspaces = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
+
+    public int Count
     {
         get
         {
-            lock (Gate)
+            lock (_gate)
             {
-                return Workspaces.Count;
+                return _workspaces.Count;
             }
         }
     }
 
-    public static HostedWorkspace Add(StaticAnalysisWorkspace workspace, string mode, bool includeGenerated)
+    public HostedWorkspace Add(StaticAnalysisWorkspace workspace, string mode, bool includeGenerated)
     {
         DateTimeOffset loadedAt = DateTimeOffset.UtcNow;
         string[] trackedPaths = workspace.SyntaxTrees
@@ -45,31 +63,31 @@ internal static class WorkspaceHostStore
             TrackedPaths: trackedPaths,
             TrackedWriteTimes: trackedWriteTimes);
 
-        lock (Gate)
+        lock (_gate)
         {
-            Workspaces[handle] = hosted;
+            _workspaces[handle] = hosted;
         }
 
         return hosted;
     }
 
-    public static bool TryGet(string handle, out HostedWorkspace? workspace)
+    public bool TryGet(string handle, out HostedWorkspace? workspace)
     {
-        lock (Gate)
+        lock (_gate)
         {
-            return Workspaces.TryGetValue(handle, out workspace);
+            return _workspaces.TryGetValue(handle, out workspace);
         }
     }
 
-    public static bool TryRemove(string handle, out HostedWorkspace? workspace)
+    public bool TryRemove(string handle, out HostedWorkspace? workspace)
     {
-        lock (Gate)
+        lock (_gate)
         {
-            return Workspaces.Remove(handle, out workspace);
+            return _workspaces.Remove(handle, out workspace);
         }
     }
 
-    public static WorkspaceStatus BuildStatus(HostedWorkspace hosted)
+    public WorkspaceStatus BuildStatus(HostedWorkspace hosted)
     {
         List<string> invalidatedPaths = new();
         foreach (string path in hosted.TrackedPaths)

@@ -291,7 +291,8 @@ internal static class WorkspaceSemanticLoader
         Stopwatch workspaceLoadTimer,
         CancellationToken cancellationToken)
     {
-        if (!WorkspaceHostStore.TryGet(workspaceHandle, out HostedWorkspace? hosted) || hosted is null)
+        IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
+        if (!workspaceStore.TryGet(workspaceHandle, out HostedWorkspace? hosted) || hosted is null)
         {
             return null;
         }

@@ -28,7 +28,8 @@ public sealed class WorkspaceCloseCommand : IAgentCommand
             return Task.FromResult(new CommandExecutionResult(null, errors));
         }
 
-        if (!WorkspaceHostStore.TryRemove(handle, out _))
+        IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
+        if (!workspaceStore.TryRemove(handle, out _))
         {
             return Task.FromResult(new CommandExecutionResult(
                 null,
@@ -39,7 +40,7 @@ public sealed class WorkspaceCloseCommand : IAgentCommand
         {
             workspace_handle = handle,
             closed = true,
-            store_workspace_count = WorkspaceHostStore.Count,
+            store_workspace_count = workspaceStore.Count,
         };
 
         return Task.FromResult(new CommandExecutionResult(data, Array.Empty<CommandError>()));
