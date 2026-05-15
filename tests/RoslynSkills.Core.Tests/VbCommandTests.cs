@@ -729,6 +729,194 @@ public sealed class VbCommandTests
     }
 
     [Fact]
+    public async Task WorkspaceRefreshCommand_ClassifiesSourceAndStructuralChanges()
+    {
+        string root = CreateWorkspaceRoot("hot-refresh-classify");
+        (string solutionPath, string appPath, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+        string projectPath = Path.Combine(Path.GetDirectoryName(appPath)!, "App.csproj");
+        string? sourceHandle = null;
+        string? structuralHandle = null;
+
+        try
+        {
+            WorkspacePreloadCommand preload = new();
+            CommandExecutionResult sourcePreload = await preload.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    workspace_path = solutionPath,
+                    require_solution = true,
+                    max_files = 100,
+                }),
+                CancellationToken.None);
+            Assert.True(sourcePreload.Ok);
+            sourceHandle = GetWorkspaceHandle(sourcePreload);
+
+            await File.AppendAllTextAsync(appPath, Environment.NewLine + "public class AddedSourceMarker { }");
+
+            WorkspaceRefreshCommand refresh = new();
+            CommandExecutionResult sourceRefresh = await refresh.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = sourceHandle }),
+                CancellationToken.None);
+
+            Assert.True(sourceRefresh.Ok);
+            using JsonDocument sourceDoc = JsonDocument.Parse(JsonSerializer.Serialize(sourceRefresh.Data));
+            JsonElement sourceRoot = sourceDoc.RootElement;
+            Assert.True(sourceRoot.GetProperty("dirty").GetBoolean());
+            Assert.True(sourceRoot.GetProperty("can_incrementally_update").GetBoolean());
+            Assert.False(sourceRoot.GetProperty("requires_reload").GetBoolean());
+            Assert.Contains("source_change", sourceRoot.GetProperty("dirty_kinds").EnumerateArray().Select(item => item.GetString()));
+
+            await new WorkspaceCloseCommand().ExecuteAsync(
+                ToJsonElement(new { workspace_handle = sourceHandle }),
+                CancellationToken.None);
+            sourceHandle = null;
+
+            CommandExecutionResult structuralPreload = await preload.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    workspace_path = solutionPath,
+                    require_solution = true,
+                    max_files = 100,
+                }),
+                CancellationToken.None);
+            Assert.True(structuralPreload.Ok);
+            structuralHandle = GetWorkspaceHandle(structuralPreload);
+
+            await File.AppendAllTextAsync(projectPath, Environment.NewLine + "<!-- structure changed -->");
+
+            CommandExecutionResult structuralRefresh = await refresh.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = structuralHandle }),
+                CancellationToken.None);
+
+            Assert.True(structuralRefresh.Ok);
+            using JsonDocument structuralDoc = JsonDocument.Parse(JsonSerializer.Serialize(structuralRefresh.Data));
+            JsonElement structuralRoot = structuralDoc.RootElement;
+            Assert.True(structuralRoot.GetProperty("dirty").GetBoolean());
+            Assert.False(structuralRoot.GetProperty("can_incrementally_update").GetBoolean());
+            Assert.True(structuralRoot.GetProperty("requires_reload").GetBoolean());
+            Assert.Contains("project_structure_change", structuralRoot.GetProperty("dirty_kinds").EnumerateArray().Select(item => item.GetString()));
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(sourceHandle))
+            {
+                await new WorkspaceCloseCommand().ExecuteAsync(
+                    ToJsonElement(new { workspace_handle = sourceHandle }),
+                    CancellationToken.None);
+            }
+
+            if (!string.IsNullOrWhiteSpace(structuralHandle))
+            {
+                await new WorkspaceCloseCommand().ExecuteAsync(
+                    ToJsonElement(new { workspace_handle = structuralHandle }),
+                    CancellationToken.None);
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceRefreshCommand_ClassifiesNewSourceFileFromWatcherAsMembershipChange()
+    {
+        string root = CreateWorkspaceRoot("hot-refresh-watcher");
+        (string solutionPath, string appPath, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+        string newSourcePath = Path.Combine(Path.GetDirectoryName(appPath)!, "NewMember.cs");
+        string? handle = null;
+
+        try
+        {
+            WorkspacePreloadCommand preload = new();
+            CommandExecutionResult preloadResult = await preload.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    workspace_path = solutionPath,
+                    require_solution = true,
+                    max_files = 100,
+                }),
+                CancellationToken.None);
+            Assert.True(preloadResult.Ok);
+            handle = GetWorkspaceHandle(preloadResult);
+
+            await File.WriteAllTextAsync(newSourcePath, "public class NewMember { }");
+
+            WorkspaceRefreshCommand refresh = new();
+            JsonElement refreshRoot = await WaitForDirtyKindAsync(
+                refresh,
+                handle,
+                "unknown_or_membership_change");
+
+            Assert.True(refreshRoot.GetProperty("dirty").GetBoolean());
+            Assert.False(refreshRoot.GetProperty("can_incrementally_update").GetBoolean());
+            Assert.True(refreshRoot.GetProperty("requires_reload").GetBoolean());
+            Assert.Contains(
+                Path.GetFullPath(newSourcePath),
+                refreshRoot.GetProperty("invalidated_paths").EnumerateArray().Select(item => item.GetString()));
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(handle))
+            {
+                await new WorkspaceCloseCommand().ExecuteAsync(
+                    ToJsonElement(new { workspace_handle = handle }),
+                    CancellationToken.None);
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceRefreshCommand_IgnoresClientStateDirectory()
+    {
+        string root = CreateWorkspaceRoot("hot-refresh-client-state");
+        (string solutionPath, _, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+        string? handle = null;
+
+        try
+        {
+            WorkspacePreloadCommand preload = new();
+            CommandExecutionResult preloadResult = await preload.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    workspace_path = solutionPath,
+                    require_solution = true,
+                    max_files = 100,
+                }),
+                CancellationToken.None);
+            Assert.True(preloadResult.Ok);
+            handle = GetWorkspaceHandle(preloadResult);
+
+            string clientStateDirectory = Path.Combine(root, ".roslynskills");
+            Directory.CreateDirectory(clientStateDirectory);
+            await File.WriteAllTextAsync(Path.Combine(clientStateDirectory, "workspaces.json"), "{}");
+            await Task.Delay(250);
+
+            WorkspaceRefreshCommand refresh = new();
+            CommandExecutionResult result = await refresh.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle }),
+                CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement rootElement = doc.RootElement;
+            Assert.False(rootElement.GetProperty("dirty").GetBoolean());
+            Assert.Empty(rootElement.GetProperty("invalidated_paths").EnumerateArray());
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(handle))
+            {
+                await new WorkspaceCloseCommand().ExecuteAsync(
+                    ToJsonElement(new { workspace_handle = handle }),
+                    CancellationToken.None);
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task WorkspacePreloadCommand_RequireSolutionRejectsProjectScope()
     {
         string root = CreateWorkspaceRoot("hot-project-reject");
@@ -761,6 +949,40 @@ public sealed class VbCommandTests
         string root = Path.Combine(Path.GetTempPath(), $"roslynskills-vb-{suffix}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static string GetWorkspaceHandle(CommandExecutionResult result)
+    {
+        using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+        return doc.RootElement.GetProperty("workspace_handle").GetString()!;
+    }
+
+    private static async Task<JsonElement> WaitForDirtyKindAsync(
+        WorkspaceRefreshCommand refresh,
+        string handle,
+        string dirtyKind)
+    {
+        for (int i = 0; i < 25; i++)
+        {
+            CommandExecutionResult result = await refresh.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle }),
+                CancellationToken.None);
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement root = doc.RootElement.Clone();
+            if (root.GetProperty("dirty_kinds").EnumerateArray().Any(item => string.Equals(item.GetString(), dirtyKind, StringComparison.Ordinal)))
+            {
+                return root;
+            }
+
+            await Task.Delay(100);
+        }
+
+        CommandExecutionResult finalResult = await refresh.ExecuteAsync(
+            ToJsonElement(new { workspace_handle = handle }),
+            CancellationToken.None);
+        using JsonDocument finalDoc = JsonDocument.Parse(JsonSerializer.Serialize(finalResult.Data));
+        return finalDoc.RootElement.Clone();
     }
 
     private static async Task<(string solutionPath, string appPath, string libPath)> CreateTwoProjectSlnxWorkspaceAsync(string root)

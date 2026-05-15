@@ -21,6 +21,7 @@ internal sealed class StaticAnalysisWorkspace
     public int DocumentCount { get; }
     public IReadOnlyList<string> WorkspaceDiagnostics { get; }
     public IReadOnlyList<SyntaxTree> SyntaxTrees { get; }
+    public IReadOnlyList<string> ProjectFilePaths { get; }
     public IReadOnlyDictionary<SyntaxTree, SemanticModel> SemanticModelsByTree { get; }
     public IReadOnlyDictionary<SyntaxTree, SourceText> SourceTextsByTree { get; }
     public IReadOnlyDictionary<string, SyntaxTree> SyntaxTreesByPath { get; }
@@ -35,6 +36,7 @@ internal sealed class StaticAnalysisWorkspace
         int documentCount,
         IReadOnlyList<string> workspaceDiagnostics,
         IReadOnlyList<SyntaxTree> syntaxTrees,
+        IReadOnlyList<string> projectFilePaths,
         IReadOnlyDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
         IReadOnlyDictionary<SyntaxTree, SourceText> sourceTextsByTree,
         IReadOnlyDictionary<string, SyntaxTree> syntaxTreesByPath)
@@ -48,6 +50,7 @@ internal sealed class StaticAnalysisWorkspace
         DocumentCount = documentCount;
         WorkspaceDiagnostics = workspaceDiagnostics;
         SyntaxTrees = syntaxTrees;
+        ProjectFilePaths = projectFilePaths;
         SemanticModelsByTree = semanticModelsByTree;
         SourceTextsByTree = sourceTextsByTree;
         SyntaxTreesByPath = syntaxTreesByPath;
@@ -139,6 +142,7 @@ internal sealed class StaticAnalysisWorkspace
             documentCount: filePaths.Length,
             workspaceDiagnostics: Array.Empty<string>(),
             syntaxTrees: trees,
+            projectFilePaths: Array.Empty<string>(),
             semanticModelsByTree: semanticModelsByTree,
             sourceTextsByTree: sourceTextsByTree,
             syntaxTreesByPath: treesByPath);
@@ -213,6 +217,13 @@ internal sealed class StaticAnalysisWorkspace
         Project[] projects = solution.Projects
             .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        string[] projectFilePaths = projects
+            .Select(project => project.FilePath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.GetFullPath(path!))
+            .Distinct(PathComparer)
+            .OrderBy(path => path, PathComparer)
+            .ToArray();
         int documentCount = projects.Sum(project => project.Documents.Count());
 
         foreach (Project project in projects)
@@ -275,6 +286,7 @@ internal sealed class StaticAnalysisWorkspace
             documentCount: documentCount,
             workspaceDiagnostics: diagnostics.Distinct(StringComparer.Ordinal).Take(30).ToArray(),
             syntaxTrees: trees,
+            projectFilePaths: projectFilePaths,
             semanticModelsByTree: semanticModelsByTree,
             sourceTextsByTree: sourceTextsByTree,
             syntaxTreesByPath: treesByPath);

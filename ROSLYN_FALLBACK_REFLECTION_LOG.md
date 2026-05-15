@@ -698,3 +698,28 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - Follow-up issue/test link:
     - `src/RoslynSkills.Cli/CliApplication.cs`
     - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+
+- `2026-05-16`: Added hot-workspace file watching and change classification using direct source edits
+  - Task/Context: implement sequence item 10 by adding per-workspace filesystem watchers, classifying dirty paths as source, project-structure, analyzer/config, ignored, or membership/unknown changes, surfacing `dirty_kinds`, `dirty_entries`, `can_incrementally_update`, and `requires_reload`, and validating that `.roslynskills` client state does not dirty the workspace.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+707c600d211d55bd99c93033cdbfae053342e2af`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changes the hot workspace store, process lifetime cleanup, file watcher callbacks, dirty-state response contracts, workspace host metadata projection, and tests. Current RoslynSkills commands do not provide a self-hosted workflow for adding persistent watcher state and cross-command dirty classification safely.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding hot-workspace state services that combine watcher events, timestamp snapshots, response schema updates, and daemon smoke validation.
+  - Proposed improvement:
+    - Add `maint.add_workspace_state_service` to scaffold process-scoped services, watcher lifecycle disposal, status/refresh response fields, and watcher-specific regression tests.
+  - Expected impact:
+    - correctness: higher (agents can distinguish incremental-safe source edits from reload-required project or membership changes).
+    - latency: lower later because item 11 can apply source text updates only when classification proves reload is unnecessary.
+    - token_count: lower because refresh/status responses explain freshness with compact structured dirty entries instead of requiring manual file inspection.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Core/Commands/WorkspaceHostStore.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceRefreshCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceStatusCommand.cs`
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`

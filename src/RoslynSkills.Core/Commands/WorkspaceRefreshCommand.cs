@@ -7,7 +7,7 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "workspace.refresh",
-        Summary: "Check a hot workspace handle for dirty tracked files without reloading or mutating Roslyn state yet.",
+        Summary: "Classify dirty hot-workspace files without reloading or mutating Roslyn state yet.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false);
@@ -43,10 +43,15 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
             loaded = status.Loaded,
             dirty = status.Dirty,
             invalidated_paths = status.InvalidatedPaths,
+            dirty_kinds = WorkspaceStatusData.BuildDirtyKinds(status),
+            dirty_entries = WorkspaceStatusData.BuildDirtyEntries(status),
+            can_incrementally_update = status.CanIncrementallyUpdate,
             refresh_action = "none",
-            requires_reload = status.Dirty,
-            note = status.Dirty
-                ? "Tracked files changed. Incremental source refresh and reload are implemented in later hot-server sequence items."
+            requires_reload = status.RequiresReload,
+            note = status.Dirty && status.CanIncrementallyUpdate
+                ? "Known source files changed. Incremental source refresh is implemented in the next hot-server sequence item."
+                : status.Dirty
+                ? "Workspace membership or structural files changed. Reload handling is implemented in a later hot-server sequence item."
                 : "No tracked file changes detected.",
             mode = hosted.Mode,
             include_generated = hosted.IncludeGenerated,
