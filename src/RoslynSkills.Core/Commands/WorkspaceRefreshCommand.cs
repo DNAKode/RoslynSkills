@@ -16,6 +16,16 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
     {
         List<CommandError> errors = new();
         InputParsing.TryGetRequiredString(input, "workspace_handle", errors, out _);
+        if (input.TryGetProperty("mode", out JsonElement modeProperty) &&
+            modeProperty.ValueKind == JsonValueKind.String)
+        {
+            string? mode = modeProperty.GetString();
+            if (!IsSupportedMode(mode))
+            {
+                errors.Add(new CommandError("invalid_input", "Property 'mode' must be 'balanced', 'strict', 'reload', 'none', or 'auto'."));
+            }
+        }
+
         return errors;
     }
 
@@ -27,6 +37,7 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
             return new CommandExecutionResult(null, errors);
         }
 
+        string mode = GetRefreshMode(input);
         IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
         if (!workspaceStore.TryGet(handle, out HostedWorkspace? hosted) || hosted is null)
         {
@@ -38,7 +49,23 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
         WorkspaceStatus statusBefore = workspaceStore.BuildStatus(hosted);
         WorkspaceRefreshResult? refreshResult = null;
         WorkspaceStatus statusAfter = statusBefore;
-        if (statusBefore.CanIncrementallyUpdate)
+        if (string.Equals(mode, "reload", StringComparison.OrdinalIgnoreCase) ||
+            (string.Equals(mode, "strict", StringComparison.OrdinalIgnoreCase) && statusBefore.RequiresReload))
+        {
+            refreshResult = await workspaceStore.ReloadAsync(
+                    hosted.Handle,
+                    statusBefore,
+                    mode,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (refreshResult.Error is not null)
+            {
+                return new CommandExecutionResult(null, new[] { refreshResult.Error });
+            }
+
+            statusAfter = refreshResult.StatusAfter;
+        }
+        else if (!string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase) && statusBefore.CanIncrementallyUpdate)
         {
             refreshResult = await workspaceStore.ApplyIncrementalSourceRefreshAsync(
                     hosted.Handle,
@@ -72,6 +99,7 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
             dirty_entries_before = WorkspaceStatusData.BuildDirtyEntries(statusBefore),
             can_incrementally_update = statusAfter.CanIncrementallyUpdate,
             refresh_action = refreshAction,
+            refresh_mode = mode,
             updated_paths = refreshResult?.UpdatedPaths ?? Array.Empty<string>(),
             requires_reload = statusAfter.RequiresReload,
             note = string.Equals(refreshAction, "incremental_document_update", StringComparison.Ordinal)
@@ -98,4 +126,40 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
+
+    private static string GetRefreshMode(JsonElement input)
+    {
+        if (input.TryGetProperty("mode", out JsonElement modeProperty) &&
+            modeProperty.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(modeProperty.GetString()))
+        {
+            string mode = modeProperty.GetString()!;
+            return string.Equals(mode, "auto", StringComparison.OrdinalIgnoreCase)
+                ? "balanced"
+                : mode.ToLowerInvariant();
+        }
+
+        if (input.TryGetProperty("refresh_policy", out JsonElement policyProperty) &&
+            policyProperty.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(policyProperty.GetString()))
+        {
+            string policy = policyProperty.GetString()!;
+            return policy.ToLowerInvariant() switch
+            {
+                "auto" => "balanced",
+                "strict" => "strict",
+                "none" => "none",
+                _ => "balanced",
+            };
+        }
+
+        return "balanced";
+    }
+
+    private static bool IsSupportedMode(string? mode)
+        => string.Equals(mode, "balanced", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(mode, "strict", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(mode, "reload", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(mode, "auto", StringComparison.OrdinalIgnoreCase);
 }

@@ -870,6 +870,34 @@ public sealed class VbCommandTests
             Assert.Contains(
                 Path.GetFullPath(newSourcePath),
                 refreshRoot.GetProperty("invalidated_paths").EnumerateArray().Select(item => item.GetString()));
+
+            CommandExecutionResult strictRefresh = await refresh.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle, mode = "strict" }),
+                CancellationToken.None);
+
+            Assert.True(strictRefresh.Ok);
+            using JsonDocument strictDoc = JsonDocument.Parse(JsonSerializer.Serialize(strictRefresh.Data));
+            JsonElement strictRoot = strictDoc.RootElement;
+            Assert.Equal("reload", strictRoot.GetProperty("refresh_action").GetString());
+            Assert.True(strictRoot.GetProperty("dirty_before").GetBoolean());
+            Assert.False(strictRoot.GetProperty("dirty_after").GetBoolean());
+            Assert.False(strictRoot.GetProperty("requires_reload").GetBoolean());
+
+            FindSymbolCommand findNewMember = new();
+            CommandExecutionResult symbolResult = await findNewMember.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    file_path = newSourcePath,
+                    symbol_name = "NewMember",
+                    workspace_handle = handle,
+                    require_workspace = true,
+                    brief = true,
+                }),
+                CancellationToken.None);
+
+            Assert.True(symbolResult.Ok);
+            using JsonDocument symbolDoc = JsonDocument.Parse(JsonSerializer.Serialize(symbolResult.Data));
+            Assert.True(symbolDoc.RootElement.GetProperty("total_matches").GetInt32() >= 1);
         }
         finally
         {

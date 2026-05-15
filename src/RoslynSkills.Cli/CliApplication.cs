@@ -1323,6 +1323,11 @@ Workflow:
                     return false;
                 }
 
+                if (options.TryGetValue("--mode", out string? refreshMode))
+                {
+                    input["mode"] = refreshMode;
+                }
+
                 break;
 
             case "workspace.close":
@@ -1378,7 +1383,9 @@ Workflow:
 
         return verb is "workspace.status" or "workspace.refresh" or "workspace.close"
             ? string.Equals(option, "--alias", StringComparison.OrdinalIgnoreCase) ||
-              string.Equals(option, "--refresh-policy", StringComparison.OrdinalIgnoreCase)
+              string.Equals(option, "--refresh-policy", StringComparison.OrdinalIgnoreCase) ||
+              (string.Equals(verb, "workspace.refresh", StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(option, "--mode", StringComparison.OrdinalIgnoreCase))
             : false;
     }
 
@@ -1505,7 +1512,7 @@ Workflow:
                 summary = "Start the daemon if needed and preload a workspace.",
             },
             "workspace.status" => new { usage = "workspace.status [alias|workspace-handle] [--repo-root <path>]" },
-            "workspace.refresh" => new { usage = "workspace.refresh [alias|workspace-handle] [--repo-root <path>]" },
+            "workspace.refresh" => new { usage = "workspace.refresh [alias|workspace-handle] [--mode balanced|strict|reload|none] [--repo-root <path>]" },
             "workspace.close" => new { usage = "workspace.close [alias|workspace-handle] [--repo-root <path>]" },
             "workspace.list" => new { usage = "workspace.list [--repo-root <path>]" },
             _ => new { usage = $"{verb} [args]" },
@@ -3541,7 +3548,7 @@ Workflow:
               workspace.use <solution-or-project-path> [--alias default] [--require-solution true] [--repo-root <path>]
               workspace.preload <solution-or-project-path> [--alias name] [--require-solution true] [--repo-root <path>]
               workspace.status [alias|workspace-handle] [--repo-root <path>]
-              workspace.refresh [alias|workspace-handle] [--repo-root <path>]
+              workspace.refresh [alias|workspace-handle] [--mode balanced|strict|reload|none] [--repo-root <path>]
               workspace.close [alias|workspace-handle] [--repo-root <path>]
               workspace.list [--repo-root <path>]
               validate-input <command-id> [--input <json>|@<file>|-] [--input-stdin]

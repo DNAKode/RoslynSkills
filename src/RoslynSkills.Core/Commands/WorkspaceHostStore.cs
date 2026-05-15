@@ -8,7 +8,7 @@ internal interface IWorkspaceHostStore
 {
     int Count { get; }
 
-    HostedWorkspace Add(StaticAnalysisWorkspace workspace, string mode, bool includeGenerated);
+    HostedWorkspace Add(StaticAnalysisWorkspace workspace, string mode, bool includeGenerated, int maxFiles);
 
     bool TryGet(string handle, out HostedWorkspace? workspace);
 
@@ -21,6 +21,12 @@ internal interface IWorkspaceHostStore
     Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshAsync(
         string handle,
         WorkspaceStatus status,
+        CancellationToken cancellationToken);
+
+    Task<WorkspaceRefreshResult> ReloadAsync(
+        string handle,
+        WorkspaceStatus statusBefore,
+        string mode,
         CancellationToken cancellationToken);
 }
 
@@ -45,9 +51,27 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         }
     }
 
-    public HostedWorkspace Add(StaticAnalysisWorkspace workspace, string mode, bool includeGenerated)
+    public HostedWorkspace Add(StaticAnalysisWorkspace workspace, string mode, bool includeGenerated, int maxFiles)
     {
-        DateTimeOffset loadedAt = DateTimeOffset.UtcNow;
+        string handle = $"ws_{Guid.NewGuid():N}";
+        HostedWorkspace hosted = CreateHostedWorkspace(handle, workspace, mode, includeGenerated, maxFiles, DateTimeOffset.UtcNow);
+
+        lock (_gate)
+        {
+            _workspaces[handle] = hosted;
+        }
+
+        return hosted;
+    }
+
+    private static HostedWorkspace CreateHostedWorkspace(
+        string handle,
+        StaticAnalysisWorkspace workspace,
+        string mode,
+        bool includeGenerated,
+        int maxFiles,
+        DateTimeOffset loadedAt)
+    {
         string[] sourcePaths = workspace.SyntaxTrees
             .Select(tree => tree.FilePath)
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -69,7 +93,6 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             .ToArray();
         IReadOnlyDictionary<string, DateTimeOffset?> trackedWriteTimes = SnapshotWriteTimes(trackedPaths);
         string fingerprint = ComputeFingerprint(workspace, trackedWriteTimes);
-        string handle = $"ws_{Guid.NewGuid():N}";
         WorkspaceChangeTracker changeTracker = WorkspaceChangeTracker.Start(
             workspace.RootDirectory,
             sourcePaths,
@@ -82,6 +105,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             Workspace: workspace,
             Mode: mode,
             IncludeGenerated: includeGenerated,
+            MaxFiles: maxFiles,
             LoadedAtUtc: loadedAt,
             LastRefreshUtc: loadedAt,
             WorkspaceFingerprint: fingerprint,
@@ -90,11 +114,6 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             TrackedProjectPaths: projectPaths,
             TrackedWriteTimes: trackedWriteTimes,
             ChangeTracker: changeTracker);
-
-        lock (_gate)
-        {
-            _workspaces[handle] = hosted;
-        }
 
         return hosted;
     }
@@ -259,6 +278,68 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             StatusAfter: statusAfter);
     }
 
+    public async Task<WorkspaceRefreshResult> ReloadAsync(
+        string handle,
+        WorkspaceStatus statusBefore,
+        string mode,
+        CancellationToken cancellationToken)
+    {
+        HostedWorkspace hosted;
+        lock (_gate)
+        {
+            if (!_workspaces.TryGetValue(handle, out HostedWorkspace? current))
+            {
+                return new WorkspaceRefreshResult(
+                    Applied: false,
+                    RefreshAction: "none",
+                    UpdatedPaths: Array.Empty<string>(),
+                    StatusBefore: statusBefore,
+                    StatusAfter: statusBefore,
+                    Error: new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found."));
+            }
+
+            hosted = current;
+        }
+
+        (StaticAnalysisWorkspace? workspace, CommandError? error) = await StaticAnalysisWorkspace.LoadAsync(
+                hosted.Workspace.WorkspacePath,
+                hosted.IncludeGenerated,
+                hosted.MaxFiles,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (error is not null || workspace is null)
+        {
+            return new WorkspaceRefreshResult(
+                Applied: false,
+                RefreshAction: "none",
+                UpdatedPaths: Array.Empty<string>(),
+                StatusBefore: statusBefore,
+                StatusAfter: statusBefore,
+                Error: error ?? new CommandError("workspace_reload_failed", "Workspace reload failed."));
+        }
+
+        HostedWorkspace reloaded = CreateHostedWorkspace(
+            hosted.Handle,
+            workspace,
+            mode,
+            hosted.IncludeGenerated,
+            hosted.MaxFiles,
+            DateTimeOffset.UtcNow);
+        lock (_gate)
+        {
+            _workspaces[handle] = reloaded;
+        }
+
+        hosted.Dispose();
+        WorkspaceStatus statusAfter = BuildStatus(reloaded);
+        return new WorkspaceRefreshResult(
+            Applied: true,
+            RefreshAction: "reload",
+            UpdatedPaths: Array.Empty<string>(),
+            StatusBefore: statusBefore,
+            StatusAfter: statusAfter);
+    }
+
     private static IReadOnlyDictionary<string, DateTimeOffset?> SnapshotWriteTimes(IEnumerable<string> paths)
     {
         Dictionary<string, DateTimeOffset?> snapshot = new(StringComparer.OrdinalIgnoreCase);
@@ -318,6 +399,7 @@ internal sealed record HostedWorkspace(
     StaticAnalysisWorkspace Workspace,
     string Mode,
     bool IncludeGenerated,
+    int MaxFiles,
     DateTimeOffset LoadedAtUtc,
     DateTimeOffset LastRefreshUtc,
     string WorkspaceFingerprint,

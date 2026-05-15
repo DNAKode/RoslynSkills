@@ -748,3 +748,27 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Core/Commands/WorkspaceRefreshCommand.cs`
     - `src/RoslynSkills.WorkspaceHost/Program.cs`
     - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`
+
+- `2026-05-16`: Added strict hot-workspace reload mode using direct source edits
+  - Task/Context: implement sequence item 12 by adding `workspace.refresh --mode strict|reload|balanced|none`, preserving workspace load parameters for reload, reloading structural or membership changes in strict mode, and validating symbol visibility after reload.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+fb2c72acf85bdf1ce3d35655fac39cf2f78bc31f`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changes the hot workspace store mutation contract, reload lifecycle, CLI daemon request shaping, help text, and tests. Current RoslynSkills commands do not provide a self-hosted workflow for safely changing persistent workspace lifecycle behavior and validating it through live daemon smoke tests.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding workspace refresh modes that updates command validation, CLI shorthand, host lifecycle state, status metadata, and membership-change regression tests together.
+  - Proposed improvement:
+    - Add `maint.add_workspace_refresh_mode` to declare a refresh mode, generate validation/help updates, preserve reload parameters, add dirty-state tests, and emit a daemon smoke script for the new mode.
+  - Expected impact:
+    - correctness: higher because structural and membership changes can be reconciled by a full solution reload before final verification.
+    - latency: balanced because source-only changes still use incremental refresh while strict mode pays reload cost only when needed.
+    - token_count: lower because agents can ask for a compact strict freshness operation instead of manually inspecting project membership and reloading state.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Core/Commands/WorkspaceHostStore.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceRefreshCommand.cs`
+    - `src/RoslynSkills.Cli/CliApplication.cs`
+    - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`
