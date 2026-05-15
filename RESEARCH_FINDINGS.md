@@ -36,6 +36,39 @@ This family is:
 
 ## Findings Log
 
+### F-2026-03-25-01: Whole-solution warm reuse is real, but the cold bind remains the dominant condemnation on large solutions
+
+Evidence:
+
+- comparator harness:
+  - `benchmarks/scripts/Benchmark-RoscliVsRgQueries.ps1`
+  - `benchmarks/scenarios/roscli-vs-rg-aims-symbol-queries.json`
+- tracked evidence note:
+  - `benchmarks/results/roscli-vs-rg-aims-20260322-223301.md`
+
+Result (`C:\Work\RoninSoftware\Aims`, 3 member-anchor queries):
+
+- `rg`: `66.75ms` total (`22.25ms` avg)
+- `roscli_single`: `106075.043ms` total (`35358.348ms` avg)
+- `roscli_batch`: `36171.18ms` total
+
+Per-query batch breakdown:
+
+- query1: `34921ms`, `workspace_cache_hit=false`
+- query2: `6ms`, `workspace_cache_hit=true`
+- query3: `12ms`, `workspace_cache_hit=true`
+
+Interpretation:
+
+- Roslyn semantic lookup after a whole-solution bind is already fast enough for repeated agent queries.
+- The current product problem is the initial workspace bind, not the warm lookup path.
+- The next architecture step should be daemon/bound-workspace first, not more one-shot process-per-call tuning.
+
+Decision:
+
+- Promote whole-solution preload and bound-workspace reuse to the active critical path.
+- Use the `Aims` member-anchor scenario as the standing external comparator slice for cold-vs-warm Roslyn vs `rg`.
+
 ### F-2026-02-09-01: Treatment still costs more elapsed time and tokens than control in this task family
 
 Evidence:

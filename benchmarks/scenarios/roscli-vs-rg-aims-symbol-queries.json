@@ -1,0 +1,20 @@
+{
+  "workspace_path": "Source/Aims.sln",
+  "queries": [
+    {
+      "label": "StoreViewModel.UpdateContentAt",
+      "file_path": "Source/AimsViewModel/ViewModels/Dashboard/StoreViewModel.cs",
+      "symbol_name": "UpdateContentAt"
+    },
+    {
+      "label": "StoreContentViewModel.AuditCompletionStoreContentViewModel",
+      "file_path": "Source/AimsViewModel/ViewModels/StoreContentViewModel.cs",
+      "symbol_name": "AuditCompletionStoreContentViewModel"
+    },
+    {
+      "label": "StoreContentViewModel.UpdateCompletionsFirstTime",
+      "file_path": "Source/AimsViewModel/ViewModels/StoreContentViewModel.cs",
+      "symbol_name": "UpdateCompletionsFirstTime"
+    }
+  ]
+}
