@@ -73,16 +73,20 @@ public sealed class WorkspaceHostDaemonManager
         }
 
         string resolvedHostPath = ResolveHostPath(hostPath);
+        string authToken = GenerateAuthToken();
         bool useShellExecute = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         ProcessStartInfo startInfo = new("dotnet")
         {
             WorkingDirectory = endpoint.RepoRoot,
             UseShellExecute = useShellExecute,
             CreateNoWindow = !useShellExecute,
+            WindowStyle = useShellExecute ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
         };
         startInfo.ArgumentList.Add(resolvedHostPath);
         startInfo.ArgumentList.Add("--transport");
         startInfo.ArgumentList.Add(endpoint.Transport);
+        startInfo.ArgumentList.Add("--auth-token");
+        startInfo.ArgumentList.Add(authToken);
         if (endpoint.Transport == "named-pipe")
         {
             startInfo.ArgumentList.Add("--pipe-name");
@@ -104,6 +108,7 @@ public sealed class WorkspaceHostDaemonManager
             endpoint.SocketPath,
             endpoint.RepoRoot,
             resolvedHostPath,
+            authToken,
             process.Id,
             DateTimeOffset.UtcNow);
         WriteManifest(endpoint.ManifestPath, manifest);
@@ -258,10 +263,14 @@ public sealed class WorkspaceHostDaemonManager
             WorkspaceHostClientOptions options = endpoint.Transport == "named-pipe"
                 ? WorkspaceHostClientOptions.NamedPipe(endpoint.PipeName!)
                 : WorkspaceHostClientOptions.UnixSocket(endpoint.SocketPath!);
+            WorkspaceHostRequest authorizedRequest = AddAuthToken(endpoint, request);
             await using WorkspaceHostClient client = await WorkspaceHostClient.ConnectAsync(
                 options,
                 timeout.Token).ConfigureAwait(false);
-            return await client.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            WorkspaceHostResponse response = await client.SendAsync(authorizedRequest, timeout.Token).ConfigureAwait(false);
+            return IsProtocolCompatible(response.ProtocolVersion)
+                ? response
+                : ProtocolMismatchResponse(request, response.ProtocolVersion);
         }
         catch (IOException)
         {
@@ -365,6 +374,59 @@ public sealed class WorkspaceHostDaemonManager
         File.WriteAllText(path, JsonSerializer.Serialize(manifest, JsonOptions));
     }
 
+    private static WorkspaceHostRequest AddAuthToken(WorkspaceHostDaemonEndpoint endpoint, WorkspaceHostRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.AuthToken))
+        {
+            return request;
+        }
+
+        WorkspaceHostDaemonManifest? manifest = TryReadManifest(endpoint.ManifestPath);
+        return string.IsNullOrWhiteSpace(manifest?.AuthToken)
+            ? request
+            : request with { AuthToken = manifest.AuthToken };
+    }
+
+    private static string GenerateAuthToken()
+    {
+        Span<byte> bytes = stackalloc byte[32];
+        RandomNumberGenerator.Fill(bytes);
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static bool IsProtocolCompatible(string? protocolVersion)
+    {
+        if (string.IsNullOrWhiteSpace(protocolVersion))
+        {
+            return false;
+        }
+
+        string expectedMajor = WorkspaceHostProtocol.ProtocolVersion.Split('.')[0];
+        string actualMajor = protocolVersion.Split('.')[0];
+        return string.Equals(expectedMajor, actualMajor, StringComparison.Ordinal);
+    }
+
+    private static WorkspaceHostResponse ProtocolMismatchResponse(WorkspaceHostRequest request, string? actualProtocolVersion)
+    {
+        CommandError error = new(
+            WorkspaceHostProtocol.ErrorCode.ProtocolMismatch,
+            $"Workspace host protocol '{actualProtocolVersion ?? "unknown"}' is not compatible with client protocol '{WorkspaceHostProtocol.ProtocolVersion}'. Restart the daemon.");
+        return new WorkspaceHostResponse(
+            Id: request.Id,
+            Ok: false,
+            ProtocolVersion: actualProtocolVersion ?? "unknown",
+            Method: request.Method,
+            ElapsedMs: 0,
+            Errors: new[] { error },
+            Envelope: new CommandEnvelope(
+                Ok: false,
+                CommandId: request.CommandId ?? request.Method,
+                Version: "1.0",
+                Data: null,
+                Errors: new[] { error },
+                TraceId: null));
+    }
+
     private static WorkspaceHostDaemonManifest? TryReadManifest(string path)
     {
         try
@@ -425,6 +487,7 @@ public sealed class WorkspaceHostDaemonManager
         string? SocketPath,
         string RepoRoot,
         string HostPath,
+        string? AuthToken,
         int ProcessId,
         DateTimeOffset StartedAtUtc);
 }

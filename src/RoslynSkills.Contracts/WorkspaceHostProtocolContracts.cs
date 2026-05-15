@@ -44,6 +44,7 @@ public static class WorkspaceHostProtocol
         public const string WorkspaceStale = "workspace_stale";
         public const string WorkspaceReloadRequired = "workspace_reload_required";
         public const string SolutionRequired = "solution_required";
+        public const string DaemonAuthFailed = "daemon_auth_failed";
     }
 }
 
@@ -59,6 +60,7 @@ public sealed record WorkspaceHostRequest(
     [property: JsonPropertyName("method")] string Method,
     [property: JsonPropertyName("workspace_alias")] string? WorkspaceAlias = null,
     [property: JsonPropertyName("workspace_handle")] string? WorkspaceHandle = null,
+    [property: JsonPropertyName("auth_token")] string? AuthToken = null,
     [property: JsonPropertyName("refresh_policy")] string? RefreshPolicy = null,
     [property: JsonPropertyName("command_id")] string? CommandId = null,
     [property: JsonPropertyName("input")] JsonElement? Input = null);

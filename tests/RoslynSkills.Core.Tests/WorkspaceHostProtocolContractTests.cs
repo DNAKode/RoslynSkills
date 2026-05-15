@@ -19,6 +19,7 @@ public sealed class WorkspaceHostProtocolContractTests
             Method: WorkspaceHostProtocol.Method.ToolCall,
             WorkspaceAlias: "default",
             WorkspaceHandle: "ws_abc",
+            AuthToken: "token-123",
             RefreshPolicy: WorkspaceHostProtocol.RefreshPolicy.Auto,
             CommandId: "nav.find_symbol",
             Input: input);
@@ -29,6 +30,7 @@ public sealed class WorkspaceHostProtocolContractTests
         Assert.Contains("\"method\":\"tool/call\"", json);
         Assert.Contains("\"workspace_alias\":\"default\"", json);
         Assert.Contains("\"workspace_handle\":\"ws_abc\"", json);
+        Assert.Contains("\"auth_token\":\"token-123\"", json);
         Assert.Contains("\"refresh_policy\":\"auto\"", json);
         Assert.Contains("\"command_id\":\"nav.find_symbol\"", json);
         Assert.Contains("\"file_path\":\"src/App/Foo.cs\"", json);
@@ -89,5 +91,7 @@ public sealed class WorkspaceHostProtocolContractTests
         Assert.Equal("workspace_handle_not_found", WorkspaceHostProtocol.ErrorCode.WorkspaceHandleNotFound);
         Assert.Equal("workspace_reload_required", WorkspaceHostProtocol.ErrorCode.WorkspaceReloadRequired);
         Assert.Equal("solution_required", WorkspaceHostProtocol.ErrorCode.SolutionRequired);
+        Assert.Equal("daemon_protocol_mismatch", WorkspaceHostProtocol.ErrorCode.ProtocolMismatch);
+        Assert.Equal("daemon_auth_failed", WorkspaceHostProtocol.ErrorCode.DaemonAuthFailed);
     }
 }

@@ -50,6 +50,32 @@ public sealed class WorkspaceHostProcessTests
     }
 
     [Fact]
+    public async Task WorkspaceHost_RequiresAuthTokenWhenConfigured()
+    {
+        string hostAssemblyPath = typeof(WorkspaceHostAssembly).Assembly.Location;
+        using Process process = StartHostProcess(hostAssemblyPath, "--auth-token", "test-token");
+
+        await process.StandardInput.WriteLineAsync("{\"id\":\"missing\",\"method\":\"daemon/status\"}");
+        await process.StandardInput.WriteLineAsync("{\"id\":\"ok\",\"method\":\"daemon/status\",\"auth_token\":\"test-token\"}");
+        await process.StandardInput.WriteLineAsync("{\"id\":\"shutdown\",\"method\":\"shutdown\",\"auth_token\":\"test-token\"}");
+
+        string? missingLine = await ReadLineWithTimeoutAsync(process, "missing auth");
+        string? okLine = await ReadLineWithTimeoutAsync(process, "authorized status");
+        _ = await ReadLineWithTimeoutAsync(process, "shutdown");
+
+        Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after authenticated shutdown.");
+
+        using JsonDocument missing = JsonDocument.Parse(missingLine!);
+        JsonElement missingRoot = missing.RootElement;
+        Assert.False(missingRoot.GetProperty("ok").GetBoolean());
+        Assert.Equal(WorkspaceHostProtocol.ErrorCode.DaemonAuthFailed, missingRoot.GetProperty("errors")[0].GetProperty("Code").GetString());
+
+        using JsonDocument ok = JsonDocument.Parse(okLine!);
+        Assert.True(ok.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(WorkspaceHostProtocol.Method.DaemonStatus, ok.RootElement.GetProperty("method").GetString());
+    }
+
+    [Fact]
     public async Task WorkspaceHost_StructuredEditRefreshesHotWorkspace()
     {
         string root = Path.Combine(Path.GetTempPath(), $"roslynskills-host-edit-{Guid.NewGuid():N}");

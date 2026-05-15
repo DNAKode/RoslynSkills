@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using RoslynSkills.Contracts;
@@ -21,6 +22,7 @@ internal static class Program
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static TextWriter ResponseWriter = Console.Out;
     private static string CurrentTransportName = "stdio-jsonl";
+    private static string? ExpectedAuthToken;
     private static readonly Dictionary<string, string> WorkspaceAliases = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object AliasGate = new();
 
@@ -43,6 +45,7 @@ internal static class Program
         }
 
         ICommandRegistry registry = DefaultRegistryFactory.Create();
+        ExpectedAuthToken = string.IsNullOrWhiteSpace(options.AuthToken) ? null : options.AuthToken;
 
         return options.Transport switch
         {
@@ -181,6 +184,7 @@ internal static class Program
         string transport = "stdio";
         string? pipeName = null;
         string? socketPath = null;
+        string? authToken = Environment.GetEnvironmentVariable("ROSLYNSKILLS_WORKSPACE_HOST_TOKEN");
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -198,7 +202,7 @@ internal static class Program
                 case "--transport":
                     if (!TryReadOptionValue(args, ref i, value, out transport, out error))
                     {
-                        options = new WorkspaceHostOptions("stdio", null, null);
+                        options = new WorkspaceHostOptions("stdio", null, null, null);
                         return false;
                     }
 
@@ -208,7 +212,7 @@ internal static class Program
                 case "--pipe-name":
                     if (!TryReadOptionValue(args, ref i, value, out pipeName, out error))
                     {
-                        options = new WorkspaceHostOptions("stdio", null, null);
+                        options = new WorkspaceHostOptions("stdio", null, null, null);
                         return false;
                     }
 
@@ -217,41 +221,50 @@ internal static class Program
                 case "--socket-path":
                     if (!TryReadOptionValue(args, ref i, value, out socketPath, out error))
                     {
-                        options = new WorkspaceHostOptions("stdio", null, null);
+                        options = new WorkspaceHostOptions("stdio", null, null, null);
+                        return false;
+                    }
+
+                    break;
+
+                case "--auth-token":
+                    if (!TryReadOptionValue(args, ref i, value, out authToken, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null);
                         return false;
                     }
 
                     break;
 
                 default:
-                    options = new WorkspaceHostOptions("stdio", null, null);
-                    error = $"Unknown workspace host option '{arg}'. Supported options: --transport, --pipe-name, --socket-path.";
+                    options = new WorkspaceHostOptions("stdio", null, null, null);
+                    error = $"Unknown workspace host option '{arg}'. Supported options: --transport, --pipe-name, --socket-path, --auth-token.";
                     return false;
             }
         }
 
         if (transport == "named-pipe" && string.IsNullOrWhiteSpace(pipeName))
         {
-            options = new WorkspaceHostOptions("stdio", null, null);
+            options = new WorkspaceHostOptions("stdio", null, null, null);
             error = "--transport named-pipe requires --pipe-name.";
             return false;
         }
 
         if (transport == "unix-socket" && string.IsNullOrWhiteSpace(socketPath))
         {
-            options = new WorkspaceHostOptions("stdio", null, null);
+            options = new WorkspaceHostOptions("stdio", null, null, null);
             error = "--transport unix-socket requires --socket-path.";
             return false;
         }
 
         if (transport is not ("stdio" or "named-pipe" or "unix-socket"))
         {
-            options = new WorkspaceHostOptions("stdio", null, null);
+            options = new WorkspaceHostOptions("stdio", null, null, null);
             error = $"Unsupported transport '{transport}'. Supported transports: stdio, named-pipe, unix-socket.";
             return false;
         }
 
-        options = new WorkspaceHostOptions(transport, pipeName, socketPath);
+        options = new WorkspaceHostOptions(transport, pipeName, socketPath, authToken);
         error = null;
         return true;
     }
@@ -331,6 +344,18 @@ internal static class Program
                     method,
                     "invalid_request",
                     "Request must include 'method' or a top-level 'command_id'.",
+                    "host/handshake",
+                    stopwatch).ConfigureAwait(false);
+                return false;
+            }
+
+            if (!IsAuthorized(root, method))
+            {
+                await WriteErrorResponseAsync(
+                    requestId,
+                    method,
+                    WorkspaceHostProtocol.ErrorCode.DaemonAuthFailed,
+                    "Workspace host request did not include the expected auth token.",
                     "host/handshake",
                     stopwatch).ConfigureAwait(false);
                 return false;
@@ -823,6 +848,27 @@ internal static class Program
         return GetStringProperty(root, "command_id");
     }
 
+    private static bool IsAuthorized(JsonElement root, string method)
+    {
+        if (string.IsNullOrWhiteSpace(ExpectedAuthToken) ||
+            string.Equals(method, WorkspaceHostProtocol.Method.Handshake, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        string? provided = GetStringProperty(root, "auth_token");
+        return !string.IsNullOrWhiteSpace(provided) &&
+               FixedTimeEquals(provided, ExpectedAuthToken);
+    }
+
+    private static bool FixedTimeEquals(string provided, string expected)
+    {
+        byte[] providedBytes = Encoding.UTF8.GetBytes(provided);
+        byte[] expectedBytes = Encoding.UTF8.GetBytes(expected);
+        return providedBytes.Length == expectedBytes.Length &&
+               CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes);
+    }
+
     private static string? GetStringProperty(JsonElement root, string propertyName)
     {
         if (!TryGetProperty(root, propertyName, out JsonElement value))
@@ -999,5 +1045,6 @@ internal static class Program
     private sealed record WorkspaceHostOptions(
         string Transport,
         string? PipeName,
-        string? SocketPath);
+        string? SocketPath,
+        string? AuthToken);
 }

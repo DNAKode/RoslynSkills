@@ -820,3 +820,29 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - Follow-up issue/test link:
     - `benchmarks/scripts/Benchmark-HotWorkspaceHost.ps1`
     - `tests/RoslynSkills.Benchmark.Tests/RoscliVsRgScriptTests.cs`
+
+- `2026-05-16`: Hardened hot-workspace daemon auth and protocol compatibility using direct source edits
+  - Task/Context: implement sequence item 15 by adding daemon request auth tokens, protocol-major compatibility checks, documented auth failure semantics, and host-process auth tests.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+c6abbb0ca4d808ed86898cad955eabecd1d1944b`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changes cross-process startup, local daemon manifests, protocol contracts, host request authorization, docs, and process-level tests. Current RoslynSkills commands do not provide a self-hosted workflow for secure daemon lifecycle changes or protocol compatibility hardening.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for evolving host protocol fields and security checks across contracts, client launch, host parsing, docs, and process tests in one guarded operation.
+  - Proposed improvement:
+    - Add `maint.evolve_workspace_host_protocol` to declare protocol fields/error codes, update JSON contract tests/docs, apply client/host lifecycle wiring, and run daemon auth/lifecycle smoke checks.
+  - Expected impact:
+    - correctness: higher because stale or incompatible daemon protocol responses fail explicitly instead of being treated as valid hot-workspace answers.
+    - latency: neutral for successful hot calls; one manifest read is added to attach the local capability token.
+    - token_count: lower when failures occur because clients receive explicit `daemon_auth_failed` or `daemon_protocol_mismatch` codes with clear recovery paths.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Contracts/WorkspaceHostProtocolContracts.cs`
+    - `src/RoslynSkills.Cli/WorkspaceHostDaemonManager.cs`
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `docs/ROSCLI_WORKSPACE_HOST_PROTOCOL_2026-05-15.md`
+    - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`
+    - `tests/RoslynSkills.Core.Tests/WorkspaceHostProtocolContractTests.cs`
