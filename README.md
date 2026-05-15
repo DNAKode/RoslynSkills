@@ -50,9 +50,9 @@ roscli quickstart
 First semantic flow:
 
 ```powershell
-roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --first-declaration true --max-results 20 --workspace-path src/MyProject/MyProject.csproj --require-workspace true
-roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true --workspace-path src/MyProject/MyProject.csproj --require-workspace true
-roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path src/MyProject/MyProject.csproj --require-workspace true
+roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --first-declaration true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
+roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true --workspace-path MySolution.slnx --require-workspace true
+roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path MySolution.slnx --require-workspace true
 ```
 
 ## Best-Results Playbook (For Agents)
@@ -63,8 +63,9 @@ Use this sequence to reduce retries and avoid tool-learning churn:
 2. `roscli list-commands --stable-only --ids-only`.
 3. Use direct commands (`nav.*`, `ctx.*`, `edit.*`, `diag.*`) before exploratory `describe-command`.
 4. Keep reads compact (`--brief true`, bounded `--max-results`).
-5. For project-backed code, force workspace semantics:
-`--workspace-path <.csproj|.sln|.slnx|dir> --require-workspace true`.
+5. For project-backed code, force workspace semantics. Prefer the repo solution for hot/full-context work:
+`--workspace-path <.sln|.slnx|.csproj|dir> --require-workspace true`.
+Use `.csproj` only when intentionally project-scoped.
 6. Batch read-only discovery when possible:
 `query.batch`, `nav.find_symbol_batch`.
 7. Validate with diagnostics and build/tests before finalizing.
@@ -129,8 +130,8 @@ Use roscli for C#/.NET repo edits and diagnostics.
 1) Run once: roscli llmstxt
 2) Use stable commands first: roscli list-commands --stable-only --ids-only
 3) Use describe-command only when argument shape is unclear
-4) For project files require workspace semantics:
-   --workspace-path <.csproj|.sln|.slnx|dir> --require-workspace true
+4) For project files require workspace semantics; prefer .sln/.slnx for repo-wide context:
+   --workspace-path <.sln|.slnx|.csproj|dir> --require-workspace true
 5) Prefer semantic nav/edit/diag commands before text fallback
 6) Keep calls brief/bounded, batch read-only discovery when possible
 7) Verify diagnostics/build/tests before final answer

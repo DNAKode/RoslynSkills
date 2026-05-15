@@ -21,7 +21,7 @@ roscli diag.get_workspace_snapshot src --brief true --workspace-path MySolution.
 File diagnostics (workspace-bound):
 
 ```powershell
-roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MyProject.csproj --require-workspace true
+roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MySolution.slnx --require-workspace true
 ```
 
 ## Failure Patterns
@@ -30,4 +30,3 @@ roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MyProject.csproj
   - Fix: rerun with `--workspace-path ... --require-workspace true` and choose the correct root.
 - `CS0518` (core types missing):
   - Treat as invalid workspace binding; do not trust subsequent diagnostics until corrected.
-

@@ -232,8 +232,10 @@ public sealed class CliApplication
                         "Use nav.* / ctx.* / diag.* before text fallback.",
                         "Keep payloads brief-first (for example --brief true) before expanding detail.",
                         "For file diagnostics/symbol queries, confirm workspace_context.mode is 'workspace'.",
-                        "If workspace_context.mode is 'ad_hoc', rerun with --workspace-path <.csproj|.vbproj|.sln|.slnx|dir>.",
+                        "Prefer --workspace-path <.sln|.slnx> for repo-wide or hot-workspace context; use .csproj/.vbproj only when intentionally project-scoped.",
+                        "If workspace_context.mode is 'ad_hoc', rerun with --workspace-path <.sln|.slnx|.csproj|.vbproj|dir>.",
                         "For project-backed files, prefer --require-workspace true to fail closed instead of silently using ad_hoc.",
+                        "Check workspace_context.resolved_workspace_path/workspace_kind/project_count to verify solution vs project binding.",
                         "Validate with diagnostics and build/tests before finalizing.",
                     },
                     first_minute_sequence = new[]
@@ -242,7 +244,7 @@ public sealed class CliApplication
                         "roscli list-commands --stable-only --ids-only",
                         "roscli describe-command session.open",
                         "roscli describe-command edit.create_file",
-                        "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --require-workspace true",
+                        "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true",
                     },
                     example_paths = new[]
                     {
@@ -256,9 +258,9 @@ public sealed class CliApplication
                             name = "rename_symbol_safely",
                             commands = new[]
                             {
-                                "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --require-workspace true",
-                                "roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true",
-                                "roscli diag.get_file_diagnostics src/MyProject/Program.cs --require-workspace true",
+                                "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true",
+                                "roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true",
+                                "roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true",
                             },
                         },
                         new
@@ -304,7 +306,9 @@ Workflow:
                         "Do not use session.open on .sln/.slnx/.csproj files.",
                         "Maturity policy: default to stable commands; use advanced/experimental only when needed and after describe-command.",
                         "diag/nav file commands auto-resolve nearest workspace; check workspace_context.mode in responses.",
+                        "For repo-wide context and future hot workspace hosts, prefer explicit solution paths (.sln/.slnx) over loose project paths.",
                         "If workspace_context.mode is ad_hoc for a project file, pass --workspace-path explicitly.",
+                        "If workspace_context.resolved_workspace_path is a .csproj when solution scope was expected, rerun with the .sln/.slnx path.",
                         "For project-backed files where ad_hoc is unacceptable, set --require-workspace true.",
                         "For complex JSON payloads, prefer --input-stdin over shell-escaped inline JSON.",
                         "If roscli cannot answer a C# query, state why before fallback.",
@@ -2056,6 +2060,7 @@ Workflow:
                 {
                     "session.open supports only .cs/.csx files.",
                     "Use .sln/.slnx/.csproj with diag/nav commands, not session.open.",
+                    "For repo-wide or hot-workspace scope, prefer the .sln/.slnx path; use .csproj only for intentional project scope.",
                     "session diagnostics are file-scoped and may differ from full project build diagnostics.",
                 },
             };
@@ -2082,9 +2087,14 @@ Workflow:
             return new
             {
                 direct = "edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...]",
-                run = "run edit.rename_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"new_name\":\"Updated\",\"apply\":true}'",
+                run = "run edit.rename_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"new_name\":\"Updated\",\"apply\":true,\"workspace_path\":\"MySolution.slnx\",\"require_workspace\":true}'",
                 required_properties = new[] { "file_path", "line", "column", "new_name" },
-                optional_properties = new[] { "apply", "max_diagnostics" },
+                optional_properties = new[] { "apply", "max_diagnostics", "workspace_path", "require_workspace" },
+                notes = new[]
+                {
+                    "For repo-wide rename context, prefer workspace_path=.sln/.slnx; use .csproj only for intentional project scope.",
+                    "Set require_workspace=true for project-backed files when ad_hoc fallback should fail closed.",
+                },
             };
         }
 
@@ -2110,8 +2120,10 @@ Workflow:
                 {
                     "Use declarations_only=true when you only want declaration anchors.",
                     "Use first_declaration=true to prefer declaration match and fallback to first match when no declaration exists.",
-                    "By default, roscli auto-resolves nearest .csproj/.vbproj/.sln/.slnx from file path.",
+                    "By default, roscli auto-resolves a workspace from the file path and prefers discovered .sln/.slnx before loose projects.",
+                    "For repo-wide or hot-workspace scope, pass workspace_path=.sln/.slnx explicitly.",
                     "If workspace_context.mode is 'ad_hoc', pass workspace_path explicitly.",
+                    "Check resolved_workspace_path/workspace_kind/project_count to verify solution vs project binding.",
                     "Set require_workspace=true for project-backed files when ad_hoc fallback should fail closed.",
                 },
             };
@@ -2333,13 +2345,15 @@ Workflow:
             return new
             {
                 direct = "diag.get_file_diagnostics <file-path> [--workspace-path <path>] [--option value ...]",
-                run = "run diag.get_file_diagnostics --input '{\"file_path\":\"src/MyFile.cs\",\"workspace_path\":\"src/MyProject/MyProject.csproj\",\"require_workspace\":true}'",
+                run = "run diag.get_file_diagnostics --input '{\"file_path\":\"src/MyFile.cs\",\"workspace_path\":\"MySolution.slnx\",\"require_workspace\":true}'",
                 required_properties = new[] { "file_path" },
                 optional_properties = new[] { "workspace_path", "require_workspace" },
                 notes = new[]
                 {
-                    "By default, roscli auto-resolves nearest .csproj/.vbproj/.sln/.slnx from file path.",
+                    "By default, roscli auto-resolves a workspace from the file path and prefers discovered .sln/.slnx before loose projects.",
+                    "For repo-wide or hot-workspace diagnostics, pass workspace_path=.sln/.slnx explicitly.",
                     "Response includes workspace_context.mode = workspace|ad_hoc.",
+                    "Check resolved_workspace_path/workspace_kind/project_count to verify solution vs project binding.",
                     "Set require_workspace=true to fail closed when workspace resolution falls back to ad_hoc.",
                 },
             };
@@ -2372,7 +2386,9 @@ Workflow:
             {
                 "session.open supports only .cs/.csx files.",
                 "Check workspace_context.mode on nav/diag file commands.",
+                "Prefer --workspace-path <.sln|.slnx> for repo-wide or hot-workspace context; use .csproj/.vbproj only when intentionally project-scoped.",
                 "Use --workspace-path when auto workspace resolution falls back to ad_hoc.",
+                "Check resolved_workspace_path/workspace_kind/project_count when full solution context matters.",
                 "Use --require-workspace true when ad_hoc fallback is unacceptable.",
                 "Prefer --input-stdin for complex JSON payloads.",
                 "Prefer stable commands by default; use advanced/experimental commands intentionally.",
@@ -2423,17 +2439,19 @@ Workflow:
         sb.AppendLine("## Guardrails");
         sb.AppendLine("- `session.open` supports only `.cs/.csx` files.");
         sb.AppendLine("- For `nav.*` and `diag.*` file commands, check `workspace_context.mode`.");
+        sb.AppendLine("- Prefer `--workspace-path <.sln|.slnx>` for repo-wide or hot-workspace context; use `.csproj/.vbproj` only when intentionally project-scoped.");
         sb.AppendLine("- If `workspace_context.mode=ad_hoc` and project context exists, rerun with `--workspace-path`.");
+        sb.AppendLine("- Check `resolved_workspace_path`, `workspace_kind`, and `project_count` when full solution context matters.");
         sb.AppendLine("- For fail-closed project semantics, set `--require-workspace true`.");
         sb.AppendLine("- Prefer `--input-stdin` for complex JSON payloads.");
         sb.AppendLine();
         sb.AppendLine("## Quick Recipes");
         sb.AppendLine("```text");
-        sb.AppendLine("roscli nav.find_symbol src/MyProject/Program.cs Process --first-declaration true --brief true --max-results 20 --require-workspace true");
-        sb.AppendLine("roscli nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true --require-workspace true");
+        sb.AppendLine("roscli nav.find_symbol src/MyProject/Program.cs Process --first-declaration true --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true");
+        sb.AppendLine("roscli nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 body --brief true");
-        sb.AppendLine("roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true");
-        sb.AppendLine("roscli diag.get_file_diagnostics src/MyProject/Program.cs --require-workspace true");
+        sb.AppendLine("roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true");
+        sb.AppendLine("roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("```");
         sb.AppendLine();
         sb.AppendLine("## Command Catalog");
@@ -2605,7 +2623,7 @@ Workflow:
                 session.close <session-id>
               - Direct shorthand also accepts command options:
                 ctx.file_outline <file-path> --include-members false --max-members 50
-                diag.get_file_diagnostics <file-path> --workspace-path src/MyProject/MyProject.csproj --require-workspace true
+                diag.get_file_diagnostics <file-path> --workspace-path MySolution.slnx --require-workspace true
                 ctx.search_text "RemoteUserAction" src --mode literal --max-results 100
                 nav.find_symbol src/MyFile.cs Run --first-declaration true --brief true
                 nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true
@@ -2623,7 +2641,9 @@ Workflow:
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - For nav/diag file commands, check response workspace_context.mode.
+                Prefer --workspace-path <.sln|.slnx> for repo-wide or hot-workspace context; use .csproj/.vbproj only when intentionally project-scoped.
                 If mode=ad_hoc and project context exists, rerun with --workspace-path. For fail-closed behavior, add --require-workspace true.
+                Check resolved_workspace_path/workspace_kind/project_count when full solution context matters.
               - list-commands supports compact response modes:
                 list-commands --compact
                 list-commands --ids-only

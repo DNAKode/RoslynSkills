@@ -987,6 +987,8 @@ public sealed class CliApplicationTests
         Assert.Contains("session.open only supports .cs/.csx files", output);
         Assert.Contains("workspace_context.mode", output);
         Assert.Contains("--require-workspace true", output);
+        Assert.Contains("MySolution.slnx", output);
+        Assert.Contains("project_count", output);
         Assert.Contains("src/MyProject/Program.cs", output);
     }
 
@@ -1014,6 +1016,8 @@ public sealed class CliApplicationTests
         Assert.Contains("dotnet-inspect", output);
         Assert.Contains("dotnet-skills", output);
         Assert.Contains("`session.open` supports only `.cs/.csx` files.", output);
+        Assert.Contains("MySolution.slnx", output);
+        Assert.Contains("project_count", output);
         Assert.DoesNotContain("`ctx.call_chain_slice`", output);
     }
 

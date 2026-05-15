@@ -18,6 +18,9 @@ internal static class WorkspaceContextPayload
             msbuild_registration_duration_ms = context.msbuild_registration_duration_ms,
             workspace_cache_mode = context.workspace_cache_mode,
             workspace_cache_hit = context.workspace_cache_hit,
+            workspace_kind = context.workspace_kind,
+            project_count = context.project_count,
+            document_count = context.document_count,
         };
     }
 }

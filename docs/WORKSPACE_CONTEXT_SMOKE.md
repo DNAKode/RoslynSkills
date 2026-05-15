@@ -5,7 +5,7 @@ Status: local verification notes (updated with paired-run telemetry)
 
 ## Goal
 
-Verify that high-traffic file-scoped commands expose workspace binding state and default to project context when available.
+Verify that high-traffic file-scoped commands expose workspace binding state and prefer solution context when available, falling back to project context only when no solution candidate exists or a project path is explicitly requested.
 
 ## Commands and Observations
 
@@ -21,7 +21,9 @@ Observed summary:
 
 - `Preview`: `diag.get_file_diagnostics ok: total=0, errors=0, warnings=0, workspace=workspace`
 - `Data.workspace_context.mode`: `workspace`
-- `Data.workspace_context.resolved_workspace_path`: `src/RoslynSkills.Core/RoslynSkills.Core.csproj`
+- `Data.workspace_context.resolved_workspace_path`: `RoslynSkills.slnx` when solution inference is available; otherwise the nearest project file.
+- `Data.workspace_context.workspace_kind`: `slnx` for solution binding.
+- `Data.workspace_context.project_count`: greater than one when the full solution was loaded.
 
 ### 2) Project-backed symbol search resolves workspace
 
@@ -67,7 +69,8 @@ For project-backed files:
 
 1. read `workspace_context.mode`,
 2. require `workspace`,
-3. if `ad_hoc`, rerun with explicit `workspace_path` (`.csproj`, `.sln`, `.slnx`, or workspace directory).
+3. if `ad_hoc`, rerun with explicit `workspace_path` (`.sln`, `.slnx`, `.csproj`, or workspace directory),
+4. if full solution context matters, verify `resolved_workspace_path`, `workspace_kind`, and `project_count`; rerun with the `.sln/.slnx` path if a project file was selected.
 
 ## Paired-Run Trace Confirmation (v0.1.6-preview.7)
 
@@ -118,7 +121,7 @@ Expected:
 - `workspace_context.mode`: `workspace`
 - `workspace_context.resolved_workspace_path`: `RoslynSkills.slnx`
 
-### 5) OSS repo confirmation: workspace resolves to the correct `.csproj`
+### 5) OSS repo confirmation: workspace resolves to the correct workspace
 
 Evidence (Avalonia pilot):
 
@@ -129,7 +132,7 @@ Observed in `nav.find_symbol` output:
 - `workspace_context.mode`: `workspace`
 - `workspace_context.resolved_workspace_path`: `src/Avalonia.Base/Avalonia.Base.csproj`
 
-This is the key signal that we are not accidentally running file-only compilation for project code.
+This remains a valid project-scoped signal for historical runs. For current solution-first behavior, prefer explicit `.sln/.slnx` paths when a host workspace should include all projects.
 
 ## Current Release Confirmation (v0.1.6-preview.13)
 
@@ -138,4 +141,4 @@ Published: 2026-02-13
 Notes:
 - `.slnx` is supported as `--workspace-path` for workspace-bound operations.
 - `diag.get_workspace_snapshot` is available for project-backed diagnostics over file sets.
-- OSS pilot traces confirm `workspace_context.mode=workspace` with resolved `.csproj` binding on a large repo.
+- OSS pilot traces confirm `workspace_context.mode=workspace` with resolved `.csproj` binding on a large repo; future hot-host traces should additionally confirm solution binding via `workspace_kind` and `project_count` when a solution path is available.

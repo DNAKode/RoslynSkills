@@ -19,7 +19,10 @@ internal sealed record WorkspaceContextInfo(
     int workspace_load_duration_ms = 0,
     int msbuild_registration_duration_ms = 0,
     string workspace_cache_mode = "none",
-    bool workspace_cache_hit = false);
+    bool workspace_cache_hit = false,
+    string? workspace_kind = null,
+    int project_count = 0,
+    int document_count = 0);
 
 internal sealed record WorkspaceSemanticLoadResult(
     string file_path,
@@ -39,6 +42,9 @@ internal static class WorkspaceSemanticLoader
         : StringComparer.Ordinal;
 
     private static readonly object MsBuildRegistrationLock = new();
+    private static readonly object WorkspaceCacheLock = new();
+    private static readonly Dictionary<string, CachedWorkspaceEntry> WorkspaceCache = new(PathComparer);
+    private const int MaxCachedWorkspaces = 8;
     private static bool _msBuildRegistrationAttempted;
     private static string? _msBuildRegistrationError;
 
@@ -66,31 +72,17 @@ internal static class WorkspaceSemanticLoader
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     attemptedWorkspacePaths.Add(candidate.path);
-
-                    List<string> candidateDiagnostics = new();
                     try
                     {
-                        using MSBuildWorkspace workspace = MSBuildWorkspace.Create();
-                        workspace.WorkspaceFailed += (_, args) =>
-                        {
-                            if (args.Diagnostic.Kind != WorkspaceDiagnosticKind.Failure)
-                            {
-                                return;
-                            }
-
-                            string message = args.Diagnostic.Message;
-                            if (ShouldIncludeWorkspaceDiagnostic(message))
-                            {
-                                candidateDiagnostics.Add(message);
-                            }
-                        };
-
-                        Solution solution = await OpenSolutionAsync(workspace, candidate, cancellationToken).ConfigureAwait(false);
-                        Document? document = FindDocument(solution, normalizedFilePath);
+                        CachedWorkspaceLoadResult cachedWorkspace = await LoadWorkspaceStateAsync(
+                            candidate,
+                            normalizedFilePath,
+                            cancellationToken).ConfigureAwait(false);
+                        Document? document = FindDocument(cachedWorkspace.state.Solution, normalizedFilePath);
                         if (document is null)
                         {
                             fallbackReason = $"File '{normalizedFilePath}' was not found in workspace candidate '{candidate.path}'.";
-                            AddDistinctLimited(workspaceDiagnostics, candidateDiagnostics, maxCount: 30);
+                            AddDistinctLimited(workspaceDiagnostics, cachedWorkspace.state.Diagnostics, maxCount: 30);
                             continue;
                         }
 
@@ -99,7 +91,7 @@ internal static class WorkspaceSemanticLoader
                         if (syntaxTree is null || semanticModel is null)
                         {
                             fallbackReason = $"Workspace candidate '{candidate.path}' could not provide semantic context for '{normalizedFilePath}'.";
-                            AddDistinctLimited(workspaceDiagnostics, candidateDiagnostics, maxCount: 30);
+                            AddDistinctLimited(workspaceDiagnostics, cachedWorkspace.state.Diagnostics, maxCount: 30);
                             continue;
                         }
 
@@ -109,7 +101,7 @@ internal static class WorkspaceSemanticLoader
                         if (compilation is null)
                         {
                             fallbackReason = $"Workspace candidate '{candidate.path}' returned no compilation for '{normalizedFilePath}'.";
-                            AddDistinctLimited(workspaceDiagnostics, candidateDiagnostics, maxCount: 30);
+                            AddDistinctLimited(workspaceDiagnostics, cachedWorkspace.state.Diagnostics, maxCount: 30);
                             continue;
                         }
 
@@ -123,12 +115,14 @@ internal static class WorkspaceSemanticLoader
                             project_path: document.Project.FilePath,
                             fallback_reason: null,
                             attempted_workspace_paths: attemptedWorkspacePaths.ToArray(),
-                            workspace_diagnostics: candidateDiagnostics
-                                .Distinct(StringComparer.Ordinal)
-                                .Take(30)
-                                .ToArray(),
+                            workspace_diagnostics: cachedWorkspace.state.Diagnostics,
                             workspace_load_duration_ms: (int)workspaceLoadTimer.ElapsedMilliseconds,
-                            msbuild_registration_duration_ms: msbuildRegistrationDurationMs);
+                            msbuild_registration_duration_ms: msbuildRegistrationDurationMs,
+                            workspace_cache_mode: cachedWorkspace.workspace_cache_mode,
+                            workspace_cache_hit: cachedWorkspace.workspace_cache_hit,
+                            workspace_kind: candidate.kind,
+                            project_count: cachedWorkspace.state.ProjectCount,
+                            document_count: cachedWorkspace.state.DocumentCount);
 
                         return new WorkspaceSemanticLoadResult(
                             file_path: normalizedFilePath,
@@ -144,8 +138,7 @@ internal static class WorkspaceSemanticLoader
                     catch (Exception ex)
                     {
                         fallbackReason = $"Workspace candidate '{candidate.path}' failed to load: {ex.Message}";
-                        candidateDiagnostics.Add(ex.Message);
-                        AddDistinctLimited(workspaceDiagnostics, candidateDiagnostics, maxCount: 30);
+                        AddDistinctLimited(workspaceDiagnostics, new[] { ex.Message }, maxCount: 30);
                     }
                 }
             }
@@ -201,6 +194,38 @@ internal static class WorkspaceSemanticLoader
             semantic_model: fallbackSemanticModel,
             language: fallbackLanguage,
             workspace_context: fallbackContext);
+    }
+
+    internal static void ClearProcessWorkspaceCacheForTests()
+    {
+        List<LoadedWorkspaceState> statesToDispose = new();
+        lock (WorkspaceCacheLock)
+        {
+            statesToDispose.AddRange(WorkspaceCache.Values.Select(entry => entry.State));
+            WorkspaceCache.Clear();
+        }
+
+        foreach (LoadedWorkspaceState state in statesToDispose)
+        {
+            state.Dispose();
+        }
+    }
+
+    internal static string GetProcessWorkspaceCacheDebugInfoForTests(string candidatePath, string requestedFilePath)
+    {
+        string normalizedCandidatePath = NormalizePath(candidatePath);
+        string normalizedRequestedFilePath = NormalizePath(requestedFilePath);
+
+        lock (WorkspaceCacheLock)
+        {
+            if (!WorkspaceCache.TryGetValue(normalizedCandidatePath, out CachedWorkspaceEntry? entry))
+            {
+                return "cache-miss";
+            }
+
+            string? stalePath = entry.State.GetFirstStalePath(normalizedRequestedFilePath);
+            return stalePath is null ? "cache-hit" : $"stale:{stalePath}";
+        }
     }
 
     private static WorkspaceCandidatePlan BuildCandidatePlan(string filePath, string? workspacePath)
@@ -290,17 +315,17 @@ internal static class WorkspaceSemanticLoader
     {
         foreach (string directory in ancestors)
         {
-            foreach (string projectPath in EnumerateProjectFiles(directory, SearchOption.TopDirectoryOnly))
+            foreach (string solutionPath in EnumerateSolutions(directory))
             {
-                TryAddCandidate(candidates, seen, projectPath, "project");
+                TryAddCandidate(candidates, seen, solutionPath, "solution");
             }
         }
 
         foreach (string directory in ancestors)
         {
-            foreach (string solutionPath in EnumerateSolutions(directory))
+            foreach (string projectPath in EnumerateProjectFiles(directory, SearchOption.TopDirectoryOnly))
             {
-                TryAddCandidate(candidates, seen, solutionPath, "solution");
+                TryAddCandidate(candidates, seen, projectPath, "project");
             }
         }
     }
@@ -310,14 +335,14 @@ internal static class WorkspaceSemanticLoader
         List<WorkspaceCandidate> candidates,
         HashSet<string> seen)
     {
-        foreach (string projectPath in EnumerateProjectFiles(directoryPath, SearchOption.TopDirectoryOnly))
-        {
-            TryAddCandidate(candidates, seen, projectPath, "project");
-        }
-
         foreach (string solutionPath in EnumerateSolutions(directoryPath, SearchOption.TopDirectoryOnly))
         {
             TryAddCandidate(candidates, seen, solutionPath, "solution");
+        }
+
+        foreach (string projectPath in EnumerateProjectFiles(directoryPath, SearchOption.TopDirectoryOnly))
+        {
+            TryAddCandidate(candidates, seen, projectPath, "project");
         }
     }
 
@@ -326,14 +351,14 @@ internal static class WorkspaceSemanticLoader
         List<WorkspaceCandidate> candidates,
         HashSet<string> seen)
     {
-        foreach (string projectPath in EnumerateProjectFiles(directoryPath, SearchOption.AllDirectories))
-        {
-            TryAddCandidate(candidates, seen, projectPath, "project");
-        }
-
         foreach (string solutionPath in EnumerateSolutions(directoryPath, SearchOption.AllDirectories))
         {
             TryAddCandidate(candidates, seen, solutionPath, "solution");
+        }
+
+        foreach (string projectPath in EnumerateProjectFiles(directoryPath, SearchOption.AllDirectories))
+        {
+            TryAddCandidate(candidates, seen, projectPath, "project");
         }
     }
 
@@ -493,6 +518,149 @@ internal static class WorkspaceSemanticLoader
         return last ?? workspace.CurrentSolution;
     }
 
+    private static bool TryGetCachedWorkspaceState(string candidatePath, string requestedFilePath, out LoadedWorkspaceState? state)
+    {
+        LoadedWorkspaceState? staleState = null;
+
+        lock (WorkspaceCacheLock)
+        {
+            if (WorkspaceCache.TryGetValue(candidatePath, out CachedWorkspaceEntry? entry))
+            {
+                if (!entry.State.IsStale(requestedFilePath))
+                {
+                    entry.Touch();
+                    state = entry.State;
+                    return true;
+                }
+
+                WorkspaceCache.Remove(candidatePath);
+                staleState = entry.State;
+            }
+        }
+
+        staleState?.Dispose();
+        state = null;
+        return false;
+    }
+
+    private static async Task<CachedWorkspaceLoadResult> LoadWorkspaceStateAsync(
+        WorkspaceCandidate candidate,
+        string requestedFilePath,
+        CancellationToken cancellationToken)
+    {
+        if (TryGetCachedWorkspaceState(candidate.path, requestedFilePath, out LoadedWorkspaceState? cachedState) && cachedState is not null)
+        {
+            return new CachedWorkspaceLoadResult(cachedState, workspace_cache_mode: "process_balanced", workspace_cache_hit: true);
+        }
+
+        LoadedWorkspaceState loadedState = await CreateLoadedWorkspaceStateAsync(candidate, cancellationToken).ConfigureAwait(false);
+        LoadedWorkspaceState? staleState = null;
+        LoadedWorkspaceState? redundantState = null;
+        List<LoadedWorkspaceState>? evictedStates = null;
+        LoadedWorkspaceState selectedState = loadedState;
+        bool cacheHit = false;
+
+        lock (WorkspaceCacheLock)
+        {
+            if (WorkspaceCache.TryGetValue(candidate.path, out CachedWorkspaceEntry? existing))
+            {
+                if (!existing.State.IsStale(requestedFilePath))
+                {
+                    existing.Touch();
+                    selectedState = existing.State;
+                    cacheHit = true;
+                    redundantState = loadedState;
+                }
+                else
+                {
+                    WorkspaceCache.Remove(candidate.path);
+                    staleState = existing.State;
+                }
+            }
+
+            if (!cacheHit)
+            {
+                CachedWorkspaceEntry inserted = new(candidate.path, loadedState);
+                WorkspaceCache[candidate.path] = inserted;
+                selectedState = inserted.State;
+                evictedStates = TrimWorkspaceCacheIfNeeded();
+            }
+        }
+
+        redundantState?.Dispose();
+        staleState?.Dispose();
+        if (evictedStates is not null)
+        {
+            foreach (LoadedWorkspaceState evictedState in evictedStates)
+            {
+                evictedState.Dispose();
+            }
+        }
+
+        return new CachedWorkspaceLoadResult(selectedState, workspace_cache_mode: "process_balanced", workspace_cache_hit: cacheHit);
+    }
+
+    private static List<LoadedWorkspaceState> TrimWorkspaceCacheIfNeeded()
+    {
+        if (WorkspaceCache.Count <= MaxCachedWorkspaces)
+        {
+            return new List<LoadedWorkspaceState>();
+        }
+
+        List<LoadedWorkspaceState> evictedStates = new();
+        foreach (CachedWorkspaceEntry entry in WorkspaceCache.Values
+            .OrderBy(value => value.LastAccessUtc)
+            .Take(Math.Max(0, WorkspaceCache.Count - MaxCachedWorkspaces))
+            .ToArray())
+        {
+            WorkspaceCache.Remove(entry.CandidatePath);
+            evictedStates.Add(entry.State);
+        }
+
+        return evictedStates;
+    }
+
+    private static async Task<LoadedWorkspaceState> CreateLoadedWorkspaceStateAsync(
+        WorkspaceCandidate candidate,
+        CancellationToken cancellationToken)
+    {
+        List<string> diagnostics = new();
+        MSBuildWorkspace workspace = MSBuildWorkspace.Create();
+        workspace.WorkspaceFailed += (_, args) =>
+        {
+            if (args.Diagnostic.Kind != WorkspaceDiagnosticKind.Failure)
+            {
+                return;
+            }
+
+            string message = args.Diagnostic.Message;
+            if (ShouldIncludeWorkspaceDiagnostic(message))
+            {
+                diagnostics.Add(message);
+            }
+        };
+
+        try
+        {
+            Solution solution = await OpenSolutionAsync(workspace, candidate, cancellationToken).ConfigureAwait(false);
+            int projectCount = solution.Projects.Count();
+            int documentCount = solution.Projects.Sum(project => project.Documents.Count());
+            IReadOnlyDictionary<string, long> trackedFileWriteTimesUtc = CaptureTrackedFileWriteTimes(candidate.path, solution);
+            return new LoadedWorkspaceState(
+                workspace,
+                solution,
+                trackedFileWriteTimesUtc,
+                diagnostics.Distinct(StringComparer.Ordinal).Take(30).ToArray(),
+                projectCount,
+                documentCount);
+        }
+        catch
+        {
+            workspace.Dispose();
+            throw;
+        }
+    }
+
 
     private static string? FindNearestGitRoot(string startDirectory)
     {
@@ -638,6 +806,87 @@ internal static class WorkspaceSemanticLoader
         return fullPath;
     }
 
+    private static IReadOnlyDictionary<string, long> CaptureTrackedFileWriteTimes(string workspacePath, Solution solution)
+    {
+        HashSet<string> trackedPaths = new(PathComparer)
+        {
+            NormalizePath(workspacePath),
+        };
+
+        foreach (Project project in solution.Projects)
+        {
+            if (!string.IsNullOrWhiteSpace(project.FilePath))
+            {
+                trackedPaths.Add(NormalizePath(project.FilePath));
+            }
+
+            AddTrackedDocumentPaths(trackedPaths, project.Documents);
+        }
+
+        Dictionary<string, long> snapshot = new(PathComparer);
+        foreach (string path in trackedPaths)
+        {
+            if (!ShouldTrackWorkspaceFile(path))
+            {
+                continue;
+            }
+
+            snapshot[path] = GetTrackedFileWriteTimeUtcTicks(path);
+        }
+
+        return snapshot;
+    }
+
+    private static void AddTrackedDocumentPaths(HashSet<string> trackedPaths, IEnumerable<TextDocument> documents)
+    {
+        foreach (TextDocument document in documents)
+        {
+            if (!string.IsNullOrWhiteSpace(document.FilePath))
+            {
+                trackedPaths.Add(NormalizePath(document.FilePath));
+            }
+        }
+    }
+
+    private static long GetTrackedFileWriteTimeUtcTicks(string path)
+    {
+        return File.Exists(path)
+            ? File.GetLastWriteTimeUtc(path).Ticks
+            : long.MinValue;
+    }
+
+    private static bool ShouldTrackWorkspaceFile(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        string normalizedPath = NormalizePath(path);
+        string extension = Path.GetExtension(normalizedPath);
+        if (string.Equals(extension, ".sln", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".vbproj", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".props", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".targets", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".editorconfig", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".json", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalizedPath.IndexOf($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            normalizedPath.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            normalizedPath.IndexOf($"{Path.AltDirectorySeparatorChar}obj{Path.AltDirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            normalizedPath.IndexOf($"{Path.AltDirectorySeparatorChar}bin{Path.AltDirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private sealed record WorkspaceCandidate(string path, string kind);
 
     private sealed record WorkspaceCandidatePlan(
@@ -645,6 +894,94 @@ internal static class WorkspaceSemanticLoader
         string? requested_workspace_path,
         string? plan_error,
         IReadOnlyList<WorkspaceCandidate> candidates);
+
+    private sealed record CachedWorkspaceLoadResult(
+        LoadedWorkspaceState state,
+        string workspace_cache_mode,
+        bool workspace_cache_hit);
+
+    private sealed class CachedWorkspaceEntry
+    {
+        public CachedWorkspaceEntry(string candidatePath, LoadedWorkspaceState state)
+        {
+            CandidatePath = candidatePath;
+            State = state;
+            LastAccessUtc = DateTime.UtcNow;
+        }
+
+        public string CandidatePath { get; }
+        public LoadedWorkspaceState State { get; }
+        public DateTime LastAccessUtc { get; private set; }
+
+        public void Touch()
+        {
+            LastAccessUtc = DateTime.UtcNow;
+        }
+    }
+
+    private sealed class LoadedWorkspaceState : IDisposable
+    {
+        public LoadedWorkspaceState(
+            MSBuildWorkspace workspace,
+            Solution solution,
+            IReadOnlyDictionary<string, long> trackedFileWriteTimesUtc,
+            IReadOnlyList<string> diagnostics,
+            int projectCount,
+            int documentCount)
+        {
+            Workspace = workspace;
+            Solution = solution;
+            TrackedFileWriteTimesUtc = trackedFileWriteTimesUtc;
+            Diagnostics = diagnostics;
+            ProjectCount = projectCount;
+            DocumentCount = documentCount;
+        }
+
+        public MSBuildWorkspace Workspace { get; }
+        public Solution Solution { get; }
+        public IReadOnlyDictionary<string, long> TrackedFileWriteTimesUtc { get; }
+        public IReadOnlyList<string> Diagnostics { get; }
+        public int ProjectCount { get; }
+        public int DocumentCount { get; }
+
+        public bool IsStale(string requestedFilePath)
+        {
+            return GetFirstStalePath(requestedFilePath) is not null;
+        }
+
+        public string? GetFirstStalePath(string requestedFilePath)
+        {
+            foreach ((string path, long expectedTicks) in TrackedFileWriteTimesUtc)
+            {
+                bool mustValidate = IsAlwaysValidatedWorkspaceFile(path) ||
+                    PathComparer.Equals(path, requestedFilePath);
+                if (!mustValidate)
+                {
+                    continue;
+                }
+
+                if (GetTrackedFileWriteTimeUtcTicks(path) != expectedTicks)
+                {
+                    return path;
+                }
+            }
+
+            return null;
+        }
+
+        public void Dispose()
+        {
+            Workspace.Dispose();
+        }
+    }
+
+    private static bool IsAlwaysValidatedWorkspaceFile(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return !string.Equals(extension, ".cs", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(extension, ".vb", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(extension, ".csx", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 

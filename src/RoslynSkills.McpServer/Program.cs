@@ -651,7 +651,7 @@ internal static class Program
             properties["first_declaration"] = BoolProperty("When true, return first declaration match (or first match when no declaration exists).");
             properties["snippet_single_line"] = BoolProperty("Render context snippets as a single line with separators.");
             properties["max_snippet_chars"] = IntProperty("Maximum snippet character count (0 means no limit).", 0);
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("symbol_name");
@@ -684,7 +684,7 @@ internal static class Program
             properties["first_declaration"] = BoolProperty("Default first-declaration behavior for queries.");
             properties["snippet_single_line"] = BoolProperty("Default snippet single-line rendering for queries.");
             properties["max_snippet_chars"] = IntProperty("Default max snippet chars for queries (0 means no limit).", 0);
-            properties["workspace_path"] = StringProperty("Default workspace path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Default workspace path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("Default fail-closed workspace policy for queries.");
             required.Add("queries");
             return;
@@ -698,7 +698,7 @@ internal static class Program
             properties["brief"] = BoolProperty("Return compact match payload.");
             properties["max_results"] = IntProperty("Maximum invocation matches to return.", 1);
             properties["include_object_creations"] = BoolProperty("Include object creation calls for constructor targets.");
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("line");
@@ -716,7 +716,7 @@ internal static class Program
             properties["max_nodes"] = IntProperty("Maximum nodes returned.", 1);
             properties["max_edges"] = IntProperty("Maximum edges returned.", 1);
             properties["brief"] = BoolProperty("Return compact node/edge payload.");
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("line");
@@ -736,7 +736,7 @@ internal static class Program
             properties["max_nodes"] = IntProperty("Maximum visited nodes during path search.", 1);
             properties["max_graph_edges"] = IntProperty("Maximum edges collected for graph construction.", 1);
             properties["brief"] = BoolProperty("Return compact path payload.");
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("source_file_path");
             required.Add("source_line");
@@ -749,7 +749,7 @@ internal static class Program
 
         if (string.Equals(commandId, "analyze.unused_private_symbols", StringComparison.OrdinalIgnoreCase))
         {
-            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
             properties["include_generated"] = BoolProperty("Include generated source files.");
             properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
             properties["max_symbols"] = IntProperty("Maximum unused-symbol results returned.", 1);
@@ -766,7 +766,7 @@ internal static class Program
             properties["brief"] = BoolProperty("Return compact CFG payload.");
             properties["max_blocks"] = IntProperty("Maximum CFG blocks returned.", 1);
             properties["max_edges"] = IntProperty("Maximum CFG edges returned.", 1);
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("line");
@@ -781,7 +781,7 @@ internal static class Program
             properties["column"] = IntProperty("1-based column number for data-flow anchor.", 1);
             properties["brief"] = BoolProperty("Return compact symbol sets.");
             properties["max_symbols"] = IntProperty("Maximum symbols returned per set.", 1);
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("line");
@@ -791,7 +791,7 @@ internal static class Program
 
         if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
         {
-            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
             properties["layers"] = new JsonObject
             {
                 ["type"] = "array",
@@ -814,7 +814,7 @@ internal static class Program
             properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
             properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
             properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             properties["include_references"] = BoolProperty("Include reference locations for the anchor symbol.");
             properties["include_callers"] = BoolProperty("Include caller sites for method anchors.");
@@ -834,7 +834,7 @@ internal static class Program
 
         if (string.Equals(commandId, "analyze.override_coverage", StringComparison.OrdinalIgnoreCase))
         {
-            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
             properties["coverage_threshold"] = new JsonObject
             {
                 ["type"] = "number",
@@ -853,7 +853,7 @@ internal static class Program
 
         if (string.Equals(commandId, "analyze.async_risk_scan", StringComparison.OrdinalIgnoreCase))
         {
-            properties["workspace_path"] = StringProperty("Workspace path (.csproj/.vbproj/.sln/.slnx/file/directory) used as analysis root.");
+            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
             properties["severity_filter"] = new JsonObject
             {
                 ["type"] = "array",
@@ -885,7 +885,7 @@ internal static class Program
                 ["items"] = new JsonObject { ["type"] = "string" },
                 ["description"] = "Directory/file search roots.",
             };
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory anchor used as search scope.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory anchor used as search scope. Prefer .sln/.slnx for whole-solution search scope.");
             properties["include_globs"] = new JsonObject
             {
                 ["type"] = "array",
@@ -927,7 +927,7 @@ internal static class Program
             properties["context_lines_before"] = IntProperty("Additional lines before extracted span.", 0);
             properties["context_lines_after"] = IntProperty("Additional lines after extracted span.", 0);
             properties["max_chars"] = IntProperty("Maximum characters returned for source text.", 1);
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("line");
@@ -964,7 +964,7 @@ internal static class Program
         if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
         {
             properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["workspace_path"] = StringProperty("Optional .csproj/.vbproj/.sln/.slnx/or directory path used to force workspace context.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             return;

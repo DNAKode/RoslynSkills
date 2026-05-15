@@ -391,3 +391,27 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - Follow-up issue/test link:
     - `tests/RoslynSkills.Benchmark.Tests/ToolThinkingSplitScriptTests.cs`
     - `benchmarks/scripts/Analyze-ToolThinkingSplit.ps1`
+
+- `2026-05-14`: Hardened solution-first workspace binding and activation guidance using direct source edits
+  - Task/Context: ensure future hot workspace hosts load full `.sln/.slnx` workspaces by default where available, expose solution-vs-project binding telemetry, and sweep CLI/MCP/skill/docs guidance.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+dbaf95b49117d820b1c2125bc6c5c589e4fa40ab`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changed RoslynSkills' own workspace loader, CLI activation text, MCP schema descriptions, tests, and docs. Current RoslynSkills commands can navigate/edit target C# members, but there is no self-hosted maintainer transaction that can safely coordinate a cross-surface behavior + documentation update.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer-grade multi-file command for command-surface/help/schema/doc sweeps, with assertions over generated help text and workspace payload shape.
+    - Missing `workspace.preload`/hot-host command surface that can directly validate solution binding as a first-class workflow.
+  - Proposed improvement:
+    - Add maintainer workflow tooling for cross-interface command contract changes.
+    - Implement the planned hot workspace lifecycle commands with explicit `.sln/.slnx` preference and project-scoped telemetry.
+  - Expected impact:
+    - correctness: higher (agents can verify full solution binding via `workspace_kind`, `project_count`, and `document_count`).
+    - latency: lower in future hot-host flows (solution bind paid once, warm commands reuse the same workspace).
+    - token_count: lower (clearer activation guidance reduces workspace-path retry churn).
+  - Follow-up issue/test link:
+    - `tests/RoslynSkills.Core.Tests/WorkspaceSemanticLoaderTests.cs`
+    - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`

@@ -52,6 +52,7 @@ Pit-of-success contract:
 - Execute semantic-first: `nav.*`, `ctx.*`, `diag.*` before text fallback
 - Start stable-first: use `list-commands --stable-only --ids-only`; only step into `advanced`/`experimental` commands when needed
 - Verify workspace binding: use `--workspace-path ... --require-workspace true` on project code
+- Prefer `.sln`/`.slnx` for repo-wide or hot-workspace context; use `.csproj` only when intentionally project-scoped
 - Verify before finalize: diagnostics + build/tests
 
 Cached invocation guidance (throughput vs freshness):
@@ -67,29 +68,29 @@ Mandatory policy: if you use non-Roslyn tooling to read/edit `.cs`, append a sho
 1) Find declaration coordinates (workspace-bound for project code):
 
 ```powershell
-roscli nav.find_symbol src/MyFile.cs MySymbol --brief true --max-results 50 --workspace-path MyProject.csproj --require-workspace true
+roscli nav.find_symbol src/MyFile.cs MySymbol --brief true --max-results 50 --workspace-path MySolution.slnx --require-workspace true
 ```
 
 2) Apply a structured edit:
 
 ```powershell
-roscli edit.rename_symbol src/MyFile.cs 42 17 NewName --apply true --max-diagnostics 50 --workspace-path MyProject.csproj --require-workspace true
+roscli edit.rename_symbol src/MyFile.cs 42 17 NewName --apply true --max-diagnostics 50 --workspace-path MySolution.slnx --require-workspace true
 ```
 
 3) If the edit response does not include post-edit diagnostics (or reports errors/warnings), verify:
 
 ```powershell
-roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MyProject.csproj --require-workspace true
+roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MySolution.slnx --require-workspace true
 ```
 
 Investigative tracing (when target is unclear across many files):
 
 ```powershell
 roscli ctx.search_text "RemoteUserAction" src --mode literal --max-results 120 --brief true
-roscli nav.find_invocations src/MyFile.cs 42 17 --brief true --max-results 100 --workspace-path MyProject.csproj --require-workspace true
-roscli nav.call_hierarchy src/MyFile.cs 42 17 --direction both --max-depth 2 --brief true --workspace-path MyProject.csproj --require-workspace true
-roscli analyze.control_flow_graph src/MyFile.cs 42 17 --brief true --max-blocks 120 --max-edges 260 --workspace-path MyProject.csproj --require-workspace true
-roscli analyze.dataflow_slice src/MyFile.cs 42 17 --brief true --max-symbols 120 --workspace-path MyProject.csproj --require-workspace true
+roscli nav.find_invocations src/MyFile.cs 42 17 --brief true --max-results 100 --workspace-path MySolution.slnx --require-workspace true
+roscli nav.call_hierarchy src/MyFile.cs 42 17 --direction both --max-depth 2 --brief true --workspace-path MySolution.slnx --require-workspace true
+roscli analyze.control_flow_graph src/MyFile.cs 42 17 --brief true --max-blocks 120 --max-edges 260 --workspace-path MySolution.slnx --require-workspace true
+roscli analyze.dataflow_slice src/MyFile.cs 42 17 --brief true --max-symbols 120 --workspace-path MySolution.slnx --require-workspace true
 roscli analyze.unused_private_symbols src --brief true --max-symbols 120
 roscli analyze.dependency_violations src MyApp.Web MyApp.Application MyApp.Domain --direction toward_end --brief true
 roscli analyze.impact_slice src/MyFile.cs 42 17 --brief true --include-callers true --include-callees true
@@ -100,13 +101,14 @@ roscli analyze.async_risk_scan src --brief true --max-findings 120 --severity-fi
 Bundle multiple read-only probes in one call when useful:
 
 ```powershell
-roscli run query.batch --input "{`"queries`":[{`"command_id`":`"ctx.search_text`",`"input`":{`"patterns`":[`"RemoteUserAction`",`"ReplicationUpdate`"],`"roots`":[`"src`"],`"mode`":`"literal`"}},{`"command_id`":`"nav.find_invocations`",`"input`":{`"file_path`":`"src/MyFile.cs`",`"line`":42,`"column`":17,`"brief`":true,`"workspace_path`":`"MyProject.csproj`",`"require_workspace`":true}}],`"continue_on_error`":true}"
+roscli run query.batch --input "{`"queries`":[{`"command_id`":`"ctx.search_text`",`"input`":{`"patterns`":[`"RemoteUserAction`",`"ReplicationUpdate`"],`"roots`":[`"src`"],`"mode`":`"literal`"}},{`"command_id`":`"nav.find_invocations`",`"input`":{`"file_path`":`"src/MyFile.cs`",`"line`":42,`"column`":17,`"brief`":true,`"workspace_path`":`"MySolution.slnx`",`"require_workspace`":true}}],`"continue_on_error`":true}"
 ```
 
 ## Troubleshooting (Fast Fail-Closed)
 
 - Args/schema error: run `roscli describe-command <command-id>` once, fix args, retry.
 - Workspace is `ad_hoc` for project code: rerun with explicit `--workspace-path ... --require-workspace true`.
+- Solution scope is expected but `resolved_workspace_path` is a project file: rerun with the `.sln`/`.slnx` path.
 - You see `CS0518` (missing core types): treat as invalid workspace binding and retry with correct workspace root.
 
 ## Deep Reference (Progressive Disclosure)

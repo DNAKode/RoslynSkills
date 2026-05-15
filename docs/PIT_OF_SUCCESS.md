@@ -45,10 +45,9 @@ Default policy:
 ### 1) Safe symbol rename
 
 ```text
-roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --require-workspace true
-roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true
-roscli diag.get_file_diagnostics src/MyProject/Program.cs --require-workspace true
-roscli diag.get_file_diagnostics src/MyProject/Program.cs --require-workspace true --workspace-path src/MyProject/MyProject.csproj
+roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
+roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true
+roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true
 ```
 
 ### 2) Create new file in one shot
@@ -83,7 +82,9 @@ roscli diag.get_workspace_snapshot src --require-workspace true --workspace-path
 - `session.*` diagnostics are `ad_hoc` (file-only). Missing type/reference errors may be false negatives until verified with workspace-backed diagnostics (`diag.get_file_diagnostics`).
 - Do not open `.sln`, `.slnx`, or `.csproj` with `session.open`.
 - Check `workspace_context.mode` on semantic file commands (for example `nav.find_symbol`, `nav.find_references`, `ctx.symbol_envelope`, `diag.get_file_diagnostics`, `diag.get_after_edit`).
-- If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.csproj|.sln|.slnx|dir>` and prefer `--require-workspace true`.
+- Prefer explicit `.sln`/`.slnx` workspace paths for repo-wide context and hot workspace hosts; use `.csproj` only when intentionally project-scoped.
+- Check `workspace_context.resolved_workspace_path`, `workspace_context.workspace_kind`, and `workspace_context.project_count` when full solution context matters.
+- If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.sln|.slnx|.csproj|dir>` and prefer `--require-workspace true`.
 - For complex payloads, prefer `--input-stdin` over shell-escaped JSON.
 - If RoslynSkills cannot answer a C# query, agent must state why before fallback.
 
@@ -108,7 +109,7 @@ Workflow:
 2) run "roscli quickstart" and follow its recipes.
 3) if argument shape is unclear, run "roscli describe-command <command-id>".
 4) prefer nav.* / ctx.* / diag.* before text-only fallback.
-5) verify `workspace_context.mode` for nav/diag file commands and force `--workspace-path` when needed; use `--require-workspace true` for fail-closed checks.
+5) verify `workspace_context.mode` for nav/diag file commands and force `--workspace-path` when needed; prefer `.sln/.slnx` for repo-wide context and use `--require-workspace true` for fail-closed checks.
 6) run diagnostics/build/tests before finalizing.
 ```
 
