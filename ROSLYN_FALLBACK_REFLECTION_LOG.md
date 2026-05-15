@@ -579,3 +579,25 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - Follow-up issue/test link:
     - `src/RoslynSkills.WorkspaceHost/Program.cs`
     - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`
+
+- `2026-05-15`: Added CLI-side workspace host client connection layer using direct source edits
+  - Task/Context: implement sequence item 5 by adding a `roscli` assembly client component that connects to named-pipe or Unix-socket workspace hosts and exchanges JSON-lines `WorkspaceHostRequest`/`WorkspaceHostResponse` protocol messages.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+4eb285af22099ca8a81c1c78a8fddcc1a1e42a17`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The change adds new CLI transport/client code plus tests. Current RoslynSkills commands do not provide a self-hosted workflow for adding a cross-process client abstraction and generated protocol round-trip tests.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding a protocol client layer from shared contracts, including named-pipe/socket connection factories and request/response tests.
+  - Proposed improvement:
+    - Add `maint.add_protocol_client` to scaffold transport client classes from existing protocol records and generate text-stream plus process-backed smoke tests.
+  - Expected impact:
+    - correctness: higher (CLI lifecycle commands can call a tested client layer instead of duplicating transport code).
+    - latency: neutral now, lower once roscli routes calls through the hot host.
+    - token_count: lower later because agents can use daemon-backed commands without repeating workspace-load arguments.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Cli/WorkspaceHostClient.cs`
+    - `tests/RoslynSkills.Cli.Tests/WorkspaceHostClientTests.cs`
