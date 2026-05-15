@@ -557,3 +557,25 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Core/Commands/WorkspaceStatusCommand.cs`
     - `src/RoslynSkills.Core/Commands/WorkspaceCloseCommand.cs`
     - `src/RoslynSkills.Core/Commands/WorkspaceSemanticLoader.cs`
+
+- `2026-05-15`: Added workspace host pipe/socket transports using direct source edits
+  - Task/Context: implement sequence item 4 by extending `RoslynSkills.WorkspaceHost` beyond stdio to support named-pipe and Unix-domain-socket JSON-lines transports, with transport option validation and process tests.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+ba437eef40d4b5f84ff4db1d505fb00770844817`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The change refactors process I/O plumbing, command-line option parsing, stream ownership, cross-platform socket setup, and process tests. Current RoslynSkills commands do not provide self-hosted transport-layer refactoring or executable-process harness generation.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for introducing a new process transport with generated smoke tests and manual validation commands.
+  - Proposed improvement:
+    - Add `maint.add_host_transport` to scaffold transport options, server stream loops, process tests, and platform-specific validation notes from a host protocol declaration.
+  - Expected impact:
+    - correctness: higher (daemon communication can move off stdio without changing the protocol payload).
+    - latency: lower once the CLI client can reuse a pipe/socket-backed host.
+    - token_count: neutral now, lower later when agents can keep solution state hot across calls.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`

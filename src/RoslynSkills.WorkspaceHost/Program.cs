@@ -1,6 +1,9 @@
 #nullable enable
 using System.Diagnostics;
+using System.IO.Pipes;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using RoslynSkills.Contracts;
 using RoslynSkills.Core;
@@ -14,6 +17,9 @@ internal static class Program
     {
         WriteIndented = false,
     };
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    private static TextWriter ResponseWriter = Console.Out;
+    private static string CurrentTransportName = "stdio-jsonl";
 
     private static readonly IReadOnlyDictionary<string, string> WorkspaceMethodCommandMap =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -25,12 +31,35 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
-        _ = args;
+        if (!TryParseOptions(args, out WorkspaceHostOptions? options, out string? error))
+        {
+            await Console.Error.WriteLineAsync(error).ConfigureAwait(false);
+            return 2;
+        }
+
         ICommandRegistry registry = DefaultRegistryFactory.Create();
+
+        return options.Transport switch
+        {
+            "stdio" => await RunJsonLinesAsync(registry, Console.In, Console.Out, "stdio-jsonl").ConfigureAwait(false),
+            "named-pipe" => await RunNamedPipeAsync(registry, options.PipeName!).ConfigureAwait(false),
+            "unix-socket" => await RunUnixSocketAsync(registry, options.SocketPath!).ConfigureAwait(false),
+            _ => 2,
+        };
+    }
+
+    private static async Task<int> RunJsonLinesAsync(
+        ICommandRegistry registry,
+        TextReader input,
+        TextWriter output,
+        string transportName)
+    {
+        ResponseWriter = output;
+        CurrentTransportName = transportName;
 
         while (true)
         {
-            string? line = await Console.In.ReadLineAsync().ConfigureAwait(false);
+            string? line = await input.ReadLineAsync().ConfigureAwait(false);
             if (line is null)
             {
                 break;
@@ -49,6 +78,192 @@ internal static class Program
         }
 
         return 0;
+    }
+
+    private static async Task<int> RunNamedPipeAsync(ICommandRegistry registry, string pipeName)
+    {
+        using NamedPipeServerStream pipe = new(
+            pipeName,
+            PipeDirection.InOut,
+            maxNumberOfServerInstances: 1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous);
+
+        await pipe.WaitForConnectionAsync().ConfigureAwait(false);
+        using StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+        await using StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+        {
+            AutoFlush = true,
+        };
+
+        return await RunJsonLinesAsync(registry, reader, writer, "named-pipe-jsonl").ConfigureAwait(false);
+    }
+
+    private static async Task<int> RunUnixSocketAsync(ICommandRegistry registry, string socketPath)
+    {
+        using Socket listener = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        bool bound = false;
+        try
+        {
+            listener.Bind(new UnixDomainSocketEndPoint(socketPath));
+            bound = true;
+            listener.Listen(backlog: 1);
+
+            using Socket connection = await listener.AcceptAsync().ConfigureAwait(false);
+            await using NetworkStream stream = new(connection, ownsSocket: false);
+            using StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+            await using StreamWriter writer = new(stream, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+            {
+                AutoFlush = true,
+            };
+
+            return await RunJsonLinesAsync(registry, reader, writer, "unix-socket-jsonl").ConfigureAwait(false);
+        }
+        finally
+        {
+            if (bound)
+            {
+                TryDeleteSocketPath(socketPath);
+            }
+        }
+    }
+
+    private static bool TryParseOptions(
+        string[] args,
+        out WorkspaceHostOptions options,
+        out string? error)
+    {
+        string transport = "stdio";
+        string? pipeName = null;
+        string? socketPath = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            string? value = null;
+            int equalsIndex = arg.IndexOf('=', StringComparison.Ordinal);
+            if (equalsIndex >= 0)
+            {
+                value = arg[(equalsIndex + 1)..];
+                arg = arg[..equalsIndex];
+            }
+
+            switch (arg)
+            {
+                case "--transport":
+                    if (!TryReadOptionValue(args, ref i, value, out transport, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null);
+                        return false;
+                    }
+
+                    transport = NormalizeTransport(transport);
+                    break;
+
+                case "--pipe-name":
+                    if (!TryReadOptionValue(args, ref i, value, out pipeName, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null);
+                        return false;
+                    }
+
+                    break;
+
+                case "--socket-path":
+                    if (!TryReadOptionValue(args, ref i, value, out socketPath, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null);
+                        return false;
+                    }
+
+                    break;
+
+                default:
+                    options = new WorkspaceHostOptions("stdio", null, null);
+                    error = $"Unknown workspace host option '{arg}'. Supported options: --transport, --pipe-name, --socket-path.";
+                    return false;
+            }
+        }
+
+        if (transport == "named-pipe" && string.IsNullOrWhiteSpace(pipeName))
+        {
+            options = new WorkspaceHostOptions("stdio", null, null);
+            error = "--transport named-pipe requires --pipe-name.";
+            return false;
+        }
+
+        if (transport == "unix-socket" && string.IsNullOrWhiteSpace(socketPath))
+        {
+            options = new WorkspaceHostOptions("stdio", null, null);
+            error = "--transport unix-socket requires --socket-path.";
+            return false;
+        }
+
+        if (transport is not ("stdio" or "named-pipe" or "unix-socket"))
+        {
+            options = new WorkspaceHostOptions("stdio", null, null);
+            error = $"Unsupported transport '{transport}'. Supported transports: stdio, named-pipe, unix-socket.";
+            return false;
+        }
+
+        options = new WorkspaceHostOptions(transport, pipeName, socketPath);
+        error = null;
+        return true;
+    }
+
+    private static bool TryReadOptionValue(
+        string[] args,
+        ref int index,
+        string? inlineValue,
+        out string value,
+        out string? error)
+    {
+        if (!string.IsNullOrWhiteSpace(inlineValue))
+        {
+            value = inlineValue;
+            error = null;
+            return true;
+        }
+
+        if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            value = string.Empty;
+            error = $"Option '{args[index]}' requires a value.";
+            return false;
+        }
+
+        index++;
+        value = args[index];
+        error = null;
+        return true;
+    }
+
+    private static string NormalizeTransport(string transport)
+        => transport.ToLowerInvariant() switch
+        {
+            "stdio" => "stdio",
+            "pipe" => "named-pipe",
+            "named-pipe" => "named-pipe",
+            "unix" => "unix-socket",
+            "unix-socket" => "unix-socket",
+            _ => transport,
+        };
+
+    private static void TryDeleteSocketPath(string socketPath)
+    {
+        try
+        {
+            if (File.Exists(socketPath))
+            {
+                File.Delete(socketPath);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static async Task<bool> HandleRequestLineAsync(ICommandRegistry registry, string line)
@@ -168,6 +383,8 @@ internal static class Program
             Capabilities: new[]
             {
                 "stdio-jsonl",
+                "named-pipe-jsonl",
+                "unix-socket-jsonl",
                 "host.handshake",
                 "daemon.status",
                 "tool.list",
@@ -188,7 +405,7 @@ internal static class Program
             protocol_version = WorkspaceHostProtocol.ProtocolVersion,
             host_version = GetAssemblyVersion(),
             process_id = Environment.ProcessId,
-            transport = "stdio-jsonl",
+            transport = CurrentTransportName,
             workspace_store = "process_hot",
             supported_methods = SupportedMethods(),
         };
@@ -531,7 +748,7 @@ internal static class Program
     private static async Task WriteResponseAsync(WorkspaceHostResponse response)
     {
         string json = JsonSerializer.Serialize(response, JsonOptions);
-        await Console.Out.WriteLineAsync(json).ConfigureAwait(false);
+        await ResponseWriter.WriteLineAsync(json).ConfigureAwait(false);
     }
 
     private static double ElapsedMilliseconds(Stopwatch stopwatch)
@@ -552,4 +769,9 @@ internal static class Program
             WorkspaceHostProtocol.Method.WorkspaceClose,
             WorkspaceHostProtocol.Method.Shutdown,
         };
+
+    private sealed record WorkspaceHostOptions(
+        string Transport,
+        string? PipeName,
+        string? SocketPath);
 }
