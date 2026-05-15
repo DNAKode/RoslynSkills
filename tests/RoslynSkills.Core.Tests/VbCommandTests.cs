@@ -528,11 +528,238 @@ public sealed class VbCommandTests
         }
     }
 
+    [Fact]
+    public async Task StaticAnalysisWorkspace_LoadsSlnxAsMsBuildSolution()
+    {
+        string root = CreateWorkspaceRoot("slnx");
+        (string solutionPath, string appPath, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+
+        try
+        {
+            (StaticAnalysisWorkspace? workspace, CommandError? error) result = await StaticAnalysisWorkspace.LoadAsync(
+                workspacePath: solutionPath,
+                includeGenerated: false,
+                maxFiles: 100,
+                cancellationToken: CancellationToken.None);
+
+            Assert.Null(result.error);
+            Assert.NotNull(result.workspace);
+            Assert.Equal("msbuild_solution", result.workspace!.AnalysisMode);
+            Assert.Equal("slnx", result.workspace.WorkspaceKind);
+            Assert.Equal(Path.GetFullPath(solutionPath), result.workspace.ResolvedWorkspacePath);
+            Assert.True(result.workspace.ProjectCount >= 2);
+            Assert.True(result.workspace.DocumentCount >= 2);
+            Assert.Contains(result.workspace.SyntaxTrees, tree => Path.GetFullPath(tree.FilePath) == Path.GetFullPath(appPath));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnusedPrivateSymbolsCommand_WithSlnxReportsMsBuildSolutionMode()
+    {
+        string root = CreateWorkspaceRoot("unused-slnx");
+        (string solutionPath, _, string libPath) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+
+        try
+        {
+            UnusedPrivateSymbolsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                workspace_path = solutionPath,
+                brief = true,
+                max_symbols = 20,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement scope = doc.RootElement.GetProperty("analysis_scope");
+            Assert.Equal("msbuild_solution", scope.GetProperty("analysis_mode").GetString());
+            Assert.Equal("slnx", scope.GetProperty("workspace_kind").GetString());
+            Assert.Equal(Path.GetFullPath(solutionPath), scope.GetProperty("resolved_workspace_path").GetString());
+            Assert.True(scope.GetProperty("project_count").GetInt32() >= 2);
+            Assert.True(scope.GetProperty("document_count").GetInt32() >= 2);
+            Assert.Contains("Lib", await File.ReadAllTextAsync(libPath));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceLifecycleCommands_PreloadSlnxAsHotSolution()
+    {
+        string root = CreateWorkspaceRoot("hot-slnx");
+        (string solutionPath, _, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+        string? handle = null;
+
+        try
+        {
+            WorkspacePreloadCommand preload = new();
+            JsonElement preloadInput = ToJsonElement(new
+            {
+                workspace_path = solutionPath,
+                require_solution = true,
+                max_files = 100,
+            });
+
+            CommandExecutionResult preloadResult = await preload.ExecuteAsync(preloadInput, CancellationToken.None);
+
+            Assert.True(preloadResult.Ok);
+            using JsonDocument preloadDoc = JsonDocument.Parse(JsonSerializer.Serialize(preloadResult.Data));
+            JsonElement preloadRoot = preloadDoc.RootElement;
+            handle = preloadRoot.GetProperty("workspace_handle").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(handle));
+            Assert.Equal("msbuild_solution", preloadRoot.GetProperty("analysis_mode").GetString());
+            Assert.Equal("slnx", preloadRoot.GetProperty("workspace_kind").GetString());
+            Assert.True(preloadRoot.GetProperty("solution_scoped").GetBoolean());
+            Assert.True(preloadRoot.GetProperty("projects_loaded").GetInt32() >= 2);
+            Assert.True(preloadRoot.GetProperty("documents_loaded").GetInt32() >= 2);
+
+            WorkspaceStatusCommand status = new();
+            CommandExecutionResult statusResult = await status.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle }),
+                CancellationToken.None);
+
+            Assert.True(statusResult.Ok);
+            using JsonDocument statusDoc = JsonDocument.Parse(JsonSerializer.Serialize(statusResult.Data));
+            JsonElement statusRoot = statusDoc.RootElement;
+            Assert.Equal(handle, statusRoot.GetProperty("workspace_handle").GetString());
+            Assert.True(statusRoot.GetProperty("loaded").GetBoolean());
+            Assert.False(statusRoot.GetProperty("dirty").GetBoolean());
+            Assert.Equal("slnx", statusRoot.GetProperty("workspace_kind").GetString());
+
+            WorkspaceCloseCommand close = new();
+            CommandExecutionResult closeResult = await close.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle }),
+                CancellationToken.None);
+
+            Assert.True(closeResult.Ok);
+            handle = null;
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(handle))
+            {
+                await new WorkspaceCloseCommand().ExecuteAsync(
+                    ToJsonElement(new { workspace_handle = handle }),
+                    CancellationToken.None);
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePreloadCommand_RequireSolutionRejectsProjectScope()
+    {
+        string root = CreateWorkspaceRoot("hot-project-reject");
+        (string _, string appPath, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+        string projectPath = Path.Combine(Path.GetDirectoryName(appPath)!, "App.csproj");
+
+        try
+        {
+            WorkspacePreloadCommand preload = new();
+            CommandExecutionResult result = await preload.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    workspace_path = projectPath,
+                    require_solution = true,
+                    max_files = 100,
+                }),
+                CancellationToken.None);
+
+            Assert.False(result.Ok);
+            Assert.Contains(result.Errors, error => error.Code == "solution_required");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private static string CreateWorkspaceRoot(string suffix)
     {
         string root = Path.Combine(Path.GetTempPath(), $"roslynskills-vb-{suffix}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static async Task<(string solutionPath, string appPath, string libPath)> CreateTwoProjectSlnxWorkspaceAsync(string root)
+    {
+        string appDirectory = Path.Combine(root, "App");
+        string libDirectory = Path.Combine(root, "Lib");
+        Directory.CreateDirectory(appDirectory);
+        Directory.CreateDirectory(libDirectory);
+
+        string appProjectPath = Path.Combine(appDirectory, "App.csproj");
+        string libProjectPath = Path.Combine(libDirectory, "Lib.csproj");
+        await File.WriteAllTextAsync(
+            appProjectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <ProjectReference Include="../Lib/Lib.csproj" />
+              </ItemGroup>
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            libProjectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        string appPath = Path.Combine(appDirectory, "Program.cs");
+        string libPath = Path.Combine(libDirectory, "Helper.cs");
+        await File.WriteAllTextAsync(
+            appPath,
+            """
+            using Lib;
+
+            public sealed class Program
+            {
+                public string Run() => Helper.Name;
+            }
+            """);
+        await File.WriteAllTextAsync(
+            libPath,
+            """
+            namespace Lib;
+
+            public static class Helper
+            {
+                public static string Name => "Lib";
+            }
+            """);
+
+        string solutionPath = Path.Combine(root, "Host.slnx");
+        await File.WriteAllTextAsync(
+            solutionPath,
+            """
+            <Solution>
+              <Project Path="App/App.csproj" />
+              <Project Path="Lib/Lib.csproj" />
+            </Solution>
+            """);
+
+        return (solutionPath, appPath, libPath);
     }
 
     private static string WriteTempFile(string contents, string extension)

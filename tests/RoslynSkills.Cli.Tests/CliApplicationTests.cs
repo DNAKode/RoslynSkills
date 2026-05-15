@@ -405,6 +405,7 @@ public sealed class CliApplicationTests
             string output = stdout.ToString();
             Assert.Equal(0, exitCode);
             Assert.Contains("\"CommandId\": \"ctx.search_text\"", output);
+            Assert.Contains("\"analysis_mode\": \"directory_scan\"", output);
             Assert.Contains("\"total_matches\": 1", output);
         }
         finally

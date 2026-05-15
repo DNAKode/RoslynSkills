@@ -72,14 +72,26 @@ roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path src/MyPr
 
 This should be treated as a project-scoped host, not a whole-solution host.
 
-### Not Yet True MSBuild Solution-Backed
+### Analysis Commands Now MSBuild Solution-Aware
 
-These accept `workspace_path` as an analysis root but currently use source scanning/ad-hoc compilation rather than full MSBuild solution membership:
+These commands use `StaticAnalysisWorkspace` and can load `.sln/.slnx/.csproj/.vbproj` via MSBuild workspace semantics. Directory/file roots still use directory-scan/ad-hoc compilation.
 
 - `analyze.unused_private_symbols`
 - `analyze.dependency_violations`
 - `analyze.override_coverage`
 - `analyze.async_risk_scan`
+
+Acceptance check:
+
+- `analysis_scope.analysis_mode = msbuild_solution|msbuild_project|directory_scan`
+- `analysis_scope.resolved_workspace_path` identifies the actual loaded solution/project/root
+- `analysis_scope.workspace_kind` distinguishes `solution`, `slnx`, `project`, `directory`, or `file`
+- `analysis_scope.project_count` and `analysis_scope.document_count` are non-zero for MSBuild solution/project modes
+
+### Still Not True MSBuild Solution-Backed
+
+These accept `workspace_path` as an analysis root but currently use source scanning/ad-hoc compilation rather than full MSBuild solution membership:
+
 - `ctx.search_text`
 - `diag.get_solution_snapshot`
 
@@ -89,9 +101,12 @@ Implication:
 
 Backlog:
 
-- Add a shared solution-backed analysis workspace loader for the `analyze.*` commands that currently use `StaticAnalysisWorkspace`.
 - Rename or document ad-hoc snapshot commands so agents do not confuse `diag.get_solution_snapshot` with MSBuild solution loading.
-- Add output fields that distinguish `analysis_mode=msbuild_solution|project|directory_scan|ad_hoc`.
+
+Current telemetry:
+
+- `ctx.search_text` reports `analysis_scope.analysis_mode = directory_scan`.
+- `diag.get_solution_snapshot` reports `analysis_scope.analysis_mode = ad_hoc_compilation`.
 
 ### Sessions
 
@@ -106,11 +121,12 @@ Backlog:
 
 ### Hot Workspace Host
 
-Planned host commands should require or strongly prefer `.sln/.slnx`:
+Host lifecycle commands now require or strongly prefer `.sln/.slnx`:
 
 ```text
-roscli workspace.preload MySolution.slnx
+roscli workspace.preload MySolution.slnx --require-solution true
 roscli workspace.status <handle>
+roscli workspace.close <handle>
 ```
 
 Project files should remain allowed only with explicit project-scoped telemetry.
@@ -125,9 +141,15 @@ Required host telemetry:
 - `dirty`
 - `invalidated_paths`
 
+Current implementation:
+
+- `workspace.preload` loads through the solution-aware workspace path and returns `workspace_handle`, `workspace_kind`, `analysis_mode`, `projects_loaded`, `documents_loaded`, `workspace_fingerprint`, `dirty`, and `invalidated_paths`.
+- `workspace.preload --require-solution true` fails with `solution_required` if the resolved host is a project/directory/file instead of `.sln/.slnx`.
+- `workspace.status` reports the retained process-hot host state.
+- `workspace.close` discards the retained handle.
+
 ## Open Follow-Ups
 
-1. Implement solution-backed `StaticAnalysisWorkspace` replacement or companion.
-2. Add `analysis_mode` to root-scanning analysis commands.
-3. Add hot-host lifecycle commands with `.sln/.slnx` as the primary examples.
-4. Add benchmark gates that fail if a hot-workspace run resolves to a loose project when solution scope was requested.
+1. Teach high-traffic semantic commands to accept `workspace_handle` and reuse process-hot state rather than only reporting lifecycle state.
+2. Add benchmark gates that fail if a hot-workspace run resolves to a loose project when solution scope was requested. Prefer `workspace.preload --require-solution true` as the enforcement hook.
+3. Rename or document ad-hoc snapshot commands so agents do not confuse `diag.get_solution_snapshot` with MSBuild solution loading.

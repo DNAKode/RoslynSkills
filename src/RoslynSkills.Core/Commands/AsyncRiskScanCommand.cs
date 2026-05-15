@@ -266,8 +266,14 @@ public sealed class AsyncRiskScanCommand : IAgentCommand
             },
             analysis_scope = new
             {
+                analysis_mode = workspace.AnalysisMode,
+                workspace_kind = workspace.WorkspaceKind,
+                resolved_workspace_path = workspace.ResolvedWorkspacePath,
                 root_directory = workspace.RootDirectory,
+                project_count = workspace.ProjectCount,
+                document_count = workspace.DocumentCount,
                 files_scanned = workspace.SyntaxTrees.Count,
+                workspace_diagnostics = workspace.WorkspaceDiagnostics,
                 truncated,
             },
             caveats = new[]

@@ -220,15 +220,23 @@ public sealed class DependencyViolationsCommand : IAgentCommand
             },
             analysis_scope = new
             {
+                analysis_mode = workspace.AnalysisMode,
+                workspace_kind = workspace.WorkspaceKind,
+                resolved_workspace_path = workspace.ResolvedWorkspacePath,
                 root_directory = workspace.RootDirectory,
+                project_count = workspace.ProjectCount,
+                document_count = workspace.DocumentCount,
                 files_scanned = workspace.SyntaxTrees.Count,
                 total_violations = orderedViolations.Length,
+                workspace_diagnostics = workspace.WorkspaceDiagnostics,
                 truncated,
             },
             caveats = new[]
             {
                 "Layer resolution is namespace-prefix based and may need project-specific tuning.",
-                "Filesystem-root analysis is used; project graph-specific conditional includes are not applied.",
+                workspace.AnalysisMode == "directory_scan"
+                    ? "Directory-scan analysis is used; project graph-specific conditional includes are not applied."
+                    : "MSBuild workspace analysis is used; verify workspace_diagnostics before treating findings as exhaustive.",
             },
             violations = violationsPayload,
         };

@@ -378,6 +378,19 @@ public sealed class GetSolutionSnapshotCommand : IAgentCommand
             data["summary"] = summary;
         }
 
+        data["analysis_scope"] = new
+        {
+            analysis_mode = "ad_hoc_compilation",
+            workspace_kind = explicitFilePaths.Length > 0 ? "file_set" : "directory",
+            resolved_scope_count = filePaths.Length,
+            resolved_workspace_path = input.TryGetProperty("directory_path", out JsonElement analysisDirectoryProperty) &&
+                                      analysisDirectoryProperty.ValueKind == JsonValueKind.String
+                ? analysisDirectoryProperty.GetString()
+                : null,
+            project_count = 0,
+            document_count = filePaths.Length,
+            workspace_diagnostics = Array.Empty<string>(),
+        };
         data["mode"] = mode;
         data["total_files"] = filePaths.Length;
         data["total_diagnostics"] = filteredDiagnostics.Count;

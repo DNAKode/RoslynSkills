@@ -508,6 +508,7 @@ public sealed class CommandTests
 
             Assert.True(result.Ok);
             string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"analysis_mode\":\"ad_hoc_compilation\"", json);
             Assert.Contains("\"mode\":\"compact\"", json);
             Assert.Contains("\"total_files\":1", json);
             Assert.Contains("\"skipped_generated_files\":1", json);

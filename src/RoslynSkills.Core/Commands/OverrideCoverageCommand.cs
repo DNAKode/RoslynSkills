@@ -197,16 +197,24 @@ public sealed class OverrideCoverageCommand : IAgentCommand
             },
             analysis_scope = new
             {
+                analysis_mode = workspace.AnalysisMode,
+                workspace_kind = workspace.WorkspaceKind,
+                resolved_workspace_path = workspace.ResolvedWorkspacePath,
                 root_directory = workspace.RootDirectory,
+                project_count = workspace.ProjectCount,
+                document_count = workspace.DocumentCount,
                 files_scanned = workspace.SyntaxTrees.Count,
                 source_types = sourceTypes.Length,
                 findings = orderedFindings.Length,
+                workspace_diagnostics = workspace.WorkspaceDiagnostics,
                 truncated,
             },
             caveats = new[]
             {
                 "Coverage is source-only and reports likely hotspots, not strict policy failures.",
-                "Filesystem-root analysis is used; project graph-specific conditional includes are not applied.",
+                workspace.AnalysisMode == "directory_scan"
+                    ? "Directory-scan analysis is used; project graph-specific conditional includes are not applied."
+                    : "MSBuild workspace analysis is used; verify workspace_diagnostics before treating findings as exhaustive.",
             },
             findings = findingsPayload,
         };

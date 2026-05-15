@@ -1089,6 +1089,33 @@ Workflow:
                 input["session_id"] = positionalArgs[0];
                 break;
 
+            case "workspace.preload":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "workspace.preload <solution-or-project-path> [--require-solution true] [--option value ...]"));
+                    return false;
+                }
+
+                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                break;
+
+            case "workspace.status":
+            case "workspace.close":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, $"{commandId} <workspace-handle> [--option value ...]"));
+                    return false;
+                }
+
+                input["workspace_handle"] = positionalArgs[0];
+                break;
+
             default:
                 error = ErrorEnvelope(
                     commandId: "cli",
@@ -1159,6 +1186,9 @@ Workflow:
             "session.diff" => true,
             "session.commit" => true,
             "session.close" => true,
+            "workspace.preload" => true,
+            "workspace.status" => true,
+            "workspace.close" => true,
             _ => false,
         };
 

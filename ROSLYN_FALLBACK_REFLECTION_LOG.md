@@ -415,3 +415,51 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - Follow-up issue/test link:
     - `tests/RoslynSkills.Core.Tests/WorkspaceSemanticLoaderTests.cs`
     - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+
+- `2026-05-15`: Added solution-scope telemetry to remaining scan/ad-hoc diagnostics commands using direct source edits
+  - Task/Context: complete the solution workspace activation sweep follow-up by making `ctx.search_text` and `diag.get_solution_snapshot` explicitly report scan/ad-hoc analysis mode, while preserving MSBuild solution telemetry on analyzer commands.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+41f7289d7e5868221e6355f88a9d35b0c20569cc`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changed RoslynSkills' own command response contracts, tests, and planning documentation. Current commands do not provide a maintainer workflow for coordinated response-shape edits across command implementations, test assertions, and sweep docs.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer-grade command for schema/telemetry contract evolution that can update command payloads and assert downstream CLI/test/doc expectations together.
+  - Proposed improvement:
+    - Add a self-hosted contract evolution workflow, for example `maint.update_command_output_contract`, with semantic anchors for command payload construction and generated test/doc impact hints.
+  - Expected impact:
+    - correctness: higher (command-scope claims stay explicit and test-backed).
+    - latency: lower (less manual sweep work when evolving response contracts).
+    - token_count: lower (fewer source reads needed to reconcile command output, CLI pretty output, and docs).
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Core/Commands/SearchTextCommand.cs`
+    - `src/RoslynSkills.Core/Commands/GetSolutionSnapshotCommand.cs`
+    - `tests/RoslynSkills.Core.Tests/BreadthCommandTests.cs`
+    - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+
+- `2026-05-15`: Added first hot-workspace lifecycle commands using direct source edits
+  - Task/Context: implement `workspace.preload`, `workspace.status`, and `workspace.close` so persistent hosts can bind full `.sln/.slnx` workspaces and reject loose-project scope when `require_solution` is requested.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+41f7289d7e5868221e6355f88a9d35b0c20569cc`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work introduced new command classes, registry wiring, CLI shorthand, tests, and documentation. Existing RoslynSkills edit commands do not yet support self-hosted multi-file feature creation with command registry and CLI argument-surface coordination.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing self-hosted maintainer workflow for adding command families with registry, direct-CLI shorthand, and lifecycle tests in one verified transaction.
+  - Proposed improvement:
+    - Add a `maint.add_command_family` workflow that creates command skeletons, registry entries, CLI shorthand mappings, and test stubs from a declared command contract.
+  - Expected impact:
+    - correctness: higher (new command surfaces consistently wired through registry/CLI/tests).
+    - latency: lower (less manual cross-file wiring).
+    - token_count: lower (fewer source sweeps for boilerplate command integration).
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Core/Commands/WorkspacePreloadCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceStatusCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceCloseCommand.cs`
+    - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`

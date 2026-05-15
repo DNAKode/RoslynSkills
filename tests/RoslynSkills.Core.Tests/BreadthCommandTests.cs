@@ -80,6 +80,7 @@ public sealed class BreadthCommandTests
 
             Assert.True(result.Ok);
             string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"analysis_mode\":\"directory_scan\"", json);
             Assert.Contains("\"total_matches\":2", json);
             Assert.Contains("First.cs", json);
             Assert.Contains("Second.cs", json);
@@ -1252,6 +1253,7 @@ public sealed class BreadthCommandTests
             CommandExecutionResult snapshotResult = await snapshot.ExecuteAsync(snapshotInput, CancellationToken.None);
             Assert.True(snapshotResult.Ok);
             string snapshotJson = JsonSerializer.Serialize(snapshotResult.Data);
+            Assert.Contains("\"analysis_mode\":\"ad_hoc_compilation\"", snapshotJson);
             Assert.Contains("\"total_files\":2", snapshotJson);
         }
         finally

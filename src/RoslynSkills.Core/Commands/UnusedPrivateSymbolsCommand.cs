@@ -184,15 +184,23 @@ public sealed class UnusedPrivateSymbolsCommand : IAgentCommand
             },
             analysis_scope = new
             {
+                analysis_mode = workspace.AnalysisMode,
+                workspace_kind = workspace.WorkspaceKind,
+                resolved_workspace_path = workspace.ResolvedWorkspacePath,
                 root_directory = workspace.RootDirectory,
+                project_count = workspace.ProjectCount,
+                document_count = workspace.DocumentCount,
                 files_scanned = workspace.SyntaxTrees.Count,
                 total_candidates = candidatesById.Count,
                 unused_candidates = unused.Length,
+                workspace_diagnostics = workspace.WorkspaceDiagnostics,
             },
             caveats = new[]
             {
                 "Results are heuristic and may undercount reflection/source-generator usage.",
-                "Filesystem-root analysis is used; project graph-specific conditional includes are not applied.",
+                workspace.AnalysisMode == "directory_scan"
+                    ? "Directory-scan analysis is used; project graph-specific conditional includes are not applied."
+                    : "MSBuild workspace analysis is used; verify workspace_diagnostics before treating findings as exhaustive.",
             },
             unused_symbols = unusedPayload,
         };

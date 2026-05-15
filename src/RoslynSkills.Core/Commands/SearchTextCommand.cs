@@ -332,6 +332,17 @@ public sealed class SearchTextCommand : IAgentCommand
 
         object data = new
         {
+            analysis_scope = new
+            {
+                analysis_mode = "directory_scan",
+                workspace_kind = scopes.All(scope => scope.is_file) ? "file" : "directory",
+                resolved_scope_count = scopes.Count,
+                scopes = scopes.Select(scope => new
+                {
+                    path = scope.path,
+                    is_file = scope.is_file,
+                }).ToArray(),
+            },
             query = new
             {
                 patterns,
