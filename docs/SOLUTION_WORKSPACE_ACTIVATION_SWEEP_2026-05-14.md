@@ -99,9 +99,9 @@ Implication:
 
 - Passing `.sln/.slnx` may scope the filesystem root, but it does not yet mean "only projects included in this solution with project references and full MSBuild semantics."
 
-Backlog:
+Documentation status:
 
-- Rename or document ad-hoc snapshot commands so agents do not confuse `diag.get_solution_snapshot` with MSBuild solution loading.
+- `diag.get_solution_snapshot` is documented and surfaced as `ad_hoc_compilation`; use `diag.get_workspace_snapshot` or workspace-backed file diagnostics when MSBuild solution membership matters.
 
 Current telemetry:
 
@@ -147,9 +147,20 @@ Current implementation:
 - `workspace.preload --require-solution true` fails with `solution_required` if the resolved host is a project/directory/file instead of `.sln/.slnx`.
 - `workspace.status` reports the retained process-hot host state.
 - `workspace.close` discards the retained handle.
+- `nav.find_symbol`, `nav.find_symbol_batch`, `nav.find_references`, `nav.find_invocations`, `ctx.member_source`, `diag.get_file_diagnostics`, and `query.batch` accept `workspace_handle` and report `workspace_context.resolution_source = workspace_handle` with `workspace_cache_mode = process_hot`.
+- Agent-eval run validation fails when `hot_workspace_solution_scope_required = true` but `hot_workspace_kind` is not `solution` or `slnx`.
 
-## Open Follow-Ups
+## Backlog Closure
 
-1. Teach high-traffic semantic commands to accept `workspace_handle` and reuse process-hot state rather than only reporting lifecycle state.
-2. Add benchmark gates that fail if a hot-workspace run resolves to a loose project when solution scope was requested. Prefer `workspace.preload --require-solution true` as the enforcement hook.
-3. Rename or document ad-hoc snapshot commands so agents do not confuse `diag.get_solution_snapshot` with MSBuild solution loading.
+Original sweep follow-ups are closed:
+
+- Remaining scan/ad-hoc commands expose `analysis_scope.analysis_mode`.
+- Hot workspace lifecycle commands load `.sln/.slnx` as the primary path and expose solution-vs-project telemetry.
+- High-traffic semantic commands can reuse `workspace_handle` for process-hot state.
+- Benchmark validation can fail solution-required hot workspace runs that resolve to loose project scope, and paired-run metadata now feeds that gate.
+- `diag.get_solution_snapshot` is explicitly documented and surfaced as ad-hoc compilation.
+
+Future extensions, not required for this sweep closure:
+
+1. Expand `workspace_handle` reuse beyond the initial hot path if needed (`nav.call_hierarchy`, `nav.call_path`, `analyze.*` file-anchor commands, and structured edits).
+2. Consider a future command rename or alias for `diag.get_solution_snapshot` if ad-hoc naming continues to confuse agents despite the explicit `analysis_scope.analysis_mode`.

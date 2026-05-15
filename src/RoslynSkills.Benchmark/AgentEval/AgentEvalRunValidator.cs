@@ -176,6 +176,8 @@ public sealed class AgentEvalRunValidator
                 ValidateContext(issues, run, task!, runId, taskId, conditionId);
             }
 
+            ValidateHotWorkspaceSolutionScope(issues, run, runId, taskId, conditionId);
+
             if (TryGetTotalTokens(run).HasValue)
             {
                 runsWithTokenCounts++;
@@ -243,6 +245,54 @@ public sealed class AgentEvalRunValidator
 
         AgentEvalStorage.WriteJson(outputPath, report);
         return Task.FromResult(report);
+    }
+
+    private static void ValidateHotWorkspaceSolutionScope(
+        List<AgentEvalRunValidationIssue> issues,
+        AgentEvalRun run,
+        string runId,
+        string taskId,
+        string conditionId)
+    {
+        if (run.HotWorkspaceSolutionScopeRequired != true)
+        {
+            return;
+        }
+
+        if (run.HotWorkspacePreloadOk == false)
+        {
+            AddIssue(
+                issues,
+                "error",
+                runId,
+                taskId,
+                conditionId,
+                "hot_workspace_solution_scope_required=true but hot_workspace_preload_ok=false.");
+        }
+
+        if (string.IsNullOrWhiteSpace(run.HotWorkspaceKind))
+        {
+            AddIssue(
+                issues,
+                "error",
+                runId,
+                taskId,
+                conditionId,
+                "hot_workspace_solution_scope_required=true but hot_workspace_kind is missing.");
+            return;
+        }
+
+        if (!string.Equals(run.HotWorkspaceKind, "solution", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(run.HotWorkspaceKind, "slnx", StringComparison.OrdinalIgnoreCase))
+        {
+            AddIssue(
+                issues,
+                "error",
+                runId,
+                taskId,
+                conditionId,
+                $"hot_workspace_solution_scope_required=true but hot_workspace_kind was '{run.HotWorkspaceKind}'. Expected solution or slnx.");
+        }
     }
 
     private static void ValidateContext(

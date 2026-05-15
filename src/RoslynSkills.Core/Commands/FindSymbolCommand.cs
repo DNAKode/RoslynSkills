@@ -24,6 +24,7 @@ public sealed class FindSymbolCommand : IAgentCommand
 
         InputParsing.TryGetRequiredString(input, "symbol_name", errors, out _);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         InputParsing.ValidateOptionalBool(input, "declarations_only", errors);
         InputParsing.ValidateOptionalBool(input, "first_declaration", errors);
@@ -62,6 +63,7 @@ public sealed class FindSymbolCommand : IAgentCommand
         int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 50, minValue: 1, maxValue: 1_000);
         bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         bool declarationsOnly = InputParsing.GetOptionalBool(input, "declarations_only", defaultValue: false);
         bool firstDeclaration = InputParsing.GetOptionalBool(input, "first_declaration", defaultValue: false);
@@ -77,7 +79,8 @@ public sealed class FindSymbolCommand : IAgentCommand
         CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
             filePath,
             cancellationToken,
-            workspacePath).ConfigureAwait(false);
+            workspacePath,
+            workspaceHandle).ConfigureAwait(false);
 
         if (requireWorkspace &&
             !string.Equals(analysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase))
@@ -141,6 +144,7 @@ public sealed class FindSymbolCommand : IAgentCommand
                 snippet_single_line = snippetSingleLine,
                 max_snippet_chars = maxSnippetChars,
                 semantic_enrichment = true,
+                workspace_handle = workspaceHandle,
                 require_workspace = requireWorkspace,
                 workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
             },

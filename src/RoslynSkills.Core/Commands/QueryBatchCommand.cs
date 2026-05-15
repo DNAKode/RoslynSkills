@@ -41,6 +41,7 @@ public sealed class QueryBatchCommand : IAgentCommand
     {
         List<CommandError> errors = new();
         InputParsing.ValidateOptionalBool(input, "continue_on_error", errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
 
         if (!input.TryGetProperty("queries", out JsonElement queriesProperty) || queriesProperty.ValueKind != JsonValueKind.Array)
         {
@@ -97,6 +98,7 @@ public sealed class QueryBatchCommand : IAgentCommand
         }
 
         bool continueOnError = InputParsing.GetOptionalBool(input, "continue_on_error", defaultValue: true);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         List<QueryBatchResultEntry> entries = new();
         int succeeded = 0;
         int failed = 0;
@@ -108,7 +110,7 @@ public sealed class QueryBatchCommand : IAgentCommand
             cancellationToken.ThrowIfCancellationRequested();
 
             string commandId = query.GetProperty("command_id").GetString()!;
-            JsonElement queryInput = query.GetProperty("input").Clone();
+            JsonElement queryInput = BuildQueryInput(query.GetProperty("input"), workspaceHandle);
             IAgentCommand command = SupportedQueryFactories[commandId]();
 
             Stopwatch stopwatch = Stopwatch.StartNew();
@@ -169,6 +171,7 @@ public sealed class QueryBatchCommand : IAgentCommand
             query = new
             {
                 continue_on_error = continueOnError,
+                workspace_handle = workspaceHandle,
                 requested_query_count = input.GetProperty("queries").GetArrayLength(),
                 supported_commands = SupportedQueryFactories.Keys.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
             },
@@ -189,4 +192,22 @@ public sealed class QueryBatchCommand : IAgentCommand
         long elapsed_ms,
         object? data,
         IReadOnlyList<CommandError> errors);
+
+    private static JsonElement BuildQueryInput(JsonElement queryInput, string? workspaceHandle)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceHandle) ||
+            queryInput.TryGetProperty("workspace_handle", out _))
+        {
+            return queryInput.Clone();
+        }
+
+        Dictionary<string, object?> values = new(StringComparer.OrdinalIgnoreCase);
+        foreach (JsonProperty property in queryInput.EnumerateObject())
+        {
+            values[property.Name] = property.Value.Clone();
+        }
+
+        values["workspace_handle"] = workspaceHandle;
+        return JsonSerializer.SerializeToElement(values);
+    }
 }

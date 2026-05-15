@@ -1919,9 +1919,16 @@ Workflow:
             int diagnostics = TryGetInt(element, "total_diagnostics", out int td) ? td : -1;
             int errors = TryGetInt(element, "errors", out int err) ? err : -1;
             int warnings = TryGetInt(element, "warnings", out int warn) ? warn : -1;
+            string analysisMode = TryGetObject(element, "analysis_scope", out JsonElement analysisScope) &&
+                                  TryGetString(analysisScope, "analysis_mode", out string mode)
+                ? mode
+                : string.Empty;
             if (files >= 0 || diagnostics >= 0)
             {
-                return $"files={Math.Max(files, 0)}, diagnostics={Math.Max(diagnostics, 0)}, errors={Math.Max(errors, 0)}, warnings={Math.Max(warnings, 0)}";
+                string summary = $"files={Math.Max(files, 0)}, diagnostics={Math.Max(diagnostics, 0)}, errors={Math.Max(errors, 0)}, warnings={Math.Max(warnings, 0)}";
+                return string.IsNullOrWhiteSpace(analysisMode)
+                    ? summary
+                    : $"{summary}, analysis={analysisMode}";
             }
         }
 
@@ -2145,13 +2152,14 @@ Workflow:
                 direct = "nav.find_symbol <file-path> <symbol-name> [--option value ...]",
                 run = "run nav.find_symbol --input '{\"file_path\":\"src/MyFile.cs\",\"symbol_name\":\"Run\",\"brief\":true}'",
                 required_properties = new[] { "file_path", "symbol_name" },
-                optional_properties = new[] { "brief", "max_results", "context_lines", "declarations_only", "first_declaration", "snippet_single_line", "max_snippet_chars", "workspace_path", "require_workspace" },
+                optional_properties = new[] { "brief", "max_results", "context_lines", "declarations_only", "first_declaration", "snippet_single_line", "max_snippet_chars", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
                     "Use declarations_only=true when you only want declaration anchors.",
                     "Use first_declaration=true to prefer declaration match and fallback to first match when no declaration exists.",
                     "By default, roscli auto-resolves a workspace from the file path and prefers discovered .sln/.slnx before loose projects.",
                     "For repo-wide or hot-workspace scope, pass workspace_path=.sln/.slnx explicitly.",
+                    "For repeated calls after workspace.preload, pass workspace_handle to reuse process-hot semantic state.",
                     "If workspace_context.mode is 'ad_hoc', pass workspace_path explicitly.",
                     "Check resolved_workspace_path/workspace_kind/project_count to verify solution vs project binding.",
                     "Set require_workspace=true for project-backed files when ad_hoc fallback should fail closed.",
@@ -2166,7 +2174,7 @@ Workflow:
                 direct = "nav.find_symbol_batch [queries-json-or-file] [--queries @file.json] [--option value ...]",
                 run = "run nav.find_symbol_batch --input '{\"queries\":[{\"file_path\":\"src/A.cs\",\"symbol_name\":\"Run\"},{\"file_path\":\"src/B.cs\",\"symbol_name\":\"Run\"}],\"brief\":true,\"first_declaration\":true,\"continue_on_error\":true}'",
                 required_properties = new[] { "queries" },
-                optional_properties = new[] { "continue_on_error", "brief", "max_results", "context_lines", "declarations_only", "first_declaration", "snippet_single_line", "max_snippet_chars", "workspace_path", "require_workspace" },
+                optional_properties = new[] { "continue_on_error", "brief", "max_results", "context_lines", "declarations_only", "first_declaration", "snippet_single_line", "max_snippet_chars", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
                     "Top-level options are defaults for all queries; per-query properties override defaults.",
@@ -2183,7 +2191,7 @@ Workflow:
                 direct = "nav.find_invocations <file-path> <line> <column> [--option value ...]",
                 run = "run nav.find_invocations --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "brief", "max_results", "context_lines", "include_object_creations", "workspace_path", "require_workspace" },
+                optional_properties = new[] { "brief", "max_results", "context_lines", "include_object_creations", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
                     "Use line/column anchored on a method declaration or method reference token.",
@@ -2360,11 +2368,12 @@ Workflow:
                 direct = "query.batch [queries-json-or-file] [--queries @file.json] [--option value ...]",
                 run = "run query.batch --input '{\"queries\":[{\"command_id\":\"ctx.search_text\",\"input\":{\"patterns\":[\"RemoteUserAction\"],\"roots\":[\"src\"]}},{\"command_id\":\"nav.find_invocations\",\"input\":{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":15}}],\"continue_on_error\":true}'",
                 required_properties = new[] { "queries" },
-                optional_properties = new[] { "continue_on_error" },
+                optional_properties = new[] { "continue_on_error", "workspace_handle" },
                 notes = new[]
                 {
                     "query.batch supports read-only investigative commands only.",
                     "Each query item must provide command_id and input.",
+                    "Top-level workspace_handle is applied to query inputs that do not specify their own handle.",
                     "For shorthand, pass --queries @file.json or positional file path containing a JSON array.",
                 },
             };
@@ -2377,15 +2386,44 @@ Workflow:
                 direct = "diag.get_file_diagnostics <file-path> [--workspace-path <path>] [--option value ...]",
                 run = "run diag.get_file_diagnostics --input '{\"file_path\":\"src/MyFile.cs\",\"workspace_path\":\"MySolution.slnx\",\"require_workspace\":true}'",
                 required_properties = new[] { "file_path" },
-                optional_properties = new[] { "workspace_path", "require_workspace" },
+                optional_properties = new[] { "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
                     "By default, roscli auto-resolves a workspace from the file path and prefers discovered .sln/.slnx before loose projects.",
                     "For repo-wide or hot-workspace diagnostics, pass workspace_path=.sln/.slnx explicitly.",
+                    "For repeated calls after workspace.preload, pass workspace_handle to reuse process-hot semantic state.",
                     "Response includes workspace_context.mode = workspace|ad_hoc.",
                     "Check resolved_workspace_path/workspace_kind/project_count to verify solution vs project binding.",
                     "Set require_workspace=true to fail closed when workspace resolution falls back to ad_hoc.",
                 },
+            };
+        }
+
+        if (string.Equals(commandId, "workspace.preload", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "workspace.preload <solution-or-project-path> [--require-solution true] [--option value ...]",
+                run = "run workspace.preload --input '{\"workspace_path\":\"MySolution.slnx\",\"require_solution\":true,\"mode\":\"balanced\"}'",
+                required_properties = new[] { "workspace_path" },
+                optional_properties = new[] { "mode", "include_generated", "require_solution", "max_files" },
+                notes = new[]
+                {
+                    "Prefer .sln/.slnx for hot workspace hosts.",
+                    "Set require_solution=true in benchmark/promotion runs to fail closed if a loose project is resolved.",
+                    "Response includes workspace_handle for repeated semantic commands.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "workspace.status", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "workspace.close", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = $"{commandId} <workspace-handle>",
+                run = $"run {commandId} --input '{{\"workspace_handle\":\"ws_...\"}}'",
+                required_properties = new[] { "workspace_handle" },
             };
         }
 

@@ -32,6 +32,19 @@ public sealed class PairedRunHarnessScriptTests
     }
 
     [Fact]
+    public void HotWorkspaceTelemetry_IsMappedIntoRunMetadata()
+    {
+        string script = ReadScript();
+
+        Assert.Contains("function Get-HotWorkspaceScopeUsage", script, StringComparison.Ordinal);
+        Assert.Contains("workspace\\.preload", script, StringComparison.Ordinal);
+        Assert.Contains("hot_workspace_solution_scope_required", script, StringComparison.Ordinal);
+        Assert.Contains("hot_workspace_preload_ok", script, StringComparison.Ordinal);
+        Assert.Contains("hot_workspace_kind", script, StringComparison.Ordinal);
+        Assert.Contains("hot_workspace_resolved_path", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void McpPrompting_PrefersRenameThenDiagnosticsWhenCoordinatesAreKnown()
     {
         string script = ReadScript();

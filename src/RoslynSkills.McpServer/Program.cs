@@ -652,6 +652,7 @@ internal static class Program
             properties["snippet_single_line"] = BoolProperty("Render context snippets as a single line with separators.");
             properties["max_snippet_chars"] = IntProperty("Maximum snippet character count (0 means no limit).", 0);
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("symbol_name");
@@ -685,6 +686,7 @@ internal static class Program
             properties["snippet_single_line"] = BoolProperty("Default snippet single-line rendering for queries.");
             properties["max_snippet_chars"] = IntProperty("Default max snippet chars for queries (0 means no limit).", 0);
             properties["workspace_path"] = StringProperty("Default workspace path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
+            properties["workspace_handle"] = StringProperty("Default hot workspace handle returned by workspace.preload.");
             properties["require_workspace"] = BoolProperty("Default fail-closed workspace policy for queries.");
             required.Add("queries");
             return;
@@ -699,6 +701,7 @@ internal static class Program
             properties["max_results"] = IntProperty("Maximum invocation matches to return.", 1);
             properties["include_object_creations"] = BoolProperty("Include object creation calls for constructor targets.");
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("line");
@@ -928,6 +931,7 @@ internal static class Program
             properties["context_lines_after"] = IntProperty("Additional lines after extracted span.", 0);
             properties["max_chars"] = IntProperty("Maximum characters returned for source text.", 1);
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
             required.Add("line");
@@ -957,6 +961,7 @@ internal static class Program
                 },
             };
             properties["continue_on_error"] = BoolProperty("Continue remaining queries after an error.");
+            properties["workspace_handle"] = StringProperty("Optional hot workspace handle applied to query inputs that do not specify their own workspace_handle.");
             required.Add("queries");
             return;
         }
@@ -965,8 +970,28 @@ internal static class Program
         {
             properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace diagnostic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "workspace.preload", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["workspace_path"] = StringProperty("Solution/project workspace path to preload. Prefer .sln/.slnx for hot workspace hosts.");
+            properties["mode"] = StringProperty("balanced or strict.");
+            properties["include_generated"] = BoolProperty("Include generated source files.");
+            properties["require_solution"] = BoolProperty("When true, fail if the resolved host is not .sln/.slnx solution scoped.");
+            properties["max_files"] = IntProperty("Maximum source documents loaded into command-facing indexes.", 1);
+            required.Add("workspace_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "workspace.status", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "workspace.close", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["workspace_handle"] = StringProperty("Handle returned by workspace.preload.");
+            required.Add("workspace_handle");
             return;
         }
 

@@ -40,11 +40,13 @@ internal sealed class CommandFileAnalysis
     public static async Task<CommandFileAnalysis> LoadAsync(
         string filePath,
         CancellationToken cancellationToken,
-        string? workspacePath = null)
+        string? workspacePath = null,
+        string? workspaceHandle = null)
     {
         WorkspaceSemanticLoadResult result = await WorkspaceSemanticLoader.LoadForFileAsync(
             filePath,
             workspacePath,
+            workspaceHandle,
             cancellationToken).ConfigureAwait(false);
 
         return new CommandFileAnalysis(

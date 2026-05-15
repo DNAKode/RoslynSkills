@@ -595,7 +595,7 @@ public sealed class VbCommandTests
     public async Task WorkspaceLifecycleCommands_PreloadSlnxAsHotSolution()
     {
         string root = CreateWorkspaceRoot("hot-slnx");
-        (string solutionPath, _, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+        (string solutionPath, string appPath, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
         string? handle = null;
 
         try
@@ -633,6 +633,79 @@ public sealed class VbCommandTests
             Assert.True(statusRoot.GetProperty("loaded").GetBoolean());
             Assert.False(statusRoot.GetProperty("dirty").GetBoolean());
             Assert.Equal("slnx", statusRoot.GetProperty("workspace_kind").GetString());
+
+            FindSymbolCommand findSymbol = new();
+            CommandExecutionResult symbolResult = await findSymbol.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    file_path = appPath,
+                    symbol_name = "Program",
+                    workspace_handle = handle,
+                    require_workspace = true,
+                    brief = true,
+                }),
+                CancellationToken.None);
+
+            Assert.True(symbolResult.Ok);
+            using JsonDocument symbolDoc = JsonDocument.Parse(JsonSerializer.Serialize(symbolResult.Data));
+            JsonElement symbolContext = symbolDoc.RootElement.GetProperty("query").GetProperty("workspace_context");
+            Assert.Equal("workspace", symbolContext.GetProperty("mode").GetString());
+            Assert.Equal("workspace_handle", symbolContext.GetProperty("resolution_source").GetString());
+            Assert.Equal("process_hot", symbolContext.GetProperty("workspace_cache_mode").GetString());
+            Assert.True(symbolContext.GetProperty("workspace_cache_hit").GetBoolean());
+            Assert.Equal(handle, symbolContext.GetProperty("workspace_handle").GetString());
+
+            GetFileDiagnosticsCommand diagnostics = new();
+            CommandExecutionResult diagnosticsResult = await diagnostics.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    file_path = appPath,
+                    workspace_handle = handle,
+                    require_workspace = true,
+                }),
+                CancellationToken.None);
+
+            Assert.True(diagnosticsResult.Ok);
+            using JsonDocument diagnosticsDoc = JsonDocument.Parse(JsonSerializer.Serialize(diagnosticsResult.Data));
+            JsonElement diagnosticsContext = diagnosticsDoc.RootElement.GetProperty("workspace_context");
+            Assert.Equal("workspace_handle", diagnosticsContext.GetProperty("resolution_source").GetString());
+            Assert.Equal(handle, diagnosticsContext.GetProperty("workspace_handle").GetString());
+
+            QueryBatchCommand batch = new();
+            CommandExecutionResult batchResult = await batch.ExecuteAsync(
+                ToJsonElement(new
+                {
+                    workspace_handle = handle,
+                    queries = new object[]
+                    {
+                        new
+                        {
+                            command_id = "nav.find_symbol",
+                            input = new
+                            {
+                                file_path = appPath,
+                                symbol_name = "Helper",
+                                require_workspace = true,
+                                brief = true,
+                            },
+                        },
+                        new
+                        {
+                            command_id = "diag.get_file_diagnostics",
+                            input = new
+                            {
+                                file_path = appPath,
+                                require_workspace = true,
+                            },
+                        },
+                    },
+                }),
+                CancellationToken.None);
+
+            Assert.True(batchResult.Ok);
+            using JsonDocument batchDoc = JsonDocument.Parse(JsonSerializer.Serialize(batchResult.Data));
+            Assert.Equal(handle, batchDoc.RootElement.GetProperty("query").GetProperty("workspace_handle").GetString());
+            Assert.Equal(2, batchDoc.RootElement.GetProperty("succeeded").GetInt32());
 
             WorkspaceCloseCommand close = new();
             CommandExecutionResult closeResult = await close.ExecuteAsync(

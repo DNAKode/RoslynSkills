@@ -22,6 +22,7 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         }
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
@@ -53,11 +54,13 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         }
 
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
             filePath,
             cancellationToken,
-            workspacePath).ConfigureAwait(false);
+            workspacePath,
+            workspaceHandle).ConfigureAwait(false);
 
         if (requireWorkspace &&
             !string.Equals(analysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase))

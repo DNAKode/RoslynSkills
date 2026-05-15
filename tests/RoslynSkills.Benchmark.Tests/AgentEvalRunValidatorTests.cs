@@ -111,6 +111,60 @@ public sealed class AgentEvalRunValidatorTests
         }
     }
 
+    [Fact]
+    public async Task ValidateAsync_FailsWhenHotWorkspaceSolutionScopeResolvesToProject()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"run-validator-hot-workspace-{Guid.NewGuid():N}");
+        string runsDir = Path.Combine(root, "runs");
+        string outputDir = Path.Combine(root, "output");
+        Directory.CreateDirectory(runsDir);
+
+        try
+        {
+            string manifestPath = Path.Combine(root, "manifest.json");
+            await File.WriteAllTextAsync(manifestPath, BuildManifestJson(runsPerCell: 1));
+
+            await File.WriteAllTextAsync(Path.Combine(runsDir, "run-control.json"), BuildRunJson(
+                runId: "run-control",
+                taskId: "task-001",
+                conditionId: "control-text-only",
+                roslynToolOffered: false,
+                roslynToolUsed: false,
+                roslynHelpfulnessScore: null));
+
+            await File.WriteAllTextAsync(Path.Combine(runsDir, "run-treatment-project-hot-workspace.json"), BuildRunJson(
+                runId: "run-treatment-project-hot-workspace",
+                taskId: "task-001",
+                conditionId: "treatment-roslyn-optional",
+                roslynToolOffered: true,
+                roslynToolUsed: true,
+                roslynHelpfulnessScore: 4,
+                hotWorkspaceSolutionScopeRequired: true,
+                hotWorkspacePreloadOk: true,
+                hotWorkspaceKind: "project"));
+
+            AgentEvalRunValidator validator = new();
+            AgentEvalRunValidationReport report = await validator.ValidateAsync(
+                manifestPath,
+                runsDir,
+                outputDir,
+                CancellationToken.None);
+
+            Assert.False(report.valid);
+            Assert.Contains(report.issues, issue =>
+                string.Equals(issue.severity, "error", StringComparison.OrdinalIgnoreCase) &&
+                issue.message.Contains("hot_workspace_kind", StringComparison.OrdinalIgnoreCase) &&
+                issue.message.Contains("project", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static string BuildManifestJson(int runsPerCell)
     {
         object manifest = new
@@ -146,7 +200,10 @@ public sealed class AgentEvalRunValidatorTests
         string conditionId,
         bool roslynToolOffered,
         bool roslynToolUsed,
-        int? roslynHelpfulnessScore)
+        int? roslynHelpfulnessScore,
+        bool? hotWorkspaceSolutionScopeRequired = null,
+        bool? hotWorkspacePreloadOk = null,
+        string? hotWorkspaceKind = null)
     {
         List<string> toolsOffered = new() { "read_file", "run_shell", "search" };
         if (roslynToolOffered)
@@ -179,6 +236,9 @@ public sealed class AgentEvalRunValidatorTests
             prompt_tokens = 1000,
             completion_tokens = 500,
             total_tokens = 1500,
+            hot_workspace_solution_scope_required = hotWorkspaceSolutionScopeRequired,
+            hot_workspace_preload_ok = hotWorkspacePreloadOk,
+            hot_workspace_kind = hotWorkspaceKind,
             tools_offered = toolsOffered,
             tool_calls = toolCalls,
             context = new

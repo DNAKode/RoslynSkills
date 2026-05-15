@@ -22,7 +22,8 @@ internal sealed record WorkspaceContextInfo(
     bool workspace_cache_hit = false,
     string? workspace_kind = null,
     int project_count = 0,
-    int document_count = 0);
+    int document_count = 0,
+    string? workspace_handle = null);
 
 internal sealed record WorkspaceSemanticLoadResult(
     string file_path,
@@ -51,10 +52,40 @@ internal static class WorkspaceSemanticLoader
     public static async Task<WorkspaceSemanticLoadResult> LoadForFileAsync(
         string filePath,
         string? workspacePath,
+        string? workspaceHandle,
         CancellationToken cancellationToken)
     {
         Stopwatch workspaceLoadTimer = Stopwatch.StartNew();
         string normalizedFilePath = NormalizePath(filePath);
+
+        if (!string.IsNullOrWhiteSpace(workspaceHandle))
+        {
+            string normalizedWorkspaceHandle = workspaceHandle.Trim();
+            WorkspaceSemanticLoadResult? handleResult = await TryLoadFromHostedWorkspaceAsync(
+                    normalizedFilePath,
+                    normalizedWorkspaceHandle,
+                    workspaceLoadTimer,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (handleResult is not null)
+            {
+                return handleResult;
+            }
+
+            return await LoadAdHocForFileAsync(
+                    normalizedFilePath,
+                    resolutionSource: "workspace_handle",
+                    requestedWorkspacePath: null,
+                    fallbackReason: $"Workspace handle '{normalizedWorkspaceHandle}' was not found or does not contain file '{normalizedFilePath}'.",
+                    attemptedWorkspacePaths: Array.Empty<string>(),
+                    workspaceDiagnostics: Array.Empty<string>(),
+                    workspaceLoadTimer,
+                    msbuildRegistrationDurationMs: 0,
+                    workspaceHandle: normalizedWorkspaceHandle,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         WorkspaceCandidatePlan candidatePlan = BuildCandidatePlan(normalizedFilePath, workspacePath);
         List<string> attemptedWorkspacePaths = new();
         List<string> workspaceDiagnostics = new();
@@ -174,7 +205,7 @@ internal static class WorkspaceSemanticLoader
 
         WorkspaceContextInfo fallbackContext = new(
             mode: "ad_hoc",
-            resolution_source: candidatePlan.resolution_source,
+            resolution_source: string.IsNullOrWhiteSpace(workspaceHandle) ? candidatePlan.resolution_source : "workspace_handle",
             requested_workspace_path: candidatePlan.requested_workspace_path,
             resolved_workspace_path: null,
             project_path: null,
@@ -194,6 +225,119 @@ internal static class WorkspaceSemanticLoader
             semantic_model: fallbackSemanticModel,
             language: fallbackLanguage,
             workspace_context: fallbackContext);
+    }
+
+    public static Task<WorkspaceSemanticLoadResult> LoadForFileAsync(
+        string filePath,
+        string? workspacePath,
+        CancellationToken cancellationToken)
+        => LoadForFileAsync(filePath, workspacePath, workspaceHandle: null, cancellationToken);
+
+    private static async Task<WorkspaceSemanticLoadResult> LoadAdHocForFileAsync(
+        string normalizedFilePath,
+        string resolutionSource,
+        string? requestedWorkspacePath,
+        string fallbackReason,
+        IReadOnlyList<string> attemptedWorkspacePaths,
+        IReadOnlyList<string> workspaceDiagnostics,
+        Stopwatch workspaceLoadTimer,
+        int msbuildRegistrationDurationMs,
+        string? workspaceHandle,
+        CancellationToken cancellationToken)
+    {
+        string source = await File.ReadAllTextAsync(normalizedFilePath, cancellationToken).ConfigureAwait(false);
+        string fallbackLanguage = CommandLanguageServices.DetectLanguageFromFilePath(normalizedFilePath);
+        SyntaxTree fallbackTree = CommandLanguageServices.ParseSyntaxTree(
+            source,
+            normalizedFilePath,
+            fallbackLanguage,
+            cancellationToken);
+        SyntaxNode fallbackRoot = await fallbackTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+        SourceText fallbackSourceText = fallbackTree.GetText(cancellationToken);
+        Compilation fallbackCompilation = CommandFileAnalysis.CreateCompilation(
+            "RoslynSkills.Command",
+            new[] { fallbackTree },
+            fallbackLanguage);
+        SemanticModel fallbackSemanticModel = fallbackCompilation.GetSemanticModel(fallbackTree);
+
+        WorkspaceContextInfo fallbackContext = new(
+            mode: "ad_hoc",
+            resolution_source: resolutionSource,
+            requested_workspace_path: requestedWorkspacePath,
+            resolved_workspace_path: null,
+            project_path: null,
+            fallback_reason: fallbackReason,
+            attempted_workspace_paths: attemptedWorkspacePaths,
+            workspace_diagnostics: workspaceDiagnostics,
+            workspace_load_duration_ms: (int)workspaceLoadTimer.ElapsedMilliseconds,
+            msbuild_registration_duration_ms: msbuildRegistrationDurationMs,
+            workspace_handle: workspaceHandle);
+
+        return new WorkspaceSemanticLoadResult(
+            file_path: normalizedFilePath,
+            source: source,
+            syntax_tree: fallbackTree,
+            root: fallbackRoot,
+            source_text: fallbackSourceText,
+            compilation: fallbackCompilation,
+            semantic_model: fallbackSemanticModel,
+            language: fallbackLanguage,
+            workspace_context: fallbackContext);
+    }
+
+    private static async Task<WorkspaceSemanticLoadResult?> TryLoadFromHostedWorkspaceAsync(
+        string normalizedFilePath,
+        string workspaceHandle,
+        Stopwatch workspaceLoadTimer,
+        CancellationToken cancellationToken)
+    {
+        if (!WorkspaceHostStore.TryGet(workspaceHandle, out HostedWorkspace? hosted) || hosted is null)
+        {
+            return null;
+        }
+
+        if (!hosted.Workspace.TryGetTreeByPath(normalizedFilePath, out SyntaxTree? tree) || tree is null)
+        {
+            return null;
+        }
+
+        if (!hosted.Workspace.SemanticModelsByTree.TryGetValue(tree, out SemanticModel? semanticModel) ||
+            !hosted.Workspace.SourceTextsByTree.TryGetValue(tree, out SourceText? sourceText))
+        {
+            return null;
+        }
+
+        SyntaxNode root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+        string language = string.IsNullOrWhiteSpace(tree.Options.Language)
+            ? CommandLanguageServices.DetectLanguageFromFilePath(normalizedFilePath)
+            : tree.Options.Language;
+        WorkspaceContextInfo workspaceContext = new(
+            mode: "workspace",
+            resolution_source: "workspace_handle",
+            requested_workspace_path: hosted.Workspace.WorkspacePath,
+            resolved_workspace_path: hosted.Workspace.ResolvedWorkspacePath,
+            project_path: null,
+            fallback_reason: null,
+            attempted_workspace_paths: new[] { hosted.Workspace.ResolvedWorkspacePath },
+            workspace_diagnostics: hosted.Workspace.WorkspaceDiagnostics,
+            workspace_load_duration_ms: (int)workspaceLoadTimer.ElapsedMilliseconds,
+            workspace_cache_mode: "process_hot",
+            workspace_cache_hit: true,
+            workspace_kind: hosted.Workspace.WorkspaceKind,
+            project_count: hosted.Workspace.ProjectCount,
+            document_count: hosted.Workspace.DocumentCount,
+            workspace_handle: workspaceHandle);
+
+        return new WorkspaceSemanticLoadResult(
+            file_path: normalizedFilePath,
+            source: sourceText.ToString(),
+            syntax_tree: tree,
+            root: root,
+            source_text: sourceText,
+            compilation: semanticModel.Compilation,
+            semantic_model: semanticModel,
+            language: language,
+            workspace_context: workspaceContext);
     }
 
     internal static void ClearProcessWorkspaceCacheForTests()

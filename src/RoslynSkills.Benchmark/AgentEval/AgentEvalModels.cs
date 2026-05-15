@@ -46,7 +46,11 @@ public sealed record AgentEvalRun(
     [property: JsonPropertyName("post_run_reflection")] AgentPostRunReflection? PostRunReflection,
     [property: JsonPropertyName("prompt_tokens")] int? PromptTokens = null,
     [property: JsonPropertyName("completion_tokens")] int? CompletionTokens = null,
-    [property: JsonPropertyName("total_tokens")] int? TotalTokens = null);
+    [property: JsonPropertyName("total_tokens")] int? TotalTokens = null,
+    [property: JsonPropertyName("hot_workspace_solution_scope_required")] bool? HotWorkspaceSolutionScopeRequired = null,
+    [property: JsonPropertyName("hot_workspace_preload_ok")] bool? HotWorkspacePreloadOk = null,
+    [property: JsonPropertyName("hot_workspace_kind")] string? HotWorkspaceKind = null,
+    [property: JsonPropertyName("hot_workspace_resolved_path")] string? HotWorkspaceResolvedPath = null);
 
 public sealed record AgentEvalRunContext(
     [property: JsonPropertyName("task_title")] string TaskTitle,

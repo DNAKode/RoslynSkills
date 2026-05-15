@@ -21,6 +21,7 @@ internal static class WorkspaceContextPayload
             workspace_kind = context.workspace_kind,
             project_count = context.project_count,
             document_count = context.document_count,
+            workspace_handle = context.workspace_handle,
         };
     }
 }

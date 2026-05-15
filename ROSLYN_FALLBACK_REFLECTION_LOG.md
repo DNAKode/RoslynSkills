@@ -463,3 +463,26 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Core/Commands/WorkspaceStatusCommand.cs`
     - `src/RoslynSkills.Core/Commands/WorkspaceCloseCommand.cs`
     - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`
+
+- `2026-05-15`: Completed hot-workspace handle reuse, benchmark gate wiring, and ad-hoc snapshot disclosure using direct edits
+  - Task/Context: finish the remaining Solution Workspace sweep backlog by wiring `workspace_handle` into high-traffic semantic commands, surfacing handle support in CLI/MCP guidance, adding benchmark validation for solution-scoped hot workspace runs, and making `diag.get_solution_snapshot` visibly ad-hoc.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+009fbf7477850046b60fd3c364002ae3ef28b30f`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work crossed command loader internals, multiple command contracts, CLI/MCP discovery surfaces, PowerShell benchmark harness metadata extraction, validator models, tests, and planning docs. Current RoslynSkills commands do not provide a self-hosted transaction for coordinated cross-language feature completion.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer-grade workflow for adding and auditing command contract fields across C# command implementations, CLI/MCP schemas, benchmark harness scripts, and docs.
+  - Proposed improvement:
+    - Add `maint.propagate_command_option` or equivalent to introduce a new command option and verify registry, CLI help, MCP schema, tests, and benchmark telemetry coverage.
+  - Expected impact:
+    - correctness: higher (hot workspace handles are now reusable and benchmark-gated for solution scope).
+    - latency: lower (repeated semantic calls can reuse process-hot workspace state).
+    - token_count: lower (agents can pass handles instead of re-specifying and reloading solution paths).
+  - Follow-up issue/test link:
+    - `tests/RoslynSkills.Core.Tests/VbCommandTests.cs`
+    - `tests/RoslynSkills.Benchmark.Tests/AgentEvalRunValidatorTests.cs`
+    - `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`

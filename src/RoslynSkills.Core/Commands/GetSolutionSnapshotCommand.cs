@@ -14,7 +14,7 @@ public sealed class GetSolutionSnapshotCommand : IAgentCommand
 
     public CommandDescriptor Descriptor { get; } = new(
         Id: "diag.get_solution_snapshot",
-        Summary: "Analyze C# diagnostics for a file set with filtered raw/compact/guided output modes.",
+        Summary: "Analyze C# diagnostics for a file set using ad-hoc compilation with filtered raw/compact/guided output modes.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,

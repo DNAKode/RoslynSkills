@@ -1527,6 +1527,76 @@ function Get-RoslynWorkspaceContextUsage {
     }
 }
 
+function Get-HotWorkspaceScopeUsage {
+    param([Parameter(Mandatory = $true)][string]$TranscriptPath)
+
+    $content = Get-Content -Path $TranscriptPath -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($content) -or $content -notmatch "workspace\.preload") {
+        return @{
+            solution_scope_required = $false
+            preload_ok = $null
+            workspace_kind = $null
+            resolved_path = $null
+        }
+    }
+
+    $solutionRequired = $false
+    foreach ($pattern in @(
+            '(?is)"require_solution"\s*:\s*true',
+            '(?is)\\\"require_solution\\\"\s*:\s*true'
+        )) {
+        if ([System.Text.RegularExpressions.Regex]::IsMatch($content, $pattern)) {
+            $solutionRequired = $true
+            break
+        }
+    }
+
+    $preloadOk = $null
+    foreach ($pattern in @(
+            '(?is)"CommandId"\s*:\s*"workspace\.preload".{0,400}?"Ok"\s*:\s*(true|false)',
+            '(?is)"Ok"\s*:\s*(true|false).{0,400}?"CommandId"\s*:\s*"workspace\.preload"',
+            '(?is)\\\"CommandId\\\"\s*:\s*\\\"workspace\.preload\\\".{0,600}?\\\"Ok\\\"\s*:\s*(true|false)',
+            '(?is)\\\"Ok\\\"\s*:\s*(true|false).{0,600}?\\\"CommandId\\\"\s*:\s*\\\"workspace\.preload\\\"'
+        )) {
+        $match = [System.Text.RegularExpressions.Regex]::Match($content, $pattern)
+        if ($match.Success -and $match.Groups.Count -ge 2) {
+            $preloadOk = [bool]::Parse($match.Groups[1].Value)
+            break
+        }
+    }
+
+    $workspaceKind = $null
+    foreach ($pattern in @(
+            '(?is)"workspace_kind"\s*:\s*"([^"]+)"',
+            '(?is)\\\"workspace_kind\\\"\s*:\s*\\\"([^\\"]+)\\\"'
+        )) {
+        $match = [System.Text.RegularExpressions.Regex]::Match($content, $pattern)
+        if ($match.Success -and $match.Groups.Count -ge 2) {
+            $workspaceKind = [string]$match.Groups[1].Value
+            break
+        }
+    }
+
+    $resolvedPath = $null
+    foreach ($pattern in @(
+            '(?is)"resolved_workspace_path"\s*:\s*"([^"]+)"',
+            '(?is)\\\"resolved_workspace_path\\\"\s*:\s*\\\"([^\\"]+)\\\"'
+        )) {
+        $match = [System.Text.RegularExpressions.Regex]::Match($content, $pattern)
+        if ($match.Success -and $match.Groups.Count -ge 2) {
+            $resolvedPath = [string]$match.Groups[1].Value
+            break
+        }
+    }
+
+    return @{
+        solution_scope_required = [bool]$solutionRequired
+        preload_ok = $preloadOk
+        workspace_kind = $workspaceKind
+        resolved_path = $resolvedPath
+    }
+}
+
 function Get-TokenMetrics {
     param(
         [Parameter(Mandatory = $true)][string]$Agent,
@@ -2819,6 +2889,7 @@ function Invoke-AgentRun {
             Get-ClaudeLspUsage -TranscriptPath $transcriptPath
         }
         $workspaceContextUsage = Get-RoslynWorkspaceContextUsage -TranscriptPath $transcriptPath
+        $hotWorkspaceScopeUsage = Get-HotWorkspaceScopeUsage -TranscriptPath $transcriptPath
         $tokens = Get-TokenMetrics -Agent $Agent -TranscriptPath $transcriptPath
         $tokenAttribution = Get-TokenAttribution -Agent $Agent -TranscriptPath $transcriptPath
         $constraintChecks = Invoke-TaskConstraintChecks -RunDirectory $workspaceDirectory -CliDllPath $CliDllPath -TaskId $TaskId -TaskShape $TaskShape
@@ -2887,6 +2958,10 @@ function Invoke-AgentRun {
             roslyn_workspace_context_total_count = $workspaceContextUsage.total_count
             roslyn_workspace_mode_distinct = $workspaceContextUsage.distinct_modes
             roslyn_workspace_mode_last = $workspaceContextUsage.last_mode
+            hot_workspace_solution_scope_required = [bool]$hotWorkspaceScopeUsage.solution_scope_required
+            hot_workspace_preload_ok = $hotWorkspaceScopeUsage.preload_ok
+            hot_workspace_kind = $hotWorkspaceScopeUsage.workspace_kind
+            hot_workspace_resolved_path = $hotWorkspaceScopeUsage.resolved_path
             lsp_used = ($lspUsage.Successful -gt 0)
             lsp_attempted_calls = $lspUsage.Commands.Count
             lsp_successful_calls = $lspUsage.Successful
