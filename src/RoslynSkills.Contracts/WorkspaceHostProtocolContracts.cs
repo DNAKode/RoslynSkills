@@ -16,6 +16,7 @@ public static class WorkspaceHostProtocol
         public const string WorkspaceStatus = "workspace/status";
         public const string WorkspaceRefresh = "workspace/refresh";
         public const string WorkspaceClose = "workspace/close";
+        public const string WorkspaceList = "workspace/list";
         public const string DaemonStatus = "daemon/status";
         public const string Shutdown = "shutdown";
     }

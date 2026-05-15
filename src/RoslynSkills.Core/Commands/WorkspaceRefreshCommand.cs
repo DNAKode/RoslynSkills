@@ -3,14 +3,14 @@ using System.Text.Json;
 
 namespace RoslynSkills.Core.Commands;
 
-public sealed class WorkspaceCloseCommand : IAgentCommand
+public sealed class WorkspaceRefreshCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
-        Id: "workspace.close",
-        Summary: "Close and discard a hot workspace handle.",
+        Id: "workspace.refresh",
+        Summary: "Check a hot workspace handle for dirty tracked files without reloading or mutating Roslyn state yet.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: false);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -29,17 +29,25 @@ public sealed class WorkspaceCloseCommand : IAgentCommand
         }
 
         IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
-        if (!workspaceStore.TryRemove(handle, out HostedWorkspace? hosted) || hosted is null)
+        if (!workspaceStore.TryGet(handle, out HostedWorkspace? hosted) || hosted is null)
         {
             return Task.FromResult(new CommandExecutionResult(
                 null,
                 new[] { new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found.") }));
         }
 
+        WorkspaceStatus status = workspaceStore.BuildStatus(hosted);
         object data = new
         {
             workspace_handle = hosted.Handle,
-            closed = true,
+            loaded = status.Loaded,
+            dirty = status.Dirty,
+            invalidated_paths = status.InvalidatedPaths,
+            refresh_action = "none",
+            requires_reload = status.Dirty,
+            note = status.Dirty
+                ? "Tracked files changed. Incremental source refresh and reload are implemented in later hot-server sequence items."
+                : "No tracked file changes detected.",
             mode = hosted.Mode,
             include_generated = hosted.IncludeGenerated,
             workspace_fingerprint = hosted.WorkspaceFingerprint,
@@ -47,7 +55,6 @@ public sealed class WorkspaceCloseCommand : IAgentCommand
             resolved_workspace_path = hosted.Workspace.ResolvedWorkspacePath,
             analysis_mode = hosted.Workspace.AnalysisMode,
             workspace_kind = hosted.Workspace.WorkspaceKind,
-            project_scoped = string.Equals(hosted.Workspace.WorkspaceKind, "project", StringComparison.OrdinalIgnoreCase),
             solution_scoped = string.Equals(hosted.Workspace.WorkspaceKind, "solution", StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(hosted.Workspace.WorkspaceKind, "slnx", StringComparison.OrdinalIgnoreCase),
             projects_loaded = hosted.Workspace.ProjectCount,

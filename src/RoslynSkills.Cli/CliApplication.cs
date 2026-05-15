@@ -57,6 +57,12 @@ public sealed class CliApplication
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.stop" => await HandleDaemonStopAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.restart" => await HandleDaemonRestartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.use" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.preload" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.status" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.refresh" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.close" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.list" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
             "validate-input" => await HandleValidateInputAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
             _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
@@ -489,6 +495,71 @@ Workflow:
         return envelope.Ok ? 0 : 1;
     }
 
+    private async Task<int> HandleDaemonWorkspaceAsync(
+        string verb,
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+                Ok: true,
+                CommandId: verb,
+                Version: EnvelopeVersion,
+                Data: BuildWorkspaceDaemonUsage(verb),
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+            return 0;
+        }
+
+        if (!TryBuildWorkspaceHostRequest(verb, args, out string? repoRoot, out WorkspaceHostRequest? request, out CommandEnvelope? error))
+        {
+            await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        if (verb is "workspace.use" or "workspace.preload")
+        {
+            CommandEnvelope start = await manager.StartAsync(repoRoot, hostPath: null, cancellationToken).ConfigureAwait(false);
+            if (!start.Ok)
+            {
+                await WriteEnvelopeAsync(stdout, start with { CommandId = verb }).ConfigureAwait(false);
+                return 1;
+            }
+        }
+
+        TimeSpan requestTimeout = verb is "workspace.use" or "workspace.preload"
+            ? TimeSpan.FromMinutes(5)
+            : TimeSpan.FromSeconds(2);
+        WorkspaceHostResponse? response = await manager.SendRequestAsync(
+            repoRoot,
+            request!,
+            requestTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (response is null)
+        {
+            await WriteEnvelopeAsync(stdout, ErrorEnvelope(
+                commandId: verb,
+                code: WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                message: "Workspace daemon is unavailable. Run 'roscli daemon.start' or use workspace.use/preload to start it.")).ConfigureAwait(false);
+            return 1;
+        }
+
+        IReadOnlyList<CommandError> errors = response.Errors ??
+                                             response.Envelope?.Errors ??
+                                             Array.Empty<CommandError>();
+        await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+            Ok: response.Ok,
+            CommandId: verb,
+            Version: EnvelopeVersion,
+            Data: response,
+            Errors: errors,
+            TraceId: null)).ConfigureAwait(false);
+        return response.Ok ? 0 : 1;
+    }
+
     private async Task<int> HandleValidateInputAsync(
         string[] args,
         TextWriter stdout,
@@ -843,6 +914,311 @@ Workflow:
 
         return true;
     }
+
+    private static bool TryBuildWorkspaceHostRequest(
+        string verb,
+        string[] args,
+        out string? repoRoot,
+        out WorkspaceHostRequest? request,
+        out CommandEnvelope? error)
+    {
+        repoRoot = null;
+        request = null;
+        error = null;
+        List<string> positional = new();
+        Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            if (!arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                positional.Add(arg);
+                continue;
+            }
+
+            string? inlineValue = null;
+            int equalsIndex = arg.IndexOf('=', StringComparison.Ordinal);
+            if (equalsIndex >= 0)
+            {
+                inlineValue = arg[(equalsIndex + 1)..];
+                arg = arg[..equalsIndex];
+            }
+
+            if (!IsSupportedWorkspaceDaemonOption(verb, arg))
+            {
+                error = ErrorEnvelope(verb, "invalid_args", $"Unknown workspace option '{arg}'.");
+                return false;
+            }
+
+            if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? value))
+            {
+                error = ErrorEnvelope(verb, "invalid_args", $"Option '{arg}' requires a value.");
+                return false;
+            }
+
+            options[arg] = value!;
+        }
+
+        options.TryGetValue("--repo-root", out repoRoot);
+        string? alias = options.TryGetValue("--alias", out string? aliasValue)
+            ? aliasValue
+            : null;
+        Dictionary<string, object?> input = new(StringComparer.Ordinal);
+        string method;
+        string? workspaceHandle = null;
+        string? workspaceAlias = alias;
+
+        switch (verb)
+        {
+            case "workspace.use":
+                if (positional.Count != 1)
+                {
+                    error = ErrorEnvelope(verb, "invalid_args", "Usage: workspace.use <solution-or-project-path> [--alias default] [--require-solution true].");
+                    return false;
+                }
+
+                method = WorkspaceHostProtocol.Method.WorkspacePreload;
+                workspaceAlias ??= "default";
+                input["workspace_path"] = NormalizeCliPathValue(positional[0]);
+                if (!TryGetBoolOption(options, "--require-solution", defaultValue: true, out bool useRequireSolution, out error, verb))
+                {
+                    return false;
+                }
+
+                input["require_solution"] = useRequireSolution;
+                if (!TryAddWorkspacePreloadOptions(input, options, verb, out error))
+                {
+                    return false;
+                }
+
+                break;
+
+            case "workspace.preload":
+                if (positional.Count != 1)
+                {
+                    error = ErrorEnvelope(verb, "invalid_args", "Usage: workspace.preload <solution-or-project-path> [--alias name] [--require-solution true].");
+                    return false;
+                }
+
+                method = WorkspaceHostProtocol.Method.WorkspacePreload;
+                input["workspace_path"] = NormalizeCliPathValue(positional[0]);
+                if (!TryGetBoolOption(options, "--require-solution", defaultValue: true, out bool preloadRequireSolution, out error, verb))
+                {
+                    return false;
+                }
+
+                input["require_solution"] = preloadRequireSolution;
+                if (!TryAddWorkspacePreloadOptions(input, options, verb, out error))
+                {
+                    return false;
+                }
+
+                break;
+
+            case "workspace.status":
+                method = WorkspaceHostProtocol.Method.WorkspaceStatus;
+                if (!TryGetWorkspaceTarget(positional, ref workspaceAlias, out workspaceHandle, out error, verb))
+                {
+                    return false;
+                }
+
+                break;
+
+            case "workspace.refresh":
+                method = WorkspaceHostProtocol.Method.WorkspaceRefresh;
+                if (!TryGetWorkspaceTarget(positional, ref workspaceAlias, out workspaceHandle, out error, verb))
+                {
+                    return false;
+                }
+
+                break;
+
+            case "workspace.close":
+                method = WorkspaceHostProtocol.Method.WorkspaceClose;
+                if (!TryGetWorkspaceTarget(positional, ref workspaceAlias, out workspaceHandle, out error, verb))
+                {
+                    return false;
+                }
+
+                break;
+
+            case "workspace.list":
+                if (positional.Count != 0)
+                {
+                    error = ErrorEnvelope(verb, "invalid_args", "Usage: workspace.list [--repo-root <path>].");
+                    return false;
+                }
+
+                method = WorkspaceHostProtocol.Method.WorkspaceList;
+                break;
+
+            default:
+                error = ErrorEnvelope(verb, "invalid_args", $"Unsupported workspace verb '{verb}'.");
+                return false;
+        }
+
+        JsonElement inputElement = JsonSerializer.SerializeToElement(input);
+        request = new WorkspaceHostRequest(
+            Id: Guid.NewGuid().ToString("N"),
+            Method: method,
+            WorkspaceAlias: workspaceAlias,
+            WorkspaceHandle: workspaceHandle,
+            RefreshPolicy: options.TryGetValue("--refresh-policy", out string? refreshPolicy) ? refreshPolicy : null,
+            Input: inputElement);
+        return true;
+    }
+
+    private static bool IsSupportedWorkspaceDaemonOption(string verb, string option)
+    {
+        if (string.Equals(option, "--repo-root", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (verb is "workspace.use" or "workspace.preload")
+        {
+            return string.Equals(option, "--alias", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--require-solution", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--include-generated", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--max-files", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--mode", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return verb is "workspace.status" or "workspace.refresh" or "workspace.close"
+            ? string.Equals(option, "--alias", StringComparison.OrdinalIgnoreCase) ||
+              string.Equals(option, "--refresh-policy", StringComparison.OrdinalIgnoreCase)
+            : false;
+    }
+
+    private static bool TryGetWorkspaceTarget(
+        List<string> positional,
+        ref string? workspaceAlias,
+        out string? workspaceHandle,
+        out CommandEnvelope? error,
+        string verb)
+    {
+        workspaceHandle = null;
+        error = null;
+        if (positional.Count > 1)
+        {
+            error = ErrorEnvelope(verb, "invalid_args", $"Usage: {verb} [alias|workspace-handle] [--alias name].");
+            return false;
+        }
+
+        string? target = positional.Count == 1 ? positional[0] : null;
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            workspaceAlias ??= "default";
+            return true;
+        }
+
+        if (target.StartsWith("ws_", StringComparison.Ordinal))
+        {
+            workspaceHandle = target;
+        }
+        else
+        {
+            workspaceAlias = target;
+        }
+
+        return true;
+    }
+
+    private static bool TryAddWorkspacePreloadOptions(
+        Dictionary<string, object?> input,
+        Dictionary<string, string> options,
+        string verb,
+        out CommandEnvelope? error)
+    {
+        error = null;
+        if (options.TryGetValue("--mode", out string? mode))
+        {
+            input["mode"] = mode;
+        }
+
+        if (options.TryGetValue("--include-generated", out _))
+        {
+            if (!TryGetBoolOption(options, "--include-generated", defaultValue: false, out bool includeGenerated, out error, verb))
+            {
+                return false;
+            }
+
+            input["include_generated"] = includeGenerated;
+        }
+
+        if (options.TryGetValue("--max-files", out string? maxFiles))
+        {
+            if (!int.TryParse(maxFiles, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedMaxFiles) ||
+                parsedMaxFiles < 1)
+            {
+                error = ErrorEnvelope(verb, "invalid_args", "Option '--max-files' must be a positive integer.");
+                return false;
+            }
+
+            input["max_files"] = parsedMaxFiles;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetBoolOption(
+        Dictionary<string, string> options,
+        string key,
+        bool defaultValue,
+        out bool parsed,
+        out CommandEnvelope? error,
+        string verb)
+    {
+        error = null;
+        if (!options.TryGetValue(key, out string? value))
+        {
+            parsed = defaultValue;
+            return true;
+        }
+
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "1":
+            case "true":
+            case "yes":
+            case "on":
+                parsed = true;
+                return true;
+
+            case "0":
+            case "false":
+            case "no":
+            case "off":
+                parsed = false;
+                return true;
+
+            default:
+                parsed = defaultValue;
+                error = ErrorEnvelope(verb, "invalid_args", $"Option '{key}' must be true or false.");
+                return false;
+        }
+    }
+
+    private static object BuildWorkspaceDaemonUsage(string verb)
+        => verb switch
+        {
+            "workspace.use" => new
+            {
+                usage = "workspace.use <solution-or-project-path> [--alias default] [--require-solution true] [--repo-root <path>]",
+                summary = "Start the daemon if needed, preload a full workspace, and bind an alias.",
+            },
+            "workspace.preload" => new
+            {
+                usage = "workspace.preload <solution-or-project-path> [--alias name] [--require-solution true] [--repo-root <path>]",
+                summary = "Start the daemon if needed and preload a workspace.",
+            },
+            "workspace.status" => new { usage = "workspace.status [alias|workspace-handle] [--repo-root <path>]" },
+            "workspace.refresh" => new { usage = "workspace.refresh [alias|workspace-handle] [--repo-root <path>]" },
+            "workspace.close" => new { usage = "workspace.close [alias|workspace-handle] [--repo-root <path>]" },
+            "workspace.list" => new { usage = "workspace.list [--repo-root <path>]" },
+            _ => new { usage = $"{verb} [args]" },
+        };
 
     private static bool TryReadCliOptionValue(
         string[] args,
@@ -2871,6 +3247,12 @@ Workflow:
               daemon.status [--repo-root <path>]
               daemon.stop [--repo-root <path>]
               daemon.restart [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
+              workspace.use <solution-or-project-path> [--alias default] [--require-solution true] [--repo-root <path>]
+              workspace.preload <solution-or-project-path> [--alias name] [--require-solution true] [--repo-root <path>]
+              workspace.status [alias|workspace-handle] [--repo-root <path>]
+              workspace.refresh [alias|workspace-handle] [--repo-root <path>]
+              workspace.close [alias|workspace-handle] [--repo-root <path>]
+              workspace.list [--repo-root <path>]
               validate-input <command-id> [--input <json>|@<file>|-] [--input-stdin]
               run <command-id> [--input <json>|@<file>|-] [--input-stdin]
               <command-id> [simple positional args]
@@ -2879,6 +3261,7 @@ Workflow:
               - Use --version, -v, or version to print the installed roscli version.
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
               - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
+              - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
               - Recommended first minute:
                 roscli llmstxt
                 roscli list-commands --ids-only

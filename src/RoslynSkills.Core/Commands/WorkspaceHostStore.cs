@@ -13,6 +13,8 @@ internal interface IWorkspaceHostStore
 
     bool TryRemove(string handle, out HostedWorkspace? workspace);
 
+    IReadOnlyList<HostedWorkspace> List();
+
     WorkspaceStatus BuildStatus(HostedWorkspace hosted);
 }
 
@@ -84,6 +86,16 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         lock (_gate)
         {
             return _workspaces.Remove(handle, out workspace);
+        }
+    }
+
+    public IReadOnlyList<HostedWorkspace> List()
+    {
+        lock (_gate)
+        {
+            return _workspaces.Values
+                .OrderBy(workspace => workspace.LoadedAtUtc)
+                .ToArray();
         }
     }
 

@@ -20,13 +20,17 @@ internal static class Program
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static TextWriter ResponseWriter = Console.Out;
     private static string CurrentTransportName = "stdio-jsonl";
+    private static readonly Dictionary<string, string> WorkspaceAliases = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object AliasGate = new();
 
     private static readonly IReadOnlyDictionary<string, string> WorkspaceMethodCommandMap =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [WorkspaceHostProtocol.Method.WorkspacePreload] = "workspace.preload",
             [WorkspaceHostProtocol.Method.WorkspaceStatus] = "workspace.status",
+            [WorkspaceHostProtocol.Method.WorkspaceRefresh] = "workspace.refresh",
             [WorkspaceHostProtocol.Method.WorkspaceClose] = "workspace.close",
+            [WorkspaceHostProtocol.Method.WorkspaceList] = "workspace.list",
         };
 
     public static async Task<int> Main(string[] args)
@@ -58,14 +62,24 @@ internal static class Program
         ICommandRegistry registry,
         TextReader input,
         TextWriter output,
-        string transportName)
+        string transportName,
+        bool singleRequest = false)
     {
         ResponseWriter = output;
         CurrentTransportName = transportName;
 
         while (true)
         {
-            string? line = await input.ReadLineAsync().ConfigureAwait(false);
+            string? line;
+            try
+            {
+                line = await input.ReadLineAsync().ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+
             if (line is null)
             {
                 break;
@@ -77,9 +91,9 @@ internal static class Program
             }
 
             bool shouldExit = await HandleRequestLineAsync(registry, line).ConfigureAwait(false);
-            if (shouldExit)
+            if (shouldExit || singleRequest)
             {
-                return true;
+                return shouldExit;
             }
         }
 
@@ -104,7 +118,12 @@ internal static class Program
                 AutoFlush = true,
             };
 
-            bool shouldExit = await RunJsonLinesAsync(registry, reader, writer, "named-pipe-jsonl").ConfigureAwait(false);
+            bool shouldExit = await RunJsonLinesAsync(
+                registry,
+                reader,
+                writer,
+                "named-pipe-jsonl",
+                singleRequest: true).ConfigureAwait(false);
             if (shouldExit)
             {
                 return 0;
@@ -132,7 +151,12 @@ internal static class Program
                     AutoFlush = true,
                 };
 
-                bool shouldExit = await RunJsonLinesAsync(registry, reader, writer, "unix-socket-jsonl").ConfigureAwait(false);
+                bool shouldExit = await RunJsonLinesAsync(
+                    registry,
+                    reader,
+                    writer,
+                    "unix-socket-jsonl",
+                    singleRequest: true).ConfigureAwait(false);
                 if (shouldExit)
                 {
                     return 0;
@@ -411,7 +435,9 @@ internal static class Program
                 "tool.call",
                 "workspace.preload",
                 "workspace.status",
+                "workspace.refresh",
                 "workspace.close",
+                "workspace.list",
                 "shutdown",
             });
 
@@ -457,7 +483,7 @@ internal static class Program
         string? commandId,
         Stopwatch stopwatch)
     {
-        JsonElement input = GetInputElement(root);
+        JsonElement input = GetInputElement(root, commandId);
 
         if (string.IsNullOrWhiteSpace(commandId))
         {
@@ -508,16 +534,18 @@ internal static class Program
         }
 
         CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None).ConfigureAwait(false);
+        UpdateAliasBindings(root, method, result.Data, result.Ok);
+        object? responseData = BuildResponseData(commandId, result.Data, result.Ok);
         WorkspaceHostWorkspaceMetadata? workspaceMetadata = BuildWorkspaceMetadata(
             root,
             method,
-            result.Data,
+            responseData,
             result.Ok);
         CommandEnvelope envelope = new(
             Ok: result.Ok,
             CommandId: commandId,
             Version: EnvelopeVersion,
-            Data: result.Data,
+            Data: responseData,
             Errors: result.Errors,
             TraceId: null,
             Telemetry: result.Telemetry);
@@ -533,6 +561,38 @@ internal static class Program
             Errors: result.Ok ? null : result.Errors)).ConfigureAwait(false);
     }
 
+    private static object? BuildResponseData(string commandId, object? data, bool resultOk)
+    {
+        if (!resultOk ||
+            data is null ||
+            !string.Equals(commandId, "workspace.list", StringComparison.Ordinal))
+        {
+            return data;
+        }
+
+        return new
+        {
+            result = data,
+            aliases = SnapshotAliases()
+                .Select(pair => new
+                {
+                    alias = pair.Key,
+                    workspace_handle = pair.Value,
+                })
+                .ToArray(),
+        };
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, string>> SnapshotAliases()
+    {
+        lock (AliasGate)
+        {
+            return WorkspaceAliases
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
     private static WorkspaceHostWorkspaceMetadata? BuildWorkspaceMetadata(
         JsonElement requestRoot,
         string method,
@@ -546,6 +606,7 @@ internal static class Program
 
         if (!string.Equals(method, WorkspaceHostProtocol.Method.WorkspacePreload, StringComparison.Ordinal) &&
             !string.Equals(method, WorkspaceHostProtocol.Method.WorkspaceStatus, StringComparison.Ordinal) &&
+            !string.Equals(method, WorkspaceHostProtocol.Method.WorkspaceRefresh, StringComparison.Ordinal) &&
             !string.Equals(method, WorkspaceHostProtocol.Method.WorkspaceClose, StringComparison.Ordinal))
         {
             return null;
@@ -583,10 +644,74 @@ internal static class Program
             WorkspaceDiagnostics: GetStringArrayProperty(dataElement, "workspace_diagnostics"));
     }
 
-    private static JsonElement GetInputElement(JsonElement root)
+    private static void UpdateAliasBindings(JsonElement requestRoot, string method, object? data, bool resultOk)
+    {
+        if (!resultOk)
+        {
+            return;
+        }
+
+        string? alias = GetStringProperty(requestRoot, "workspace_alias");
+        if (string.IsNullOrWhiteSpace(alias))
+        {
+            return;
+        }
+
+        if (string.Equals(method, WorkspaceHostProtocol.Method.WorkspaceClose, StringComparison.Ordinal))
+        {
+            lock (AliasGate)
+            {
+                WorkspaceAliases.Remove(alias);
+            }
+
+            return;
+        }
+
+        if (!string.Equals(method, WorkspaceHostProtocol.Method.WorkspacePreload, StringComparison.Ordinal) || data is null)
+        {
+            return;
+        }
+
+        JsonElement dataElement = JsonSerializer.SerializeToElement(data, JsonOptions);
+        string? handle = GetStringProperty(dataElement, "workspace_handle");
+        if (string.IsNullOrWhiteSpace(handle))
+        {
+            return;
+        }
+
+        lock (AliasGate)
+        {
+            WorkspaceAliases[alias] = handle;
+        }
+    }
+
+    private static JsonElement GetInputElement(JsonElement root, string? commandId)
     {
         if (TryGetProperty(root, "input", out JsonElement input))
         {
+            if ((string.Equals(commandId, "workspace.status", StringComparison.Ordinal) ||
+                 string.Equals(commandId, "workspace.refresh", StringComparison.Ordinal) ||
+                 string.Equals(commandId, "workspace.close", StringComparison.Ordinal)) &&
+                !TryGetProperty(input, "workspace_handle", out _))
+            {
+                string? alias = GetStringProperty(root, "workspace_alias");
+                if (!string.IsNullOrWhiteSpace(alias) && TryResolveAlias(alias, out string? handle))
+                {
+                    Dictionary<string, object?> augmentedInput = new(StringComparer.Ordinal);
+                    if (input.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (JsonProperty property in input.EnumerateObject())
+                        {
+                            augmentedInput[property.Name] = property.Value.Clone();
+                        }
+                    }
+
+                    augmentedInput["workspace_handle"] = handle;
+                    AddStringIfPresent(root, augmentedInput, "refresh_policy");
+                    return JsonSerializer.SerializeToElement(augmentedInput);
+                }
+            }
+
             return input.Clone();
         }
 
@@ -594,8 +719,27 @@ internal static class Program
         AddStringIfPresent(root, synthesizedInput, "workspace_handle");
         AddStringIfPresent(root, synthesizedInput, "workspace_alias");
         AddStringIfPresent(root, synthesizedInput, "refresh_policy");
+        if ((string.Equals(commandId, "workspace.status", StringComparison.Ordinal) ||
+             string.Equals(commandId, "workspace.refresh", StringComparison.Ordinal) ||
+             string.Equals(commandId, "workspace.close", StringComparison.Ordinal)) &&
+            !synthesizedInput.ContainsKey("workspace_handle"))
+        {
+            string? alias = GetStringProperty(root, "workspace_alias");
+            if (!string.IsNullOrWhiteSpace(alias) && TryResolveAlias(alias, out string? handle))
+            {
+                synthesizedInput["workspace_handle"] = handle;
+            }
+        }
 
         return JsonSerializer.SerializeToElement(synthesizedInput);
+    }
+
+    private static bool TryResolveAlias(string alias, out string? handle)
+    {
+        lock (AliasGate)
+        {
+            return WorkspaceAliases.TryGetValue(alias, out handle);
+        }
     }
 
     private static string ResolveMethod(JsonElement root)
@@ -786,7 +930,9 @@ internal static class Program
             WorkspaceHostProtocol.Method.ToolCall,
             WorkspaceHostProtocol.Method.WorkspacePreload,
             WorkspaceHostProtocol.Method.WorkspaceStatus,
+            WorkspaceHostProtocol.Method.WorkspaceRefresh,
             WorkspaceHostProtocol.Method.WorkspaceClose,
+            WorkspaceHostProtocol.Method.WorkspaceList,
             WorkspaceHostProtocol.Method.Shutdown,
         };
 

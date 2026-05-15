@@ -73,11 +73,12 @@ public sealed class WorkspaceHostDaemonManager
         }
 
         string resolvedHostPath = ResolveHostPath(hostPath);
+        bool useShellExecute = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         ProcessStartInfo startInfo = new("dotnet")
         {
             WorkingDirectory = endpoint.RepoRoot,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            UseShellExecute = useShellExecute,
+            CreateNoWindow = !useShellExecute,
         };
         startInfo.ArgumentList.Add(resolvedHostPath);
         startInfo.ArgumentList.Add("--transport");
@@ -167,6 +168,7 @@ public sealed class WorkspaceHostDaemonManager
             new WorkspaceHostRequest(
                 Id: Guid.NewGuid().ToString("N"),
                 Method: WorkspaceHostProtocol.Method.Shutdown),
+            TimeSpan.FromSeconds(2),
             cancellationToken).ConfigureAwait(false);
 
         TryDeleteManifest(endpoint.ManifestPath);
@@ -187,6 +189,16 @@ public sealed class WorkspaceHostDaemonManager
                 manifest_path = endpoint.ManifestPath,
                 response = response.Data,
             });
+    }
+
+    public async Task<WorkspaceHostResponse?> SendRequestAsync(
+        string? repoRoot,
+        WorkspaceHostRequest request,
+        TimeSpan timeoutDuration,
+        CancellationToken cancellationToken)
+    {
+        WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        return await SendAsync(endpoint, request, timeoutDuration, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<WorkspaceHostResponse?> WaitForStatusAsync(
@@ -218,18 +230,20 @@ public sealed class WorkspaceHostDaemonManager
             new WorkspaceHostRequest(
                 Id: Guid.NewGuid().ToString("N"),
                 Method: WorkspaceHostProtocol.Method.DaemonStatus),
+            TimeSpan.FromSeconds(2),
             cancellationToken);
     }
 
     private static async Task<WorkspaceHostResponse?> SendAsync(
         WorkspaceHostDaemonEndpoint endpoint,
         WorkspaceHostRequest request,
+        TimeSpan timeoutDuration,
         CancellationToken cancellationToken)
     {
         try
         {
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            timeout.CancelAfter(timeoutDuration);
             WorkspaceHostClientOptions options = endpoint.Transport == "named-pipe"
                 ? WorkspaceHostClientOptions.NamedPipe(endpoint.PipeName!)
                 : WorkspaceHostClientOptions.UnixSocket(endpoint.SocketPath!);

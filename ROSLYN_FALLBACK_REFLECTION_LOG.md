@@ -625,3 +625,29 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Cli/WorkspaceHostDaemonManager.cs`
     - `src/RoslynSkills.WorkspaceHost/Program.cs`
     - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+
+- `2026-05-15`: Added daemon-backed workspace lifecycle commands using direct source edits
+  - Task/Context: implement sequence item 7 by adding top-level `workspace.use`, `workspace.preload`, `workspace.status`, `workspace.refresh`, `workspace.close`, and `workspace.list`, with daemon alias binding, solution-first preload behavior, and full manual lifecycle validation.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+df4fe5dab69174e20dfdbd802bd047549d5ac42a`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work spans CLI verb routing, daemon request construction, host alias resolution, process transport lifetime fixes, workspace-store listing, command registration, and tests. Current RoslynSkills commands do not provide a self-hosted workflow for adding daemon-backed command families with protocol/CLI/host/test changes in one transaction.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding a daemon-backed workspace command family from protocol methods, including alias semantics, timeout policy, command help, and lifecycle smoke validation.
+  - Proposed improvement:
+    - Add `maint.add_daemon_workspace_commands` to generate CLI routing, host method mapping, alias handling, request timeout policy, command registration, and focused tests from protocol declarations.
+  - Expected impact:
+    - correctness: higher (agents can explicitly load and inspect a full solution-scoped hot workspace instead of relying on ambiguous process-local handles).
+    - latency: lower after first load because aliases and handles keep solution state hot in the daemon.
+    - token_count: lower because repeated workspace calls can use a short alias instead of resending full workspace paths and preload options.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Cli/CliApplication.cs`
+    - `src/RoslynSkills.Cli/WorkspaceHostDaemonManager.cs`
+    - `src/RoslynSkills.WorkspaceHost/Program.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceListCommand.cs`
+    - `src/RoslynSkills.Core/Commands/WorkspaceRefreshCommand.cs`
+    - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`

@@ -168,6 +168,96 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task WorkspaceUseHelp_ReturnsDaemonWorkspaceUsage()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "workspace.use", "--help" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("workspace.use", output);
+        Assert.Contains("--alias default", output);
+        Assert.Contains("--repo-root", output);
+        Assert.Contains("Start the daemon if needed", output);
+    }
+
+    [Fact]
+    public async Task WorkspaceStatus_RejectsUnknownOption()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "workspace.status", "--bogus", "true" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(1, exitCode);
+        Assert.Contains("\"CommandId\": \"workspace.status\"", output);
+        Assert.Contains("\"Code\": \"invalid_args\"", output);
+        Assert.Contains("Unknown workspace option '--bogus'", output);
+    }
+
+    [Fact]
+    public async Task WorkspacePreload_RejectsInvalidBoolOption()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "workspace.preload", "Demo.slnx", "--require-solution", "maybe" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(1, exitCode);
+        Assert.Contains("\"CommandId\": \"workspace.preload\"", output);
+        Assert.Contains("\"Code\": \"invalid_args\"", output);
+        Assert.Contains("must be true or false", output);
+    }
+
+    [Fact]
+    public async Task WorkspaceStatus_WhenDaemonUnavailable_ReturnsDaemonUnavailable()
+    {
+        string repoRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-daemon-missing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoRoot);
+
+        try
+        {
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "workspace.status", "--repo-root", repoRoot },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("\"CommandId\": \"workspace.status\"", output);
+            Assert.Contains("\"Code\": \"daemon_unavailable\"", output);
+        }
+        finally
+        {
+            Directory.Delete(repoRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RunPing_ReturnsSuccessEnvelope()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());
