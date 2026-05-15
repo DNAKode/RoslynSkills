@@ -651,3 +651,28 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Core/Commands/WorkspaceListCommand.cs`
     - `src/RoslynSkills.Core/Commands/WorkspaceRefreshCommand.cs`
     - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+
+- `2026-05-15`: Added client-side workspace alias persistence using direct source edits
+  - Task/Context: implement sequence item 8 by persisting hot-workspace routing metadata in `.roslynskills/workspaces.json`, resolving aliases before daemon `status`/`refresh`/`close`, updating aliases after successful workspace calls, removing aliases on close, and ignoring local client state in git.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+4182677fbdea5ea56a734fe6cd7ea861653b3191`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work spans CLI routing behavior, local JSON persistence, daemon endpoint metadata, tests, and `.gitignore`. Current RoslynSkills commands do not provide a self-hosted workflow for adding local CLI state stores with request rewriting and lifecycle validation.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding a local client-state store tied to command responses, including schema records, persistence tests, and cleanup/ignore rules.
+  - Proposed improvement:
+    - Add `maint.add_cli_state_store` to scaffold JSON state records, load/save helpers, command response extractors, and tests from a declared state schema.
+  - Expected impact:
+    - correctness: higher (aliases now survive separate `roscli` invocations as explicit routing metadata).
+    - latency: neutral now, lower later when read-only hot-path commands can resolve workspace handles from aliases without repeated preload/status discovery.
+    - token_count: lower because agents can keep using `default` instead of copying full handles or paths across calls.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Cli/WorkspaceAliasStore.cs`
+    - `src/RoslynSkills.Cli/CliApplication.cs`
+    - `src/RoslynSkills.Cli/WorkspaceHostDaemonManager.cs`
+    - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+    - `.gitignore`

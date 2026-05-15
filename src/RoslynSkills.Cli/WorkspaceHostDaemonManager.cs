@@ -201,6 +201,17 @@ public sealed class WorkspaceHostDaemonManager
         return await SendAsync(endpoint, request, timeoutDuration, cancellationToken).ConfigureAwait(false);
     }
 
+    public int? TryGetDaemonProcessId(string? repoRoot)
+    {
+        WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        return TryReadManifest(endpoint.ManifestPath)?.ProcessId;
+    }
+
+    public static string FormatEndpoint(WorkspaceHostDaemonEndpoint endpoint)
+        => endpoint.Transport == "named-pipe"
+            ? $"pipe:{endpoint.PipeName}"
+            : $"unix:{endpoint.SocketPath}";
+
     private static async Task<WorkspaceHostResponse?> WaitForStatusAsync(
         WorkspaceHostDaemonEndpoint endpoint,
         TimeSpan timeout,
@@ -347,11 +358,6 @@ public sealed class WorkspaceHostDaemonManager
 
         return Path.Combine(root, "RoslynSkills", "workspace-hosts");
     }
-
-    private static string FormatEndpoint(WorkspaceHostDaemonEndpoint endpoint)
-        => endpoint.Transport == "named-pipe"
-            ? $"pipe:{endpoint.PipeName}"
-            : $"unix:{endpoint.SocketPath}";
 
     private static void WriteManifest(string path, WorkspaceHostDaemonManifest manifest)
     {

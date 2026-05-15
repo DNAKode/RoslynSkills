@@ -8,6 +8,7 @@
 
 # Local assistant settings
 .claude/
+.roslynskills/
 
 # User-specific files
 *.rsuser

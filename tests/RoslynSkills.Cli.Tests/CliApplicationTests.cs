@@ -258,6 +258,41 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public void WorkspaceAliasStore_PersistsAndRemovesAliases()
+    {
+        string repoRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-alias-store-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoRoot);
+
+        try
+        {
+            WorkspaceAliasStore store = new(repoRoot);
+            WorkspaceAliasRecord record = new(
+                WorkspacePath: Path.Combine(repoRoot, "Demo.slnx"),
+                WorkspaceHandle: "ws_123",
+                DaemonEndpoint: "pipe:roslynskills-test",
+                DaemonPid: 1234,
+                WorkspaceFingerprint: "abc",
+                LastSeenUtc: DateTimeOffset.Parse("2026-05-15T00:00:00Z"));
+
+            store.Upsert("default", record);
+
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".roslynskills", "workspaces.json")));
+            Assert.True(store.TryGet("DEFAULT", out WorkspaceAliasRecord? loaded));
+            Assert.NotNull(loaded);
+            Assert.Equal("ws_123", loaded.WorkspaceHandle);
+            Assert.Equal("pipe:roslynskills-test", loaded.DaemonEndpoint);
+
+            store.Remove("default");
+
+            Assert.False(store.TryGet("default", out _));
+        }
+        finally
+        {
+            Directory.Delete(repoRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RunPing_ReturnsSuccessEnvelope()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());

@@ -530,6 +530,8 @@ Workflow:
             }
         }
 
+        WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
+        request = ApplyPersistedWorkspaceAlias(verb, request!, endpoint.RepoRoot);
         TimeSpan requestTimeout = verb is "workspace.use" or "workspace.preload"
             ? TimeSpan.FromMinutes(5)
             : TimeSpan.FromSeconds(2);
@@ -547,6 +549,7 @@ Workflow:
             return 1;
         }
 
+        UpdatePersistedWorkspaceAlias(verb, request!, response, manager, endpoint);
         IReadOnlyList<CommandError> errors = response.Errors ??
                                              response.Envelope?.Errors ??
                                              Array.Empty<CommandError>();
@@ -558,6 +561,83 @@ Workflow:
             Errors: errors,
             TraceId: null)).ConfigureAwait(false);
         return response.Ok ? 0 : 1;
+    }
+
+    private static WorkspaceHostRequest ApplyPersistedWorkspaceAlias(
+        string verb,
+        WorkspaceHostRequest request,
+        string repoRoot)
+    {
+        if (verb is not ("workspace.status" or "workspace.refresh" or "workspace.close") ||
+            !string.IsNullOrWhiteSpace(request.WorkspaceHandle) ||
+            string.IsNullOrWhiteSpace(request.WorkspaceAlias))
+        {
+            return request;
+        }
+
+        WorkspaceAliasStore aliasStore = new(repoRoot);
+        return aliasStore.TryGet(request.WorkspaceAlias, out WorkspaceAliasRecord? record) &&
+               record is not null &&
+               !string.IsNullOrWhiteSpace(record.WorkspaceHandle)
+            ? request with { WorkspaceHandle = record.WorkspaceHandle }
+            : request;
+    }
+
+    private static void UpdatePersistedWorkspaceAlias(
+        string verb,
+        WorkspaceHostRequest request,
+        WorkspaceHostResponse response,
+        WorkspaceHostDaemonManager manager,
+        WorkspaceHostDaemonEndpoint endpoint)
+    {
+        if (!response.Ok || string.IsNullOrWhiteSpace(request.WorkspaceAlias))
+        {
+            return;
+        }
+
+        WorkspaceAliasStore aliasStore = new(endpoint.RepoRoot);
+        if (verb is "workspace.close")
+        {
+            aliasStore.Remove(request.WorkspaceAlias);
+            return;
+        }
+
+        if (verb is not ("workspace.use" or "workspace.preload" or "workspace.status" or "workspace.refresh"))
+        {
+            return;
+        }
+
+        string? workspaceHandle = response.Workspace?.WorkspaceHandle ?? TryGetStringProperty(response.Envelope?.Data, "workspace_handle");
+        if (string.IsNullOrWhiteSpace(workspaceHandle))
+        {
+            return;
+        }
+
+        string? workspacePath =
+            TryGetStringProperty(response.Envelope?.Data, "resolved_workspace_path") ??
+            TryGetStringProperty(response.Envelope?.Data, "requested_workspace_path");
+        string? fingerprint = response.Workspace?.WorkspaceFingerprint ?? TryGetStringProperty(response.Envelope?.Data, "workspace_fingerprint");
+        WorkspaceAliasRecord record = new(
+            WorkspacePath: workspacePath,
+            WorkspaceHandle: workspaceHandle,
+            DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
+            DaemonPid: manager.TryGetDaemonProcessId(endpoint.RepoRoot),
+            WorkspaceFingerprint: fingerprint,
+            LastSeenUtc: DateTimeOffset.UtcNow);
+        aliasStore.Upsert(request.WorkspaceAlias, record);
+    }
+
+    private static string? TryGetStringProperty(object? data, string propertyName)
+    {
+        if (data is null)
+        {
+            return null;
+        }
+
+        JsonElement element = JsonSerializer.SerializeToElement(data);
+        return TryGetString(element, propertyName, out string value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
     }
 
     private async Task<int> HandleValidateInputAsync(
