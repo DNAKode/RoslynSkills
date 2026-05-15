@@ -676,3 +676,25 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `src/RoslynSkills.Cli/WorkspaceHostDaemonManager.cs`
     - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
     - `.gitignore`
+
+- `2026-05-16`: Routed read-only hot-path commands through the daemon using direct source edits
+  - Task/Context: implement sequence item 9 by routing daemon-capable read-only commands through the hot workspace host, adding `ROSCLI_DAEMON` mode handling, `--no-daemon`, alias-to-handle injection, required-mode fail-closed behavior, and manual verification against the loaded `RoslynSkills.slnx` workspace.
+  - RoslynSkills version:
+    - `roscli 1.0.0` (`1.0.0+5ba4408dfa75e91cd1dba2644aad27e163343fe6`)
+  - Fallback action:
+    - `both`
+  - Why Roslyn path was not used:
+    - The work changes the CLI's own top-level invocation pipeline, global option handling, daemon routing policy, environment-variable behavior, and tests. Current RoslynSkills commands do not provide a self-hosted workflow for safely modifying command dispatch and cross-process routing behavior as a single semantic transaction.
+  - Roslyn command attempted (if any):
+    - `scripts\roscli.cmd --version`
+  - Missing command/option hypothesis:
+    - Missing maintainer workflow for adding daemon-routing policy to existing command families, including global flag parsing, alias-state injection, fail-closed tests, and live daemon smoke validation.
+  - Proposed improvement:
+    - Add `maint.route_commands_via_daemon` to declare daemon-capable command ids, generate routing gates, wire alias resolution, add required/off/auto tests, and emit a manual smoke checklist.
+  - Expected impact:
+    - correctness: higher (agents can require hot-workspace routing and fail closed instead of silently falling back when semantic state is expected).
+    - latency: lower for repeated read-only semantic calls because loaded solution state is reused by the daemon.
+    - token_count: lower because agents can use a persisted alias and short command forms rather than resending workspace paths or handles on every call.
+  - Follow-up issue/test link:
+    - `src/RoslynSkills.Cli/CliApplication.cs`
+    - `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`

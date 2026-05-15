@@ -293,6 +293,111 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DaemonCapableCommand_RequiredModeWithoutAlias_FailsClosed()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-daemon-route-{Guid.NewGuid():N}.cs");
+        string? previousMode = Environment.GetEnvironmentVariable("ROSCLI_DAEMON");
+        string? previousAlias = Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS");
+
+        try
+        {
+            await File.WriteAllTextAsync(filePath, "public class Demo { }");
+            Environment.SetEnvironmentVariable("ROSCLI_DAEMON", "required");
+            Environment.SetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS", $"missing-{Guid.NewGuid():N}");
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "nav.find_symbol", filePath, "Demo" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("\"CommandId\": \"cli.daemon_route\"", output);
+            Assert.Contains("\"Code\": \"hot_workspace_alias_not_found\"", output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ROSCLI_DAEMON", previousMode);
+            Environment.SetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS", previousAlias);
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DaemonCapableCommand_NoDaemonFlag_UsesDirectPath()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-no-daemon-{Guid.NewGuid():N}.cs");
+        string? previousMode = Environment.GetEnvironmentVariable("ROSCLI_DAEMON");
+        string? previousAlias = Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS");
+
+        try
+        {
+            await File.WriteAllTextAsync(filePath, "namespace DemoNs { public class Demo { } }");
+            Environment.SetEnvironmentVariable("ROSCLI_DAEMON", "required");
+            Environment.SetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS", $"missing-{Guid.NewGuid():N}");
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "nav.find_symbol", filePath, "Demo", "--no-daemon" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"nav.find_symbol\"", output);
+            Assert.DoesNotContain("hot_workspace_alias_not_found", output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ROSCLI_DAEMON", previousMode);
+            Environment.SetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS", previousAlias);
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DaemonCapableCommand_DaemonOff_UsesDirectPath()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-daemon-off-{Guid.NewGuid():N}.cs");
+        string? previousMode = Environment.GetEnvironmentVariable("ROSCLI_DAEMON");
+        string? previousAlias = Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS");
+
+        try
+        {
+            await File.WriteAllTextAsync(filePath, "namespace DemoNs { public class Demo { } }");
+            Environment.SetEnvironmentVariable("ROSCLI_DAEMON", "off");
+            Environment.SetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS", $"missing-{Guid.NewGuid():N}");
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "nav.find_symbol", filePath, "Demo" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"nav.find_symbol\"", output);
+            Assert.DoesNotContain("hot_workspace_alias_not_found", output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ROSCLI_DAEMON", previousMode);
+            Environment.SetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS", previousAlias);
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task RunPing_ReturnsSuccessEnvelope()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());

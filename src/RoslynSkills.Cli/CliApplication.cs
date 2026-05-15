@@ -33,6 +33,9 @@ public sealed class CliApplication
     {
         stdin ??= Console.In;
 
+        bool noDaemon = StripFlag(args, "--no-daemon", out string[] effectiveArgs);
+        args = effectiveArgs;
+
         if (args.Length == 0 || IsHelp(args[0]))
         {
             await WriteHelpAsync(stdout).ConfigureAwait(false);
@@ -64,8 +67,8 @@ public sealed class CliApplication
             "workspace.close" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
             "workspace.list" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
             "validate-input" => await HandleValidateInputAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
-            "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
-            _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
+            "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
             _ => await HandleUnknownCommandAsync(verb, stdout, stderr).ConfigureAwait(false),
         };
     }
@@ -640,6 +643,108 @@ Workflow:
             : null;
     }
 
+    private static bool IsDaemonCapableCommand(string commandId)
+        => commandId is
+            "nav.find_symbol" or
+            "nav.find_symbol_batch" or
+            "nav.find_references" or
+            "nav.find_invocations" or
+            "ctx.member_source" or
+            "diag.get_file_diagnostics" or
+            "query.batch";
+
+    private static string GetDaemonRoutingMode()
+    {
+        string? raw = Environment.GetEnvironmentVariable("ROSCLI_DAEMON");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "auto";
+        }
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "off" => "off",
+            "0" => "off",
+            "false" => "off",
+            "required" => "required",
+            "require" => "required",
+            "on" => "required",
+            "1" => "required",
+            "true" => "required",
+            "auto" => "auto",
+            _ => "auto",
+        };
+    }
+
+    private static bool StripFlag(string[] args, string flag, out string[] strippedArgs)
+    {
+        List<string>? stripped = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (!string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
+            {
+                stripped?.Add(args[i]);
+                continue;
+            }
+
+            stripped ??= args.Take(i).ToList();
+        }
+
+        strippedArgs = stripped?.ToArray() ?? args;
+        return stripped is not null;
+    }
+
+    private static bool TryResolveHotWorkspaceInput(
+        JsonElement input,
+        string repoRoot,
+        bool requireHotWorkspace,
+        out JsonElement routedInput,
+        out bool resolvedHotWorkspace,
+        out CommandEnvelope? error)
+    {
+        routedInput = input;
+        resolvedHotWorkspace = false;
+        error = null;
+        if (TryGetString(input, "workspace_handle", out string existingHandle) &&
+            !string.IsNullOrWhiteSpace(existingHandle))
+        {
+            resolvedHotWorkspace = true;
+            return true;
+        }
+
+        string alias = Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS") ?? "default";
+        WorkspaceAliasStore aliasStore = new(repoRoot);
+        if (!aliasStore.TryGet(alias, out WorkspaceAliasRecord? record) ||
+            record is null ||
+            string.IsNullOrWhiteSpace(record.WorkspaceHandle))
+        {
+            error = ErrorEnvelope(
+                "cli.daemon_route",
+                "hot_workspace_alias_not_found",
+                $"Hot workspace alias '{alias}' was not found in '{aliasStore.Path}'. Run 'roscli workspace.use <solution> --alias {alias}' first.");
+            return false;
+        }
+
+        Dictionary<string, object?> augmentedInput = new(StringComparer.Ordinal);
+        if (input.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in input.EnumerateObject())
+            {
+                augmentedInput[property.Name] = property.Value.Clone();
+            }
+        }
+
+        augmentedInput["workspace_handle"] = record.WorkspaceHandle;
+        resolvedHotWorkspace = true;
+        if (requireHotWorkspace && !augmentedInput.ContainsKey("require_workspace"))
+        {
+            augmentedInput["require_workspace"] = true;
+        }
+
+        routedInput = JsonSerializer.SerializeToElement(augmentedInput);
+        return true;
+    }
+
     private async Task<int> HandleValidateInputAsync(
         string[] args,
         TextWriter stdout,
@@ -682,7 +787,8 @@ Workflow:
         string[] args,
         TextWriter stdout,
         CancellationToken cancellationToken,
-        TextReader stdin)
+        TextReader stdin,
+        bool noDaemon = false)
     {
         Stopwatch totalTimer = Stopwatch.StartNew();
         (bool ok, string commandId, JsonElement input, CommandEnvelope? error) =
@@ -725,6 +831,17 @@ Workflow:
             return 1;
         }
 
+        int? daemonExitCode = await TryRunDaemonCapableCommandAsync(
+            commandId,
+            input,
+            stdout,
+            cancellationToken,
+            noDaemon).ConfigureAwait(false);
+        if (daemonExitCode.HasValue)
+        {
+            return daemonExitCode.Value;
+        }
+
         Stopwatch executeTimer = Stopwatch.StartNew();
         CommandExecutionResult result = await command.ExecuteAsync(input, cancellationToken).ConfigureAwait(false);
         executeTimer.Stop();
@@ -747,12 +864,105 @@ Workflow:
         return result.Ok ? 0 : 1;
     }
 
+    private async Task<int?> TryRunDaemonCapableCommandAsync(
+        string commandId,
+        JsonElement input,
+        TextWriter stdout,
+        CancellationToken cancellationToken,
+        bool noDaemon)
+    {
+        if (noDaemon)
+        {
+            return null;
+        }
+
+        if (!IsDaemonCapableCommand(commandId))
+        {
+            return null;
+        }
+
+        string routingMode = GetDaemonRoutingMode();
+        if (string.Equals(routingMode, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        bool requireHotWorkspace = string.Equals(routingMode, "required", StringComparison.OrdinalIgnoreCase) ||
+                                   IsPublishedModeEnabled("ROSCLI_REQUIRE_HOT_WORKSPACE");
+        WorkspaceHostDaemonManager manager = new();
+        WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint();
+        if (!TryResolveHotWorkspaceInput(
+                input,
+                endpoint.RepoRoot,
+                requireHotWorkspace,
+                out JsonElement routedInput,
+                out bool resolvedHotWorkspace,
+                out CommandEnvelope? aliasError))
+        {
+            if (requireHotWorkspace)
+            {
+                await WriteEnvelopeAsync(stdout, aliasError!).ConfigureAwait(false);
+                return 1;
+            }
+
+            return null;
+        }
+
+        WorkspaceHostRequest request = new(
+            Id: Guid.NewGuid().ToString("N"),
+            Method: WorkspaceHostProtocol.Method.ToolCall,
+            RefreshPolicy: Environment.GetEnvironmentVariable("ROSCLI_REFRESH_POLICY"),
+            CommandId: commandId,
+            Input: routedInput);
+        WorkspaceHostResponse? response = await manager.SendRequestAsync(
+            endpoint.RepoRoot,
+            request,
+            TimeSpan.FromMinutes(2),
+            cancellationToken).ConfigureAwait(false);
+        if (response is null)
+        {
+            if (!requireHotWorkspace && !resolvedHotWorkspace)
+            {
+                return null;
+            }
+
+            await WriteEnvelopeAsync(stdout, ErrorEnvelope(
+                commandId,
+                WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                "Workspace daemon is unavailable for a required hot-workspace command. Run 'roscli workspace.use <solution>' first.")).ConfigureAwait(false);
+            return 1;
+        }
+
+        IReadOnlyList<CommandError> errors = response.Errors ??
+                                             response.Envelope?.Errors ??
+                                             Array.Empty<CommandError>();
+        if (!response.Ok &&
+            !requireHotWorkspace &&
+            HasErrorCode(errors, WorkspaceHostProtocol.ErrorCode.ProtocolMismatch))
+        {
+            return null;
+        }
+
+        await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+            Ok: response.Ok,
+            CommandId: commandId,
+            Version: EnvelopeVersion,
+            Data: response,
+            Errors: errors,
+            TraceId: null)).ConfigureAwait(false);
+        return response.Ok ? 0 : 1;
+    }
+
+    private static bool HasErrorCode(IEnumerable<CommandError> errors, string code)
+        => errors.Any(error => string.Equals(error.Code, code, StringComparison.OrdinalIgnoreCase));
+
     private async Task<int> HandleRunDirectAsync(
         string commandId,
         string[] args,
         TextWriter stdout,
         CancellationToken cancellationToken,
-        TextReader stdin)
+        TextReader stdin,
+        bool noDaemon)
     {
         if (args.Length == 1 && IsHelp(args[0]))
         {
@@ -761,19 +971,19 @@ Workflow:
 
         if (args.Length == 0)
         {
-            return await HandleRunAsync(new[] { commandId }, stdout, cancellationToken, stdin).ConfigureAwait(false);
+            return await HandleRunAsync(new[] { commandId }, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false);
         }
 
         if (HasOption(args, "--input-stdin") || TryGetOption(args, "--input", out _))
         {
             string[] runArgs = new[] { commandId }.Concat(args).ToArray();
-            return await HandleRunAsync(runArgs, stdout, cancellationToken, stdin).ConfigureAwait(false);
+            return await HandleRunAsync(runArgs, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false);
         }
 
         if (!SupportsDirectShorthand(commandId))
         {
             string[] runArgs = new[] { commandId }.Concat(args).ToArray();
-            return await HandleRunAsync(runArgs, stdout, cancellationToken, stdin).ConfigureAwait(false);
+            return await HandleRunAsync(runArgs, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false);
         }
 
         if (!TryBuildDirectShorthandInput(commandId, args, out string inputJson, out CommandEnvelope? error))
@@ -786,7 +996,8 @@ Workflow:
             new[] { commandId, "--input", inputJson },
             stdout,
             cancellationToken,
-            stdin).ConfigureAwait(false);
+            stdin,
+            noDaemon).ConfigureAwait(false);
     }
 
     private async Task<int> HandleUnknownCommandAsync(string verb, TextWriter stdout, TextWriter stderr)
@@ -3342,6 +3553,8 @@ Workflow:
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
               - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
               - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
+              - Daemon-capable read-only commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
+              - Set ROSCLI_DAEMON=required and ROSCLI_WORKSPACE_ALIAS=default to fail closed when a hot workspace is required.
               - Recommended first minute:
                 roscli llmstxt
                 roscli list-commands --ids-only
