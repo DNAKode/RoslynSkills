@@ -701,3 +701,9 @@ The `.33` FrankenTui.NET repair round showed correct agent behavior but one rema
 The next `.34` live round used `edit.batch_exact replace_span` successfully but still built operations by copying only `span_start` and `span_length`. In a multi-agent or long-running hot-workspace session, that leaves span edits vulnerable to stale coordinates if another change shifts or rewrites the same declaration between read and write.
 
 When `ctx.member_source` is called with `include_edit_target_text=true` and the exact span text is not truncated, `edit_target.replace_span_operation` now includes `expected_text`. Agents should keep that field in the final `edit.batch_exact` payload and change only `new_text`; this turns stale span coordinates into a guarded operation failure instead of an accidental overwrite.
+
+## 2026-05-16 Follow-Up: Claim Status Alias
+
+In the next supervised pass, the agent tried `edit.claim list` even though the supported status operation was `edit.claim status`. That is a pit-of-success issue rather than a meaningful user error: agents commonly use `list` for stateful resources.
+
+`edit.claim list` is now accepted as an alias for `edit.claim status` in both direct CLI shorthand and JSON input. Help text advertises `status|list|claim|release`.

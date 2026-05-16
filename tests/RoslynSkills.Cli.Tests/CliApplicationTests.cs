@@ -144,6 +144,19 @@ public sealed class CliApplicationTests
             Assert.Equal(0, statusExit);
             Assert.Contains("\"active_count\": 1", statusOutput);
             Assert.Contains("agent-a", statusOutput);
+
+            StringWriter listOut = new();
+            StringWriter listErr = new();
+            int listExit = await app.RunAsync(
+                new[] { "edit.claim", "list", "--repo-root", repoRoot },
+                listOut,
+                listErr,
+                CancellationToken.None);
+
+            string listOutput = listOut.ToString();
+            Assert.Equal(0, listExit);
+            Assert.Contains("\"active_count\": 1", listOutput);
+            Assert.Contains("agent-a", listOutput);
         }
         finally
         {

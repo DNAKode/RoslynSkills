@@ -27,7 +27,7 @@ public sealed class EditClaimCommand : IAgentCommand
         {
             errors.Add(new CommandError(
                 "invalid_input",
-                "Property 'operation' must be one of status, claim, or release."));
+                "Property 'operation' must be one of status, list, claim, or release."));
         }
 
         if (input.TryGetProperty("paths", out JsonElement paths) &&
@@ -73,7 +73,8 @@ public sealed class EditClaimCommand : IAgentCommand
             .Where(claim => claim.ExpiresAtUtc > now)
             .ToList();
 
-        object data = operation.ToLowerInvariant() switch
+        string normalizedOperation = NormalizeOperation(operation);
+        object data = normalizedOperation switch
         {
             "status" => BuildStatus(repoRoot, storePath, activeClaims, expired, paths),
             "claim" => Claim(storePath, activeClaims, expired, paths, owner, reason, ttlMinutes, force, now),
@@ -207,8 +208,14 @@ public sealed class EditClaimCommand : IAgentCommand
 
     private static bool IsSupportedOperation(string operation)
         => operation.Equals("status", StringComparison.OrdinalIgnoreCase) ||
+           operation.Equals("list", StringComparison.OrdinalIgnoreCase) ||
            operation.Equals("claim", StringComparison.OrdinalIgnoreCase) ||
            operation.Equals("release", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeOperation(string operation)
+        => operation.Equals("list", StringComparison.OrdinalIgnoreCase)
+            ? "status"
+            : operation.ToLowerInvariant();
 
     private static string? GetOptionalString(JsonElement input, string propertyName)
     {

@@ -2164,11 +2164,13 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "edit.claim <status|claim|release> [path ...] [--owner name] [--reason text] [--ttl-minutes n] [--force true] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "edit.claim <status|list|claim|release> [path ...] [--owner name] [--reason text] [--ttl-minutes n] [--force true] [--option value ...]"));
                     return false;
                 }
 
-                input["operation"] = positionalArgs[0];
+                input["operation"] = string.Equals(positionalArgs[0], "list", StringComparison.OrdinalIgnoreCase)
+                    ? "status"
+                    : positionalArgs[0];
                 if (positionalArgs.Length > 1)
                 {
                     string[] claimArgs = positionalArgs
@@ -3663,14 +3665,14 @@ Workflow:
         {
             return new
             {
-                direct = "edit.claim <status|claim|release> [path ...] [--owner name] [--reason text] [--ttl-minutes n] [--force true]",
+                direct = "edit.claim <status|list|claim|release> [path ...] [--owner name] [--reason text] [--ttl-minutes n] [--force true]",
                 run = "run edit.claim --input '{\"operation\":\"claim\",\"paths\":[\"src/MyFile.cs\"],\"owner\":\"agent-a\",\"reason\":\"implement focused change\",\"ttl_minutes\":90}'",
                 required_properties = new[] { "operation" },
                 optional_properties = new[] { "paths", "owner", "reason", "claim_id", "repo_root", "ttl_minutes", "force" },
                 notes = new[]
                 {
                     "Use before C# edits when multiple agents/subagents may touch the same repo.",
-                    "claim creates .roslynskills/edit-claims.json; status lists active non-expired claims; release removes owned claims by path or claim_id.",
+                    "claim creates .roslynskills/edit-claims.json; status/list shows active non-expired claims; release removes owned claims by path or claim_id.",
                     "Claims are advisory but machine-readable. Treat conflicts as stop-and-coordinate unless force=true is explicitly authorized.",
                     "Pair with workspace.preload for hot semantic reads, then use edit.transaction/session/apply_and_commit for the claimed files.",
                 },
