@@ -936,6 +936,57 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public async Task ReplaceInMemberCommand_BiasesTruncatedPreviewTowardChange()
+    {
+        string commonPrefix = string.Join("\n", Enumerable.Range(1, 12).Select(i => $"        Assert.True(flag{i});"));
+        string oldText = commonPrefix + "\n        Assert.Equal(\"old\", value);";
+        string newText = commonPrefix + "\n        Assert.Equal(\"new\", value);\n        Assert.Equal(\"inserted\", extra);";
+        string filePath = WriteTempFile(
+            $$"""
+            public class Demo
+            {
+                public void Target()
+                {
+            {{oldText}}
+                }
+            }
+            """);
+
+        try
+        {
+            ReplaceInMemberCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name = "Target",
+                old_text = oldText,
+                new_text = newText,
+                preview_chars = 96,
+                apply = false,
+                include_diagnostics = false,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement firstMatch = doc.RootElement.GetProperty("matches")[0];
+            string oldPreview = firstMatch.GetProperty("text_preview").GetString()!;
+            string newPreview = firstMatch.GetProperty("new_text_preview").GetString()!;
+            Assert.StartsWith("...", oldPreview);
+            Assert.StartsWith("...", newPreview);
+            Assert.Contains("old", oldPreview);
+            Assert.Contains("new", newPreview);
+            Assert.Contains("inserted", newPreview);
+            Assert.True(newPreview.Length <= 96);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task ReplaceInMemberCommand_ReportsAmbiguousMemberName()
     {
         string filePath = WriteTempFile(

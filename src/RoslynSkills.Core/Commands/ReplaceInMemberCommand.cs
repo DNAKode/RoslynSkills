@@ -404,28 +404,78 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         while ((index = targetText.IndexOf(oldText, index, StringComparison.Ordinal)) >= 0)
         {
             LinePosition position = sourceText.Lines.GetLinePosition(targetStart + index);
+            (string oldPreview, string newPreview) = BuildTextPreviews(oldText, newText, previewChars);
             matches.Add(new MatchLocation(
                 line: position.Line + 1,
                 column: position.Character + 1,
                 target_offset: index,
                 length: oldText.Length,
-                text_preview: BuildTextPreview(oldText, previewChars),
-                new_text_preview: BuildTextPreview(newText, previewChars)));
+                text_preview: oldPreview,
+                new_text_preview: newPreview));
             index += oldText.Length;
         }
 
         return matches.ToArray();
     }
 
-    private static string BuildTextPreview(string text, int maxLength)
+    private static (string oldPreview, string newPreview) BuildTextPreviews(string oldText, string newText, int maxLength)
     {
-        string singleLine = text
+        string oldSingleLine = BuildSingleLinePreviewText(oldText);
+        string newSingleLine = BuildSingleLinePreviewText(newText);
+        int firstDifference = FindFirstDifference(oldSingleLine, newSingleLine);
+        if (firstDifference < 0 ||
+            (oldSingleLine.Length <= maxLength && newSingleLine.Length <= maxLength) ||
+            firstDifference < Math.Max(8, maxLength / 2))
+        {
+            return (BuildTextPreview(oldSingleLine, maxLength), BuildTextPreview(newSingleLine, maxLength));
+        }
+
+        return (BuildTextPreviewWindow(oldSingleLine, maxLength, firstDifference), BuildTextPreviewWindow(newSingleLine, maxLength, firstDifference));
+    }
+
+    private static string BuildSingleLinePreviewText(string text)
+    {
+        return text
             .Replace("\r\n", "\\n", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal)
             .Replace("\r", "\\n", StringComparison.Ordinal);
+    }
+
+    private static string BuildTextPreview(string singleLine, int maxLength)
+    {
         return singleLine.Length <= maxLength
             ? singleLine
             : singleLine[..(maxLength - 3)] + "...";
+    }
+
+    private static string BuildTextPreviewWindow(string singleLine, int maxLength, int focusIndex)
+    {
+        if (singleLine.Length <= maxLength)
+        {
+            return singleLine;
+        }
+
+        int contentLength = maxLength - 6;
+        int half = Math.Max(1, contentLength / 2);
+        int start = Math.Clamp(focusIndex - half, 0, Math.Max(0, singleLine.Length - contentLength));
+        string window = singleLine.Substring(start, Math.Min(contentLength, singleLine.Length - start));
+        string prefix = start > 0 ? "..." : string.Empty;
+        string suffix = start + window.Length < singleLine.Length ? "..." : string.Empty;
+        return prefix + window + suffix;
+    }
+
+    private static int FindFirstDifference(string left, string right)
+    {
+        int length = Math.Min(left.Length, right.Length);
+        for (int i = 0; i < length; i++)
+        {
+            if (left[i] != right[i])
+            {
+                return i;
+            }
+        }
+
+        return left.Length == right.Length ? -1 : length;
     }
 
     private static string NormalizeLineEndingsForTarget(string value, string targetText)
