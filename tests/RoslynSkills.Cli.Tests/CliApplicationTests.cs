@@ -51,6 +51,7 @@ public sealed class CliApplicationTests
         Assert.Contains("edit.apply_code_fix", output);
         Assert.Contains("edit.create_file", output);
         Assert.Contains("edit.transaction", output);
+        Assert.Contains("edit.claim", output);
         Assert.Contains("repair.propose_from_diagnostics", output);
         Assert.Contains("repair.apply_plan", output);
         Assert.Contains("session.open", output);
@@ -62,8 +63,108 @@ public sealed class CliApplicationTests
         Assert.Contains("session.diff", output);
         Assert.Contains("session.commit", output);
         Assert.Contains("session.close", output);
+        Assert.Contains("daemon.start", output);
+        Assert.Contains("daemon.stop", output);
+        Assert.Contains("daemon.restart", output);
         Assert.Contains("pit_of_success", output);
         Assert.Contains("quickstart", output);
+    }
+
+    [Fact]
+    public async Task DescribeCommand_MemberSource_ReturnsLineColumnUsage()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "ctx.member_source" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("ctx.member_source <file-path> <line> <column>", output);
+        Assert.Contains("member_name is not accepted", output);
+        Assert.Contains("workspace_cache_mode", output);
+    }
+
+    [Fact]
+    public async Task EditClaim_ClaimAndStatus_UsesRepoLocalStore()
+    {
+        string repoRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-edit-claim-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoRoot);
+        Directory.CreateDirectory(Path.Combine(repoRoot, ".git"));
+
+        try
+        {
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter claimOut = new();
+            StringWriter claimErr = new();
+
+            int claimExit = await app.RunAsync(
+                new[]
+                {
+                    "edit.claim",
+                    "claim",
+                    "src/Demo.cs",
+                    "--repo-root",
+                    repoRoot,
+                    "--owner",
+                    "agent-a",
+                    "--reason",
+                    "test claim",
+                    "--ttl-minutes",
+                    "30",
+                },
+                claimOut,
+                claimErr,
+                CancellationToken.None);
+
+            string claimOutput = claimOut.ToString();
+            Assert.Equal(0, claimExit);
+            Assert.Contains("\"ok\": true", claimOutput);
+            Assert.Contains("src/Demo.cs", claimOutput);
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".roslynskills", "edit-claims.json")));
+
+            StringWriter statusOut = new();
+            StringWriter statusErr = new();
+            int statusExit = await app.RunAsync(
+                new[] { "edit.claim", "status", "--repo-root", repoRoot },
+                statusOut,
+                statusErr,
+                CancellationToken.None);
+
+            string statusOutput = statusOut.ToString();
+            Assert.Equal(0, statusExit);
+            Assert.Contains("\"active_count\": 1", statusOutput);
+            Assert.Contains("agent-a", statusOutput);
+        }
+        finally
+        {
+            Directory.Delete(repoRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DescribeCommand_DaemonStart_ReturnsLifecycleUsage()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "daemon.start" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"Id\": \"daemon.start\"", output);
+        Assert.Contains("--host-path", output);
+        Assert.Contains("Normally no --host-path is needed", output);
     }
 
     [Fact]

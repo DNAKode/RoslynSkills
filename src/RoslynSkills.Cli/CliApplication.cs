@@ -108,7 +108,7 @@ public sealed class CliApplication
             return 0;
         }
 
-        IReadOnlyList<CommandDescriptor> allCommands = _registry.ListCommands();
+        IReadOnlyList<CommandDescriptor> allCommands = ListDiscoverableCommands();
         IReadOnlyList<CommandDescriptor> commands = stableOnly
             ? allCommands.Where(c => string.Equals(c.Maturity, CommandMaturity.Stable, StringComparison.OrdinalIgnoreCase)).ToArray()
             : allCommands;
@@ -200,11 +200,30 @@ public sealed class CliApplication
         string commandId = args[0];
         if (!_registry.TryGet(commandId, out IAgentCommand? command) || command is null)
         {
-            await WriteEnvelopeAsync(stdout, ErrorEnvelope(
-                commandId: "cli.describe_command",
-                code: "command_not_found",
-                message: $"Command '{commandId}' was not found.")).ConfigureAwait(false);
-            return 1;
+            CommandDescriptor? cliDescriptor = GetCliOnlyCommandDescriptor(commandId);
+            if (cliDescriptor is null)
+            {
+                await WriteEnvelopeAsync(stdout, ErrorEnvelope(
+                    commandId: "cli.describe_command",
+                    code: "command_not_found",
+                    message: $"Command '{commandId}' was not found.")).ConfigureAwait(false);
+                return 1;
+            }
+
+            await WriteEnvelopeAsync(
+                stdout,
+                new CommandEnvelope(
+                    Ok: true,
+                    CommandId: "cli.describe_command",
+                    Version: EnvelopeVersion,
+                    Data: new
+                    {
+                        command = cliDescriptor,
+                        usage = BuildCommandUsageHints(commandId),
+                    },
+                    Errors: Array.Empty<CommandError>(),
+                    TraceId: null)).ConfigureAwait(false);
+            return 0;
         }
 
         await WriteEnvelopeAsync(
@@ -338,6 +357,39 @@ Workflow:
 
         return 0;
     }
+
+    private IReadOnlyList<CommandDescriptor> ListDiscoverableCommands()
+        => _registry.ListCommands()
+            .Concat(CliOnlyCommandDescriptors())
+            .OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static IReadOnlyList<CommandDescriptor> CliOnlyCommandDescriptors()
+        => new[]
+        {
+            new CommandDescriptor(
+                Id: "daemon.start",
+                Summary: "Start or reuse the process-hot Roslyn workspace host daemon.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: true),
+            new CommandDescriptor(
+                Id: "daemon.stop",
+                Summary: "Stop the process-hot Roslyn workspace host daemon.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: true),
+            new CommandDescriptor(
+                Id: "daemon.restart",
+                Summary: "Restart the process-hot Roslyn workspace host daemon.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: true),
+        };
+
+    private static CommandDescriptor? GetCliOnlyCommandDescriptor(string commandId)
+        => CliOnlyCommandDescriptors()
+            .FirstOrDefault(c => string.Equals(c.Id, commandId, StringComparison.OrdinalIgnoreCase));
 
     private async Task<int> HandleLlmstxtAsync(string[] args, TextWriter stdout)
     {
@@ -645,6 +697,9 @@ Workflow:
 
     private static bool IsDaemonCapableCommand(string commandId)
         => commandId is
+            "workspace.status" or
+            "workspace.refresh" or
+            "workspace.close" or
             "nav.find_symbol" or
             "nav.find_symbol_batch" or
             "nav.find_references" or
@@ -1295,6 +1350,7 @@ Workflow:
                 }
 
                 method = WorkspaceHostProtocol.Method.WorkspacePreload;
+                workspaceAlias ??= "default";
                 input["workspace_path"] = NormalizeCliPathValue(positional[0]);
                 if (!TryGetBoolOption(options, "--require-solution", defaultValue: true, out bool preloadRequireSolution, out error, verb))
                 {
@@ -1316,6 +1372,7 @@ Workflow:
                     return false;
                 }
 
+                AddWorkspaceTargetToInput(input, workspaceAlias, workspaceHandle);
                 break;
 
             case "workspace.refresh":
@@ -1325,6 +1382,7 @@ Workflow:
                     return false;
                 }
 
+                AddWorkspaceTargetToInput(input, workspaceAlias, workspaceHandle);
                 if (options.TryGetValue("--mode", out string? refreshMode))
                 {
                     input["mode"] = refreshMode;
@@ -1339,6 +1397,7 @@ Workflow:
                     return false;
                 }
 
+                AddWorkspaceTargetToInput(input, workspaceAlias, workspaceHandle);
                 break;
 
             case "workspace.list":
@@ -1365,6 +1424,22 @@ Workflow:
             RefreshPolicy: options.TryGetValue("--refresh-policy", out string? refreshPolicy) ? refreshPolicy : null,
             Input: inputElement);
         return true;
+    }
+
+    private static void AddWorkspaceTargetToInput(
+        Dictionary<string, object?> input,
+        string? workspaceAlias,
+        string? workspaceHandle)
+    {
+        if (!string.IsNullOrWhiteSpace(workspaceHandle))
+        {
+            input["workspace_handle"] = workspaceHandle;
+        }
+
+        if (!string.IsNullOrWhiteSpace(workspaceAlias))
+        {
+            input["workspace_alias"] = workspaceAlias;
+        }
     }
 
     private static bool IsSupportedWorkspaceDaemonOption(string verb, string option)
@@ -1626,6 +1701,11 @@ Workflow:
         {
             TryPromoteOptionToPositional(options, "pattern", ref positionalArgs, 0);
             TryPromoteOptionToPositional(options, "root", ref positionalArgs, 1);
+        }
+
+        if (string.Equals(commandId, "edit.claim", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "operation", ref positionalArgs, 0);
         }
 
         Dictionary<string, object?> input = new(StringComparer.OrdinalIgnoreCase);
@@ -1948,6 +2028,27 @@ Workflow:
                 input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
+            case "edit.claim":
+                if (positionalArgs.Length < 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "edit.claim <status|claim|release> [path ...] [--owner name] [--reason text] [--ttl-minutes n] [--force true] [--option value ...]"));
+                    return false;
+                }
+
+                input["operation"] = positionalArgs[0];
+                if (positionalArgs.Length > 1)
+                {
+                    input["paths"] = positionalArgs
+                        .Skip(1)
+                        .Where(path => !string.IsNullOrWhiteSpace(path))
+                        .Select(NormalizeCliPathValue)
+                        .ToArray();
+                }
+                break;
+
             case "session.open":
                 if (positionalArgs.Length < 1 ||
                     positionalArgs.Length > 2 ||
@@ -2078,6 +2179,7 @@ Workflow:
             "query.batch" => true,
             "edit.rename_symbol" => true,
             "edit.create_file" => true,
+            "edit.claim" => true,
             "session.open" => true,
             "session.get_diagnostics" => true,
             "session.status" => true,
@@ -3259,6 +3361,24 @@ Workflow:
             };
         }
 
+        if (string.Equals(commandId, "ctx.member_source", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...]",
+                run = "run ctx.member_source --input '{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":17,\"mode\":\"member\",\"max_chars\":12000,\"workspace_handle\":\"ws_...\"}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "mode", "brief", "include_source_text", "include_line_numbers", "include_trivia", "context_lines_before", "context_lines_after", "max_chars", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Use line/column from ctx.file_outline or nav.find_symbol; member_name is not accepted.",
+                    "mode=member returns the whole declaration; mode=body returns only the body when available.",
+                    "After workspace.preload, omit workspace_handle only if you used the default alias; otherwise pass the returned handle explicitly.",
+                    "Check query.workspace_context.workspace_cache_mode. process_hot means the daemon workspace was reused; process_balanced means a fresh CLI workspace was loaded.",
+                },
+            };
+        }
+
         if (string.Equals(commandId, "query.batch", StringComparison.OrdinalIgnoreCase))
         {
             return new
@@ -3273,6 +3393,24 @@ Workflow:
                     "Each query item must provide command_id and input.",
                     "Top-level workspace_handle is applied to query inputs that do not specify their own handle.",
                     "For shorthand, pass --queries @file.json or positional file path containing a JSON array.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "edit.claim", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "edit.claim <status|claim|release> [path ...] [--owner name] [--reason text] [--ttl-minutes n] [--force true]",
+                run = "run edit.claim --input '{\"operation\":\"claim\",\"paths\":[\"src/MyFile.cs\"],\"owner\":\"agent-a\",\"reason\":\"implement focused change\",\"ttl_minutes\":90}'",
+                required_properties = new[] { "operation" },
+                optional_properties = new[] { "paths", "owner", "reason", "claim_id", "repo_root", "ttl_minutes", "force" },
+                notes = new[]
+                {
+                    "Use before C# edits when multiple agents/subagents may touch the same repo.",
+                    "claim creates .roslynskills/edit-claims.json; status lists active non-expired claims; release removes owned claims by path or claim_id.",
+                    "Claims are advisory but machine-readable. Treat conflicts as stop-and-coordinate unless force=true is explicitly authorized.",
+                    "Pair with workspace.preload for hot semantic reads, then use edit.transaction/session/apply_and_commit for the claimed files.",
                 },
             };
         }
@@ -3301,16 +3439,43 @@ Workflow:
         {
             return new
             {
-                direct = "workspace.preload <solution-or-project-path> [--require-solution true] [--option value ...]",
+                direct = "workspace.preload <solution-or-project-path> [--alias default] [--require-solution true] [--option value ...]",
                 run = "run workspace.preload --input '{\"workspace_path\":\"MySolution.slnx\",\"require_solution\":true,\"mode\":\"balanced\"}'",
                 required_properties = new[] { "workspace_path" },
-                optional_properties = new[] { "mode", "include_generated", "require_solution", "max_files" },
+                optional_properties = new[] { "mode", "include_generated", "require_solution", "max_files", "alias" },
                 notes = new[]
                 {
                     "Prefer .sln/.slnx for hot workspace hosts.",
                     "Set require_solution=true in benchmark/promotion runs to fail closed if a loose project is resolved.",
                     "Response includes workspace_handle for repeated semantic commands.",
+                    "Direct workspace.preload now persists alias=default unless --alias is provided; later daemon-capable commands can auto-route to that hot workspace.",
                 },
+            };
+        }
+
+        if (string.Equals(commandId, "daemon.start", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "daemon.restart", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = $"{commandId} [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]",
+                required_properties = Array.Empty<string>(),
+                optional_properties = new[] { "repo_root", "host_path" },
+                notes = new[]
+                {
+                    "Normally no --host-path is needed when roscli is installed from the packaged tool.",
+                    "Use --host-path only when testing a locally built WorkspaceHost assembly.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "daemon.stop", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "daemon.stop [--repo-root <path>]",
+                required_properties = Array.Empty<string>(),
+                optional_properties = new[] { "repo_root" },
             };
         }
 
@@ -3370,7 +3535,7 @@ Workflow:
 
     private string BuildLlmstxt(bool full)
     {
-        IReadOnlyList<CommandDescriptor> allCommands = _registry.ListCommands()
+        IReadOnlyList<CommandDescriptor> allCommands = ListDiscoverableCommands()
             .OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         IReadOnlyList<CommandDescriptor> visibleCommands = full

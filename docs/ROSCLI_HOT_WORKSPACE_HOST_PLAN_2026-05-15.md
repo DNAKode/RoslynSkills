@@ -50,6 +50,17 @@ roscli nav.find_symbol src/App/Foo.cs Foo --workspace-path MySolution.slnx
 roscli --no-daemon nav.find_symbol src/App/Foo.cs Foo
 ```
 
+## Live Trial Notes
+
+2026-05-16 FrankenTui.NET supervised trial:
+
+- Release/global-tool parity is part of the hot-server surface. A repo-local build that works is insufficient if the machine-wide `roscli` misses host binaries or daemon pseudo-commands.
+- The effective startup path is now `roscli daemon.start`, `roscli workspace.preload <solution> --require-solution true`, then ordinary semantic commands without a handle. `workspace.preload` should persist alias `default` unless the caller supplies another alias.
+- `ctx.member_source` must advertise line/column usage prominently. Agents attempted non-existent member-name forms when guidance was vague.
+- Successful steady-state context calls should be observable through `query.workspace_context.workspace_cache_mode = process_hot` and `workspace_cache_hit = true`; the trial reduced repeated `ctx.member_source` calls from multi-second cold loads to sub-second hot calls.
+- Multi-agent work needs coordination before mutation. `edit.claim` now provides repo-local file/member claims with TTL and conflict reporting. This does not replace semantic edit commands; it prevents overlapping agents from editing the same region blindly.
+- Remaining adoption gap: agents still prefer text patching for non-trivial body edits after Roslyn navigation. Next ergonomics work should make `edit.transaction`/`session.apply_and_commit` as easy to invoke as `ctx.member_source`, ideally with claim-aware examples and low-friction span/member replacement recipes.
+
 ## Architecture
 
 Add a long-running local host process:

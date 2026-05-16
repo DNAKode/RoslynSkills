@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\RoslynSkills.Contracts\RoslynSkills.Contracts.csproj" />
     <ProjectReference Include="..\RoslynSkills.Core\RoslynSkills.Core.csproj" />
+    <ProjectReference Include="..\RoslynSkills.WorkspaceHost\RoslynSkills.WorkspaceHost.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

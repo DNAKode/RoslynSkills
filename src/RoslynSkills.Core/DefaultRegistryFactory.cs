@@ -45,6 +45,7 @@ public static class DefaultRegistryFactory
             new ApplyCodeFixCommand(),
             new CreateFileCommand(),
             new EditTransactionCommand(),
+            new EditClaimCommand(),
             new ProposeFromDiagnosticsCommand(),
             new ApplyRepairPlanCommand(),
             new WorkspacePreloadCommand(),
