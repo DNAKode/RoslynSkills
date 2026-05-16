@@ -633,3 +633,15 @@ The same run also confirmed that prompt guidance alone is insufficient to preven
 - File results include one diagnostics pass and `hot_workspace_refresh` per changed file.
 
 Use this command when an agent would otherwise chain multiple `edit.replace_text` / `edit.insert_text` calls in one shell block. Keep single exact edits on the simpler commands.
+
+## 2026-05-16 Follow-Up: Span-Based Batch Edits From Member Context
+
+The first `.28` FrankenTui.NET supervised batch run improved failure containment: the agent used `edit.batch_exact`, the edit failed with `old_text_not_found`, and atomic mode wrote no partial changes. The remaining friction was that the agent still copied a whole member body from `ctx.member_source` into `old_text`; terminal wrapping/escaping made the copied text fragile.
+
+The next adjustment is to connect context and editing by span rather than copied text:
+
+- `ctx.member_source` now emits `edit_target` with absolute `span_start`, `span_length`, `span_end`, line/column bounds, and a ready-shaped `replace_span_operation`.
+- `edit.batch_exact` now supports `kind=replace_span` with `span_start` plus `span_length` or `span_end`, `new_text`, and optional `expected_text`.
+- Agents should prefer `replace_span` for whole-member or large-target replacement after claiming the file/member, and use `expected_text` when they want a lightweight stale-source guard.
+
+This keeps multi-agent safety in the claim layer, preserves atomic multi-file/multi-operation behavior in `edit.batch_exact`, and removes the need to paste large escaped source strings through the shell.

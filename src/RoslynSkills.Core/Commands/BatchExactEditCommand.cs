@@ -9,7 +9,7 @@ public sealed class BatchExactEditCommand : IAgentCommand
 
     public CommandDescriptor Descriptor { get; } = new(
         Id: "edit.batch_exact",
-        Summary: "Apply multiple exact replace/insert text edits with per-operation reporting and atomic apply by default.",
+        Summary: "Apply multiple exact text/span edits with per-operation reporting and atomic apply by default.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: true);
@@ -196,9 +196,9 @@ public sealed class BatchExactEditCommand : IAgentCommand
         }
 
         string kind = GetOperationKind(operation);
-        if (kind is not ("replace_text" or "insert_text"))
+        if (kind is not ("replace_text" or "insert_text" or "replace_span"))
         {
-            errors.Add(new CommandError("invalid_operation", $"Operation {index} kind must be 'replace_text' or 'insert_text'."));
+            errors.Add(new CommandError("invalid_operation", $"Operation {index} kind must be 'replace_text', 'insert_text', or 'replace_span'."));
             return;
         }
 
@@ -207,6 +207,35 @@ public sealed class BatchExactEditCommand : IAgentCommand
             ValidateRequiredText(operation, "old_text", index, errors, allowEmpty: false);
             ValidateRequiredText(operation, "new_text", index, errors, allowEmpty: true);
             InputParsing.ValidateOptionalBool(operation, "replace_all", errors);
+            return;
+        }
+
+        if (kind == "replace_span")
+        {
+            ValidateRequiredInt(operation, "span_start", index, errors, minValue: 0);
+            if (!operation.TryGetProperty("span_length", out JsonElement spanLength) ||
+                spanLength.ValueKind != JsonValueKind.Number ||
+                !spanLength.TryGetInt32(out int parsedLength) ||
+                parsedLength < 0)
+            {
+                if (!operation.TryGetProperty("span_end", out JsonElement spanEnd) ||
+                    spanEnd.ValueKind != JsonValueKind.Number ||
+                    !spanEnd.TryGetInt32(out int parsedEnd) ||
+                    parsedEnd < 0)
+                {
+                    errors.Add(new CommandError("invalid_operation", $"Operation {index} requires integer property 'span_length' >= 0 or 'span_end' >= 0."));
+                }
+                else if (operation.TryGetProperty("span_start", out JsonElement spanStartForEnd) &&
+                    spanStartForEnd.ValueKind == JsonValueKind.Number &&
+                    spanStartForEnd.TryGetInt32(out int parsedStart) &&
+                    parsedEnd < parsedStart)
+                {
+                    errors.Add(new CommandError("invalid_operation", $"Operation {index} property 'span_end' must be >= span_start."));
+                }
+            }
+
+            ValidateRequiredText(operation, "new_text", index, errors, allowEmpty: true);
+            ValidateOptionalText(operation, "expected_text", index, errors);
             return;
         }
 
@@ -236,9 +265,12 @@ public sealed class BatchExactEditCommand : IAgentCommand
         }
 
         string kind = GetOperationKind(operation);
-        return kind == "insert_text"
-            ? ApplyInsertOperation(operation, index, file)
-            : ApplyReplaceOperation(operation, index, file);
+        return kind switch
+        {
+            "insert_text" => ApplyInsertOperation(operation, index, file),
+            "replace_span" => ApplyReplaceSpanOperation(operation, index, file),
+            _ => ApplyReplaceOperation(operation, index, file),
+        };
     }
 
     private static OperationResult ApplyReplaceOperation(JsonElement operation, int index, FileState file)
@@ -294,6 +326,43 @@ public sealed class BatchExactEditCommand : IAgentCommand
         return OperationResult.Succeeded(data);
     }
 
+    private static OperationResult ApplyReplaceSpanOperation(JsonElement operation, int index, FileState file)
+    {
+        int spanStart = operation.GetProperty("span_start").GetInt32();
+        int spanLength = GetSpanLength(operation, spanStart);
+        string newText = operation.GetProperty("new_text").GetString() ?? string.Empty;
+        if (spanLength < 0 ||
+            spanStart > file.UpdatedContent.Length ||
+            spanLength > file.UpdatedContent.Length - spanStart)
+        {
+            CommandError error = new("span_out_of_range", $"Operation {index} span [{spanStart}, {spanStart + spanLength}) is outside the current file content.");
+            return OperationResult.Failed(BuildSpanOperationData(index, file.FilePath, spanStart, spanLength, false, error), error);
+        }
+
+        string currentText = file.UpdatedContent.Substring(spanStart, spanLength);
+        string? expectedText = TryGetOptionalString(operation, "expected_text");
+        if (expectedText is not null &&
+            !string.Equals(currentText, expectedText, StringComparison.Ordinal))
+        {
+            CommandError error = new("expected_text_mismatch", $"Operation {index} expected_text did not match the span content.");
+            return OperationResult.Failed(BuildSpanOperationData(index, file.FilePath, spanStart, spanLength, false, error), error);
+        }
+
+        string before = file.UpdatedContent;
+        file.UpdatedContent = string.Concat(
+            file.UpdatedContent.AsSpan(0, spanStart),
+            newText,
+            file.UpdatedContent.AsSpan(spanStart + spanLength));
+        object data = BuildSpanOperationData(
+            index,
+            file.FilePath,
+            spanStart,
+            spanLength,
+            !string.Equals(before, file.UpdatedContent, StringComparison.Ordinal),
+            null);
+        return OperationResult.Succeeded(data);
+    }
+
     private static object BuildOperationData(
         int index,
         string kind,
@@ -314,6 +383,40 @@ public sealed class BatchExactEditCommand : IAgentCommand
             error,
         };
 
+    private static object BuildSpanOperationData(
+        int index,
+        string filePath,
+        int spanStart,
+        int spanLength,
+        bool changed,
+        CommandError? error)
+        => new
+        {
+            index,
+            kind = "replace_span",
+            file_path = filePath,
+            span_start = spanStart,
+            span_length = spanLength,
+            span_end = spanStart + spanLength,
+            ok = error is null,
+            match_count = (int?)null,
+            changed,
+            error,
+        };
+
+    private static int GetSpanLength(JsonElement operation, int spanStart)
+    {
+        if (operation.TryGetProperty("span_length", out JsonElement spanLength) &&
+            spanLength.ValueKind == JsonValueKind.Number &&
+            spanLength.TryGetInt32(out int parsedLength))
+        {
+            return parsedLength;
+        }
+
+        int spanEnd = operation.GetProperty("span_end").GetInt32();
+        return spanEnd - spanStart;
+    }
+
     private static void ValidateRequiredText(
         JsonElement input,
         string propertyName,
@@ -331,6 +434,35 @@ public sealed class BatchExactEditCommand : IAgentCommand
         if (!allowEmpty && string.IsNullOrEmpty(property.GetString()))
         {
             errors.Add(new CommandError("invalid_operation", $"Operation {index} property '{propertyName}' must not be empty."));
+        }
+    }
+
+    private static void ValidateOptionalText(
+        JsonElement input,
+        string propertyName,
+        int index,
+        List<CommandError> errors)
+    {
+        if (input.TryGetProperty(propertyName, out JsonElement property) &&
+            property.ValueKind != JsonValueKind.String)
+        {
+            errors.Add(new CommandError("invalid_operation", $"Operation {index} property '{propertyName}' must be a string when provided."));
+        }
+    }
+
+    private static void ValidateRequiredInt(
+        JsonElement input,
+        string propertyName,
+        int index,
+        List<CommandError> errors,
+        int minValue)
+    {
+        if (!input.TryGetProperty(propertyName, out JsonElement property) ||
+            property.ValueKind != JsonValueKind.Number ||
+            !property.TryGetInt32(out int value) ||
+            value < minValue)
+        {
+            errors.Add(new CommandError("invalid_operation", $"Operation {index} property '{propertyName}' is required and must be an integer >= {minValue}."));
         }
     }
 

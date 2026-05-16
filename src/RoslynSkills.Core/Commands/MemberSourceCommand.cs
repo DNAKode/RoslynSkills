@@ -163,7 +163,9 @@ public sealed class MemberSourceCommand : IAgentCommand
         LinePositionSpan targetLineSpan = analysis.SourceText.Lines.GetLinePositionSpan(targetSpan);
 
         int targetStartLine = targetLineSpan.Start.Line + 1;
+        int targetStartColumn = targetLineSpan.Start.Character + 1;
         int targetEndLine = Math.Max(targetStartLine, targetLineSpan.End.Line + 1);
+        int targetEndColumn = targetLineSpan.End.Character + 1;
         int snippetStartLine = Math.Max(1, targetStartLine - contextBefore);
         int snippetEndLine = Math.Min(analysis.SourceText.Lines.Count, targetEndLine + contextAfter);
 
@@ -213,6 +215,26 @@ public sealed class MemberSourceCommand : IAgentCommand
                 source_end_line = snippetEndLine,
                 source_line_count = Math.Max(0, snippetEndLine - snippetStartLine + 1),
             },
+            ["edit_target"] = new
+            {
+                file_path = analysis.FilePath,
+                mode = modeRaw,
+                span_start = targetSpan.Start,
+                span_length = targetSpan.Length,
+                span_end = targetSpan.End,
+                start_line = targetStartLine,
+                start_column = targetStartColumn,
+                end_line = targetEndLine,
+                end_column = targetEndColumn,
+                replace_span_operation = new
+                {
+                    kind = "replace_span",
+                    file_path = analysis.FilePath,
+                    span_start = targetSpan.Start,
+                    span_length = targetSpan.Length,
+                    new_text = "<replacement text>",
+                },
+            },
             ["source"] = includeSourceText
                 ? new
                 {
@@ -249,15 +271,15 @@ public sealed class MemberSourceCommand : IAgentCommand
             {
                 new
                 {
-                    command = "edit.replace_text",
-                    when = "Use for exact snippet replacement inside this member after copying the exact old_text from source.text.",
-                    next_step = "describe-command edit.replace_text",
+                    command = "edit.batch_exact",
+                    when = "Use kind=replace_span with edit_target.span_start/span_length when replacing this whole target or several claimed targets atomically.",
+                    next_step = "describe-command edit.batch_exact",
                 },
                 new
                 {
-                    command = "edit.insert_text",
-                    when = "Use for exact-anchor insertion before/after a unique nearby line from source.text.",
-                    next_step = "describe-command edit.insert_text",
+                    command = "edit.replace_text",
+                    when = "Use for small exact snippet replacement inside this member after copying the exact old_text from source.text.",
+                    next_step = "describe-command edit.replace_text",
                 },
                 new
                 {

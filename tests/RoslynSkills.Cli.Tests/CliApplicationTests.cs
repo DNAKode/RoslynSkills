@@ -804,10 +804,12 @@ public sealed class CliApplicationTests
             Assert.Contains("\"CommandId\": \"ctx.member_source\"", output);
             Assert.Contains("return left", output);
             Assert.Contains("right;", output);
+            Assert.Contains("\"edit_target\"", output);
+            Assert.Contains("\"replace_span_operation\"", output);
             Assert.Contains("\"edit_workflow\"", output);
             Assert.Contains("edit.claim", output);
+            Assert.Contains("edit.batch_exact", output);
             Assert.Contains("edit.replace_text", output);
-            Assert.Contains("edit.insert_text", output);
             Assert.Contains("edit.transaction", output);
         }
         finally
@@ -1569,6 +1571,68 @@ public sealed class CliApplicationTests
             Assert.Contains("operations=2/2, ok=2, failed=0, wrote_files=1", output);
             Assert.Contains("public string Title => BuildTitle();", content);
             Assert.Contains("private static string BuildTitle() => \"Help\";", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task BatchExactEdit_AppliesReplaceSpanWithExpectedTextGuard()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-batch-span-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            string original = """
+                public class Demo
+                {
+                    public string Title => "Help";
+                }
+                """;
+            await File.WriteAllTextAsync(filePath, original);
+
+            int spanStart = original.IndexOf("\"Help\"", StringComparison.Ordinal);
+            string input = JsonSerializer.Serialize(new
+            {
+                file_path = filePath,
+                operations = new object[]
+                {
+                    new
+                    {
+                        kind = "replace_span",
+                        span_start = spanStart,
+                        span_length = "\"Help\"".Length,
+                        expected_text = "\"Help\"",
+                        new_text = "\"Evidence\"",
+                    },
+                },
+                apply = true,
+                atomic = true,
+            });
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+            int exitCode = await app.RunAsync(
+                new[] { "--no-daemon", "run", "edit.batch_exact", "--input", input },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            string content = await File.ReadAllTextAsync(filePath);
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"kind\": \"replace_span\"", output);
+            Assert.Contains("\"span_start\":", output);
+            Assert.Contains("\"succeeded_operations\": 1", output);
+            Assert.Contains("public string Title => \"Evidence\";", content);
         }
         finally
         {

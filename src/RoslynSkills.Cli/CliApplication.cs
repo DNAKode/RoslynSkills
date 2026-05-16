@@ -3262,15 +3262,16 @@ Workflow:
             return new
             {
                 direct = "run edit.batch_exact --input-stdin",
-                run = "run edit.batch_exact --input '{\"file_path\":\"src/MyFile.cs\",\"operations\":[{\"kind\":\"replace_text\",\"old_text\":\"old\",\"new_text\":\"new\"},{\"kind\":\"insert_text\",\"anchor_text\":\"new\",\"insert_text\":\" suffix\",\"position\":\"after\"}],\"atomic\":true,\"apply\":true}'",
+                run = "run edit.batch_exact --input '{\"file_path\":\"src/MyFile.cs\",\"operations\":[{\"kind\":\"replace_span\",\"span_start\":120,\"span_length\":18,\"new_text\":\"replacement\"},{\"kind\":\"insert_text\",\"anchor_text\":\"replacement\",\"insert_text\":\" suffix\",\"position\":\"after\"}],\"atomic\":true,\"apply\":true}'",
                 required_properties = new[] { "operations" },
                 optional_properties = new[] { "file_path", "apply", "atomic", "continue_on_error", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle" },
                 notes = new[]
                 {
-                    "Use after edit.claim when you need multiple exact replace/insert edits and want one per-operation report.",
+                    "Use after edit.claim when you need multiple exact text/span edits and want one per-operation report.",
                     "Defaults: apply=true, atomic=true, continue_on_error=false, include_diagnostics=true.",
                     "Each operation may specify file_path, or use top-level file_path for all operations.",
-                    "Operation kinds: replace_text uses old_text/new_text/replace_all; insert_text uses anchor_text/insert_text/position.",
+                    "Operation kinds: replace_span uses span_start plus span_length or span_end, new_text, and optional expected_text; replace_text uses old_text/new_text/replace_all; insert_text uses anchor_text/insert_text/position.",
+                    "Prefer replace_span with ctx.member_source Data.edit_target spans for large member replacements to avoid copying fragile multiline old_text.",
                     "Atomic apply means any operation failure prevents all file writes; response still reports the failed operation.",
                     "When a preloaded hot workspace tracks changed files, file_results[].hot_workspace_refresh reports incremental updates.",
                     "Prefer this over chaining several edit.replace_text commands in one shell block.",
