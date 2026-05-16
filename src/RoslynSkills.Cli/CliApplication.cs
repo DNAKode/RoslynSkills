@@ -2041,6 +2041,19 @@ Workflow:
                 input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
+            case "edit.insert_text":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "edit.insert_text <file-path> --anchor-text <text> --insert-text <text> [--position after|before] [--apply true] [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                break;
+
             case "edit.claim":
                 if (positionalArgs.Length < 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
                 {
@@ -2193,6 +2206,7 @@ Workflow:
             "edit.rename_symbol" => true,
             "edit.create_file" => true,
             "edit.replace_text" => true,
+            "edit.insert_text" => true,
             "edit.claim" => true,
             "session.open" => true,
             "session.get_diagnostics" => true,
@@ -2924,6 +2938,22 @@ Workflow:
                 : $"{file}, {action}";
         }
 
+        if (string.Equals(commandId, "edit.insert_text", StringComparison.OrdinalIgnoreCase))
+        {
+            string file = TryGetString(element, "file_path", out string filePath)
+                ? Path.GetFileName(filePath)
+                : "<unknown>";
+            string position = TryGetString(element, "position", out string insertPosition)
+                ? insertPosition
+                : "after";
+            int matchCount = TryGetInt(element, "match_count", out int matches) ? matches : -1;
+            bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
+            string action = wrote ? "written" : "dry-run";
+            return matchCount >= 0
+                ? $"{file}, {position}, matches={matchCount}, {action}"
+                : $"{file}, {position}, {action}";
+        }
+
         if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
         {
             int total = TryGetInt(element, "total", out int totalDiagnostics) ? totalDiagnostics : -1;
@@ -3161,6 +3191,25 @@ Workflow:
                     "replace_all=false fails if old_text is ambiguous; make old_text more specific instead of falling back to patching.",
                     "For multiline old_text/new_text, prefer --input-stdin JSON to avoid shell quoting issues.",
                     "This is a structured roscli mutation bridge, not a semantic refactor. Prefer semantic edit commands when available.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "edit.insert_text", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "edit.insert_text <file-path> --anchor-text <exact anchor> --insert-text <text to insert> [--position after|before] [--apply true]",
+                run = "run edit.insert_text --input '{\"file_path\":\"src/MyFile.cs\",\"anchor_text\":\"[\\\"help_visible\\\"] = state.HelpVisible,\",\"insert_text\":\"\\n            [\\\"help_overlay_title\\\"] = BuildHelpTitle(...),\",\"position\":\"after\",\"apply\":true}'",
+                required_properties = new[] { "file_path", "anchor_text", "insert_text" },
+                optional_properties = new[] { "position", "apply", "include_diagnostics", "max_diagnostics" },
+                notes = new[]
+                {
+                    "Use after edit.claim for small insertions when you know an exact nearby anchor line/snippet.",
+                    "Default position=after, apply=true, include_diagnostics=true.",
+                    "Fails if anchor_text is missing or ambiguous; make anchor_text more specific instead of falling back to patching.",
+                    "For multiline insert_text, prefer --input-stdin JSON to avoid shell quoting issues.",
+                    "This command exists because agents often need to add one evidence field or assertion after a known line.",
                 },
             };
         }
@@ -3806,6 +3855,7 @@ Workflow:
                 edit.rename_symbol <file-path> <line> <column> <new-name>
                 edit.create_file <file-path> [--content <text>]
                 edit.replace_text <file-path> --old-text <exact text> --new-text <replacement text>
+                edit.insert_text <file-path> --anchor-text <exact anchor> --insert-text <text> [--position after|before]
                 session.open <file-path> [session-id]
                 session.get_diagnostics <session-id>
                 session.status <session-id>
@@ -3831,6 +3881,7 @@ Workflow:
                 query.batch --queries @batch-queries.json --continue-on-error true
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 edit.replace_text src/MyFile.cs --old-text "Title = \"Help\"" --new-text "Title = BuildHelpTitle(state.HelpOverlayScroll)"
+                edit.insert_text src/MyFile.cs --anchor-text "[\"help_visible\"] = state.HelpVisible," --insert-text "`n            [\"help_overlay_title\"] = BuildHelpTitle(...)," --position after
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - For nav/diag file commands, check response workspace_context.mode.
                 Prefer --workspace-path <.sln|.slnx> for repo-wide or hot-workspace context; use .csproj/.vbproj only when intentionally project-scoped.

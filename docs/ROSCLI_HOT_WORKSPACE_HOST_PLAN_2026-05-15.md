@@ -67,6 +67,12 @@ roscli --no-daemon nav.find_symbol src/App/Foo.cs Foo
 - In the next FrankenTui.NET slice the agent still patched C# for two one-line insertions after known evidence fields. This suggests the next command surface should explicitly support `insert before/after exact anchor`, not only replacement.
 - Track mutation channel separately: the same trajectory can be a strong success for hot semantic context (`process_hot`), claims, diagnostics, and tests, while still failing the Roslyn-backed mutation adoption goal.
 
+2026-05-16 `.24` follow-up:
+
+- Added `edit.insert_text` for exact-anchor insertions before/after a unique snippet, with direct CLI shorthand and immediate diagnostics.
+- This command targets the observed FrankenTui.NET pattern directly: add an evidence field or assertion after a known neighboring line without dropping into patch mode.
+- Next supervised prompt should explicitly prefer `edit.insert_text` for one-line additions and require the agent to state the anchor used.
+
 ## Architecture
 
 Add a long-running local host process:
