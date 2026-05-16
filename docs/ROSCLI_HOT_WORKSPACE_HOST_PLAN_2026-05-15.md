@@ -61,6 +61,12 @@ roscli --no-daemon nav.find_symbol src/App/Foo.cs Foo
 - Multi-agent work needs coordination before mutation. `edit.claim` now provides repo-local file/member claims with TTL and conflict reporting. This does not replace semantic edit commands; it prevents overlapping agents from editing the same region blindly.
 - Remaining adoption gap: agents still prefer text patching for non-trivial body edits after Roslyn navigation. Next ergonomics work should make `edit.transaction`/`session.apply_and_commit` as easy to invoke as `ctx.member_source`, ideally with claim-aware examples and low-friction span/member replacement recipes.
 
+2026-05-16 `.23` follow-up:
+
+- Added `edit.replace_text` as a direct exact-snippet mutation bridge with diagnostics. It works for replacements and gives agents a roscli command that is much closer to patch-editor ergonomics than raw transaction JSON.
+- In the next FrankenTui.NET slice the agent still patched C# for two one-line insertions after known evidence fields. This suggests the next command surface should explicitly support `insert before/after exact anchor`, not only replacement.
+- Track mutation channel separately: the same trajectory can be a strong success for hot semantic context (`process_hot`), claims, diagnostics, and tests, while still failing the Roslyn-backed mutation adoption goal.
+
 ## Architecture
 
 Add a long-running local host process:

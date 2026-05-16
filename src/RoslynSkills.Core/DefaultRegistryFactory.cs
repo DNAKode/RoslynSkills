@@ -44,6 +44,7 @@ public static class DefaultRegistryFactory
             new UpdateUsingsCommand(),
             new ApplyCodeFixCommand(),
             new CreateFileCommand(),
+            new ReplaceTextCommand(),
             new EditTransactionCommand(),
             new EditClaimCommand(),
             new ProposeFromDiagnosticsCommand(),

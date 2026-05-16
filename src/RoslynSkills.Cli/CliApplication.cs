@@ -2028,6 +2028,19 @@ Workflow:
                 input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
+            case "edit.replace_text":
+                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "edit.replace_text <file-path> --old-text <text> --new-text <text> [--apply true] [--replace-all true] [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                break;
+
             case "edit.claim":
                 if (positionalArgs.Length < 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
                 {
@@ -2179,6 +2192,7 @@ Workflow:
             "query.batch" => true,
             "edit.rename_symbol" => true,
             "edit.create_file" => true,
+            "edit.replace_text" => true,
             "edit.claim" => true,
             "session.open" => true,
             "session.get_diagnostics" => true,
@@ -2897,6 +2911,19 @@ Workflow:
             return created ? $"{file}, created, {action}" : $"{file}, updated, {action}";
         }
 
+        if (string.Equals(commandId, "edit.replace_text", StringComparison.OrdinalIgnoreCase))
+        {
+            string file = TryGetString(element, "file_path", out string filePath)
+                ? Path.GetFileName(filePath)
+                : "<unknown>";
+            int matchCount = TryGetInt(element, "match_count", out int matches) ? matches : -1;
+            bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
+            string action = wrote ? "written" : "dry-run";
+            return matchCount >= 0
+                ? $"{file}, matches={matchCount}, {action}"
+                : $"{file}, {action}";
+        }
+
         if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
         {
             int total = TryGetInt(element, "total", out int totalDiagnostics) ? totalDiagnostics : -1;
@@ -3115,6 +3142,25 @@ Workflow:
                 {
                     "Defaults: apply=true, overwrite=false, create_directories=true.",
                     "For multiline content, prefer --input-stdin JSON.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "edit.replace_text", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "edit.replace_text <file-path> --old-text <exact text> --new-text <replacement text> [--apply true] [--replace-all true]",
+                run = "run edit.replace_text --input '{\"file_path\":\"src/MyFile.cs\",\"old_text\":\"Title = \\\"Help\\\"\",\"new_text\":\"Title = BuildHelpTitle(state.HelpOverlayScroll)\",\"apply\":true}'",
+                required_properties = new[] { "file_path", "old_text", "new_text" },
+                optional_properties = new[] { "apply", "replace_all", "include_diagnostics", "max_diagnostics" },
+                notes = new[]
+                {
+                    "Use after edit.claim for small exact snippet changes when edit.rename_symbol or edit.replace_member_body do not fit.",
+                    "Defaults: apply=true, replace_all=false, include_diagnostics=true.",
+                    "replace_all=false fails if old_text is ambiguous; make old_text more specific instead of falling back to patching.",
+                    "For multiline old_text/new_text, prefer --input-stdin JSON to avoid shell quoting issues.",
+                    "This is a structured roscli mutation bridge, not a semantic refactor. Prefer semantic edit commands when available.",
                 },
             };
         }
@@ -3759,6 +3805,7 @@ Workflow:
                 query.batch [queries-json-or-file]
                 edit.rename_symbol <file-path> <line> <column> <new-name>
                 edit.create_file <file-path> [--content <text>]
+                edit.replace_text <file-path> --old-text <exact text> --new-text <replacement text>
                 session.open <file-path> [session-id]
                 session.get_diagnostics <session-id>
                 session.status <session-id>
@@ -3783,6 +3830,7 @@ Workflow:
                 analyze.async_risk_scan src --max-findings 200 --severity-filter warning --severity-filter info
                 query.batch --queries @batch-queries.json --continue-on-error true
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
+                edit.replace_text src/MyFile.cs --old-text "Title = \"Help\"" --new-text "Title = BuildHelpTitle(state.HelpOverlayScroll)"
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - For nav/diag file commands, check response workspace_context.mode.
                 Prefer --workspace-path <.sln|.slnx> for repo-wide or hot-workspace context; use .csproj/.vbproj only when intentionally project-scoped.

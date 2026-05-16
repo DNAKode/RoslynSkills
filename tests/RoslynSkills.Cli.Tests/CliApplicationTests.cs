@@ -50,6 +50,7 @@ public sealed class CliApplicationTests
         Assert.Contains("edit.update_usings", output);
         Assert.Contains("edit.apply_code_fix", output);
         Assert.Contains("edit.create_file", output);
+        Assert.Contains("edit.replace_text", output);
         Assert.Contains("edit.transaction", output);
         Assert.Contains("edit.claim", output);
         Assert.Contains("repair.propose_from_diagnostics", output);
@@ -1235,6 +1236,70 @@ public sealed class CliApplicationTests
                 Directory.Delete(tempDir, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public async Task DirectCommand_ReplaceText_AcceptsExactSnippetShorthand()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(filePath, "public class Demo { string Title => \"Help\"; }");
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.replace_text",
+                    filePath,
+                    "--old-text", "\"Help\"",
+                    "--new-text", "BuildHelpTitle(state.HelpOverlayScroll)",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"edit.replace_text\"", output);
+            Assert.Contains("\"match_count\": 1", output);
+            Assert.Contains("\"wrote_file\": true", output);
+            Assert.Contains("BuildHelpTitle(state.HelpOverlayScroll)", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DescribeCommand_ReplaceText_IncludesMutationBridgeGuidance()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "edit.replace_text" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("edit.replace_text <file-path>", output);
+        Assert.Contains("edit.claim", output);
+        Assert.Contains("old_text", output);
+        Assert.Contains("replace_all", output);
     }
 
     [Fact]
