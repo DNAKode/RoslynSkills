@@ -2609,6 +2609,8 @@ public sealed class CliApplicationTests
         Assert.Contains("version", output);
         Assert.Contains("quickstart", output);
         Assert.Contains("csharp-start", output);
+        Assert.Contains("before any `.cs` git diff", output);
+        Assert.Contains("ctx.changed_files", output);
         Assert.Contains("llmstxt", output);
         Assert.Contains("pit-of-success", output);
     }

@@ -4301,6 +4301,10 @@ Workflow:
             """
             roscli CLI
 
+            C# agent first minute:
+              If you are working in a C#/.NET repo, run `roscli csharp-start` before any `.cs` git diff, rg, Get-Content, sed, cat, or patch-editor read.
+              In an already-dirty repo, the first C# orientation command after csharp-start is `roscli ctx.changed_files`; follow its suggested_next_steps.
+
             Commands:
               version
               list-commands [--compact] [--ids-only] [--stable-only]
