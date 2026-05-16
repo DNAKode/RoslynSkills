@@ -218,7 +218,12 @@ public sealed class SessionAndExplorationCommandTests
 
             Assert.True(result.Ok);
             using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
-            Assert.Equal("ImportantMarker", doc.RootElement.GetProperty("query").GetProperty("focus_text").GetString());
+            JsonElement query = doc.RootElement.GetProperty("query");
+            Assert.Equal("ImportantMarker", query.GetProperty("focus_text").GetString());
+            Assert.False(query.GetProperty("include_edit_target_text").GetBoolean());
+            JsonElement exactSpanText = doc.RootElement.GetProperty("edit_target").GetProperty("exact_span_text");
+            Assert.True(exactSpanText.GetProperty("omitted").GetBoolean());
+            Assert.Contains("source.text", exactSpanText.GetProperty("use_as_replacement_base").GetString());
             JsonElement source = doc.RootElement.GetProperty("source");
             string text = source.GetProperty("text").GetString()!;
             Assert.DoesNotContain("Step1", text);

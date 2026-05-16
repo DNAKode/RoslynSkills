@@ -87,11 +87,12 @@ public sealed class MemberSourceCommand : IAgentCommand
         bool includeTrivia = InputParsing.GetOptionalBool(input, "include_trivia", defaultValue: false);
         bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
         bool includeSourceText = InputParsing.GetOptionalBool(input, "include_source_text", defaultValue: !brief);
-        bool includeEditTargetText = InputParsing.GetOptionalBool(input, "include_edit_target_text", defaultValue: includeSourceText);
+        string? focusText = GetOptionalTrimmedString(input, "focus_text");
+        bool includeEditTargetTextDefault = includeSourceText && string.IsNullOrWhiteSpace(focusText);
+        bool includeEditTargetText = InputParsing.GetOptionalBool(input, "include_edit_target_text", defaultValue: includeEditTargetTextDefault);
         int contextBefore = InputParsing.GetOptionalInt(input, "context_lines_before", defaultValue: 0, minValue: 0, maxValue: 500);
         int contextAfter = InputParsing.GetOptionalInt(input, "context_lines_after", defaultValue: 0, minValue: 0, maxValue: 500);
         int maxChars = InputParsing.GetOptionalInt(input, "max_chars", defaultValue: 8_000, minValue: 200, maxValue: 200_000);
-        string? focusText = GetOptionalTrimmedString(input, "focus_text");
 
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);

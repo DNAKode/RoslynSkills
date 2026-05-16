@@ -3650,7 +3650,7 @@ Workflow:
                     "Use line/column from ctx.file_outline or nav.find_symbol; member_name is not accepted.",
                     "mode=member returns the whole declaration; mode=body returns only the body when available.",
                     "For huge members, pass focus_text with context_lines_before/context_lines_after to return a small window around the first literal match while edit_target still describes the anchored target.",
-                    "When focus_text is only for branch inspection, leave include_edit_target_text=false; if exact_span_text.truncated=true, do not use it for whole-target replace_span.",
+                    "When focus_text is supplied, include_edit_target_text defaults to false. Set it true only for whole-target replacement, and do not use exact_span_text when truncated=true.",
                     "For replace_span edits, use edit_target.exact_span_text.text as the replacement base and follow edit_target.trivia.new_text_first_line_rule to avoid double indentation.",
                     "When present, preserve edit_target.replace_span_operation.expected_text in the batch operation so concurrent edits fail closed instead of overwriting drifted spans.",
                     "If edit_target.trivia.prefix_edit_rule says the preserved line prefix is wrong, rerun with include_trivia=true before replacing indentation or attributes.",
