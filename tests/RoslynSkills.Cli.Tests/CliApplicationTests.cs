@@ -91,6 +91,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("ctx.member_source <file-path> <line> <column>", output);
         Assert.Contains("member_name is not accepted", output);
+        Assert.Contains("focus_text", output);
         Assert.Contains("workspace_cache_mode", output);
     }
 

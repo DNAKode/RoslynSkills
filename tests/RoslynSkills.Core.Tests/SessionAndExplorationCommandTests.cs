@@ -182,6 +182,62 @@ public sealed class SessionAndExplorationCommandTests
     }
 
     [Fact]
+    public async Task MemberSourceCommand_FocusTextReturnsSmallWindowInsideLargeMember()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Demo
+            {
+                public void Run()
+                {
+                    Step1();
+                    Step2();
+                    ImportantMarker();
+                    Step4();
+                    Step5();
+                }
+            }
+            """);
+
+        try
+        {
+            MemberSourceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 3,
+                column = 17,
+                mode = "member",
+                focus_text = "ImportantMarker",
+                context_lines_before = 1,
+                context_lines_after = 1,
+                max_chars = 1000,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            Assert.Equal("ImportantMarker", doc.RootElement.GetProperty("query").GetProperty("focus_text").GetString());
+            JsonElement source = doc.RootElement.GetProperty("source");
+            string text = source.GetProperty("text").GetString()!;
+            Assert.DoesNotContain("Step1", text);
+            Assert.Contains("Step2", text);
+            Assert.Contains("ImportantMarker", text);
+            Assert.Contains("Step4", text);
+            Assert.DoesNotContain("Step5", text);
+
+            JsonElement focus = source.GetProperty("focus");
+            Assert.True(focus.GetProperty("matched").GetBoolean());
+            Assert.Equal(7, focus.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task SessionCommands_OpenSetDiffCommitAndClose()
     {
         string filePath = WriteTempFile(

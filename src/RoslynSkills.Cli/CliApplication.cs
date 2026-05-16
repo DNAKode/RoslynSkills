@@ -3644,11 +3644,12 @@ Workflow:
                 direct = "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...]",
                 run = "run ctx.member_source --input '{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":17,\"mode\":\"member\",\"include_edit_target_text\":true,\"max_chars\":12000,\"workspace_handle\":\"ws_...\"}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "mode", "brief", "include_source_text", "include_edit_target_text", "include_line_numbers", "include_trivia", "context_lines_before", "context_lines_after", "max_chars", "workspace_path", "workspace_handle", "require_workspace" },
+                optional_properties = new[] { "mode", "brief", "include_source_text", "include_edit_target_text", "include_line_numbers", "include_trivia", "focus_text", "context_lines_before", "context_lines_after", "max_chars", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
                     "Use line/column from ctx.file_outline or nav.find_symbol; member_name is not accepted.",
                     "mode=member returns the whole declaration; mode=body returns only the body when available.",
+                    "For huge members, pass focus_text with context_lines_before/context_lines_after to return a small window around the first literal match while edit_target still describes the anchored target.",
                     "For replace_span edits, use edit_target.exact_span_text.text as the replacement base and follow edit_target.trivia.new_text_first_line_rule to avoid double indentation.",
                     "When present, preserve edit_target.replace_span_operation.expected_text in the batch operation so concurrent edits fail closed instead of overwriting drifted spans.",
                     "If edit_target.trivia.prefix_edit_rule says the preserved line prefix is wrong, rerun with include_trivia=true before replacing indentation or attributes.",
@@ -3864,6 +3865,7 @@ Workflow:
         sb.AppendLine("roscli nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 body --brief true");
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 member --include-edit-target-text true --workspace-path MySolution.slnx --require-workspace true");
+        sb.AppendLine("roscli ctx.member_source tests/MyTests.cs 1200 17 member --focus-text TargetCase --context-lines-before 3 --context-lines-after 8 --max-chars 12000");
         sb.AppendLine("roscli run edit.batch_exact --input-stdin  # use kind=replace_span from edit_target.exact_span_text.text");
         sb.AppendLine("roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true");

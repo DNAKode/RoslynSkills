@@ -719,3 +719,15 @@ roscli ctx.file_outline tests/FrankenTui.Tests.Headless/ShowcaseShellTests.cs --
 ```
 
 The command returns matching member outlines plus the containing type, keeping the response small enough to use directly as input for `ctx.member_source`.
+
+## 2026-05-16 Follow-Up: Focused Windows Inside Huge Members
+
+The next supervised pass avoided text fallback, but `ctx.member_source` still returned too much context for very large members such as long input classifiers. The agent only needed the branch around one literal term, while the edit target still needed to stay anchored to the containing member.
+
+`ctx.member_source` now accepts `focus_text`. When supplied, the command searches the anchored member/body span for the first case-insensitive literal match and returns only the requested line window around that match:
+
+```powershell
+roscli ctx.member_source apps/FrankenTui.Demo.Showcase/ShowcaseInteractiveProgram.cs 1200 17 member --focus-text overlay_help_scroll_up --context-lines-before 3 --context-lines-after 8 --max-chars 12000
+```
+
+The response includes `source.focus` with matched state and line/column. This keeps Roslyn-native exploration practical for huge members without falling back to `rg`/`Get-Content` just to find the relevant branch.

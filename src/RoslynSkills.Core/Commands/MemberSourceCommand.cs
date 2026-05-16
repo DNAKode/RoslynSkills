@@ -91,6 +91,7 @@ public sealed class MemberSourceCommand : IAgentCommand
         int contextBefore = InputParsing.GetOptionalInt(input, "context_lines_before", defaultValue: 0, minValue: 0, maxValue: 500);
         int contextAfter = InputParsing.GetOptionalInt(input, "context_lines_after", defaultValue: 0, minValue: 0, maxValue: 500);
         int maxChars = InputParsing.GetOptionalInt(input, "max_chars", defaultValue: 8_000, minValue: 200, maxValue: 200_000);
+        string? focusText = GetOptionalTrimmedString(input, "focus_text");
 
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
@@ -170,6 +171,43 @@ public sealed class MemberSourceCommand : IAgentCommand
         int targetEndColumn = targetLineSpan.End.Character + 1;
         int snippetStartLine = Math.Max(1, targetStartLine - contextBefore);
         int snippetEndLine = Math.Min(analysis.SourceText.Lines.Count, targetEndLine + contextAfter);
+        object? focus = null;
+        if (!string.IsNullOrWhiteSpace(focusText) &&
+            TryResolveFocusWindow(
+                analysis.SourceText,
+                targetSpan,
+                focusText,
+                contextBefore,
+                contextAfter,
+                out int focusLine,
+                out int focusColumn,
+                out int focusStartLine,
+                out int focusEndLine))
+        {
+            snippetStartLine = focusStartLine;
+            snippetEndLine = focusEndLine;
+            focus = new
+            {
+                text = focusText,
+                matched = true,
+                line = focusLine,
+                column = focusColumn,
+                window_start_line = focusStartLine,
+                window_end_line = focusEndLine,
+            };
+        }
+        else if (!string.IsNullOrWhiteSpace(focusText))
+        {
+            focus = new
+            {
+                text = focusText,
+                matched = false,
+                line = (int?)null,
+                column = (int?)null,
+                window_start_line = snippetStartLine,
+                window_end_line = snippetEndLine,
+            };
+        }
 
         string source = string.Empty;
         bool truncated = false;
@@ -199,6 +237,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                 include_edit_target_text = includeEditTargetText,
                 include_line_numbers = includeLineNumbers,
                 include_trivia = includeTrivia,
+                focus_text = focusText,
                 context_lines_before = contextBefore,
                 context_lines_after = contextAfter,
                 max_chars = maxChars,
@@ -236,12 +275,14 @@ public sealed class MemberSourceCommand : IAgentCommand
                     text = source,
                     truncated,
                     character_count = sourceCharacterCount,
+                    focus,
                 }
                 : new
                 {
                     omitted = true,
                     truncated = false,
                     character_count = sourceCharacterCount,
+                    focus,
                 },
             ["edit_workflow"] = BuildEditWorkflow(analysis.FilePath, memberName, mode, targetStartLine, targetEndLine),
         };
@@ -285,6 +326,49 @@ public sealed class MemberSourceCommand : IAgentCommand
             },
             fallback_rule = "If a .cs mutation cannot use a Roslyn edit command, record the attempted command and reason in ROSLYN_FALLBACK_REFLECTION_LOG.md.",
         };
+    }
+
+    private static bool TryResolveFocusWindow(
+        SourceText sourceText,
+        TextSpan targetSpan,
+        string focusText,
+        int contextBefore,
+        int contextAfter,
+        out int focusLine,
+        out int focusColumn,
+        out int snippetStartLine,
+        out int snippetEndLine)
+    {
+        string targetText = sourceText.ToString(targetSpan);
+        int index = targetText.IndexOf(focusText, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            focusLine = 0;
+            focusColumn = 0;
+            snippetStartLine = 0;
+            snippetEndLine = 0;
+            return false;
+        }
+
+        LinePosition position = sourceText.Lines.GetLinePosition(targetSpan.Start + index);
+        focusLine = position.Line + 1;
+        focusColumn = position.Character + 1;
+        snippetStartLine = Math.Max(1, focusLine - contextBefore);
+        snippetEndLine = Math.Min(sourceText.Lines.Count, focusLine + contextAfter);
+        return true;
+    }
+
+    private static string? GetOptionalTrimmedString(JsonElement input, string propertyName)
+    {
+        if (!input.TryGetProperty(propertyName, out JsonElement property) || property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        string? value = property.GetString();
+        return string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Trim();
     }
 
     private static object BuildEditTarget(

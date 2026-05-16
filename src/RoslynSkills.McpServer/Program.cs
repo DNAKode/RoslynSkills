@@ -929,6 +929,7 @@ internal static class Program
             properties["include_source_text"] = BoolProperty("Include extracted source snippet.");
             properties["include_line_numbers"] = BoolProperty("Prefix snippet lines with line numbers.");
             properties["include_trivia"] = BoolProperty("Include leading/trailing trivia when computing spans.");
+            properties["focus_text"] = StringProperty("Optional literal text to focus the returned source window inside a huge member. Combine with context_lines_before/context_lines_after.");
             properties["context_lines_before"] = IntProperty("Additional lines before extracted span.", 0);
             properties["context_lines_after"] = IntProperty("Additional lines after extracted span.", 0);
             properties["max_chars"] = IntProperty("Maximum characters returned for source text.", 1);
