@@ -13,6 +13,7 @@ internal sealed class CommandFileAnalysis
     public Compilation Compilation { get; }
     public SemanticModel SemanticModel { get; }
     public string Language { get; }
+    public Document? Document { get; }
     public WorkspaceContextInfo WorkspaceContext { get; }
 
     private CommandFileAnalysis(
@@ -24,6 +25,7 @@ internal sealed class CommandFileAnalysis
         Compilation compilation,
         SemanticModel semanticModel,
         string language,
+        Document? document,
         WorkspaceContextInfo workspaceContext)
     {
         FilePath = filePath;
@@ -34,6 +36,7 @@ internal sealed class CommandFileAnalysis
         Compilation = compilation;
         SemanticModel = semanticModel;
         Language = language;
+        Document = document;
         WorkspaceContext = workspaceContext;
     }
 
@@ -58,6 +61,7 @@ internal sealed class CommandFileAnalysis
             result.compilation,
             result.semantic_model,
             result.language,
+            result.document,
             result.workspace_context);
     }
 

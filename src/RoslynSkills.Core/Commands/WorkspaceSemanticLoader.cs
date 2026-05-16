@@ -34,6 +34,7 @@ internal sealed record WorkspaceSemanticLoadResult(
     Compilation compilation,
     SemanticModel semantic_model,
     string language,
+    Document? document,
     WorkspaceContextInfo workspace_context);
 
 internal static class WorkspaceSemanticLoader
@@ -164,6 +165,7 @@ internal static class WorkspaceSemanticLoader
                             compilation: compilation,
                             semantic_model: semanticModel,
                             language: document.Project.Language,
+                            document: document,
                             workspace_context: workspaceContext);
                     }
                     catch (Exception ex)
@@ -224,6 +226,7 @@ internal static class WorkspaceSemanticLoader
             compilation: fallbackCompilation,
             semantic_model: fallbackSemanticModel,
             language: fallbackLanguage,
+            document: null,
             workspace_context: fallbackContext);
     }
 
@@ -282,6 +285,7 @@ internal static class WorkspaceSemanticLoader
             compilation: fallbackCompilation,
             semantic_model: fallbackSemanticModel,
             language: fallbackLanguage,
+            document: null,
             workspace_context: fallbackContext);
     }
 
@@ -312,6 +316,9 @@ internal static class WorkspaceSemanticLoader
         string language = string.IsNullOrWhiteSpace(tree.Options.Language)
             ? CommandLanguageServices.DetectLanguageFromFilePath(normalizedFilePath)
             : tree.Options.Language;
+        Document? document = hosted.Workspace.Solution is null
+            ? null
+            : FindDocument(hosted.Workspace.Solution, normalizedFilePath);
         WorkspaceContextInfo workspaceContext = new(
             mode: "workspace",
             resolution_source: "workspace_handle",
@@ -338,6 +345,7 @@ internal static class WorkspaceSemanticLoader
             compilation: semanticModel.Compilation,
             semantic_model: semanticModel,
             language: language,
+            document: document,
             workspace_context: workspaceContext);
     }
 

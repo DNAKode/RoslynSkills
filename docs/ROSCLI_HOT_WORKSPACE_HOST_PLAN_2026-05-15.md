@@ -86,6 +86,12 @@ roscli --no-daemon nav.find_symbol src/App/Foo.cs Foo
 - Remaining product gap: `edit.replace_text` immediate diagnostics are syntax/file-context diagnostics and can look noisy for project-dependent files. The agent correctly used hot `diag.get_file_diagnostics` afterward. Next improvement should let simple edit commands accept/reuse the hot workspace context for post-edit diagnostics.
 - Release cleanup signal: `edit.claim release <claim_id>` should now be re-tested in the live pane because `.24` failed there and `.25` smoke passed locally.
 
+2026-05-16 `.26` follow-up:
+
+- `edit.replace_text` and `edit.insert_text` now use workspace-backed updated-source diagnostics when a workspace is available or explicitly supplied. The response includes `diagnostics_after_* .workspace_context` and reports `mode = workspace_updated_source` when project context was used.
+- The implementation carries the Roslyn `Document` through `CommandFileAnalysis` and evaluates edits with `Solution.WithDocumentText`, which preserves project references and avoids the false file-only errors seen in the `.25` FrankenTui.NET run.
+- Next supervised prompt should check whether the agent can trust `diagnostics_after_replace` directly after exact text edits instead of always adding a separate `diag.get_file_diagnostics` round-trip.
+
 ## Architecture
 
 Add a long-running local host process:

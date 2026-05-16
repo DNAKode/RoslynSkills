@@ -1,5 +1,3 @@
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -7,12 +5,6 @@ namespace RoslynSkills.Core.Commands;
 
 public sealed class ReplaceTextCommand : IAgentCommand
 {
-    private static readonly HashSet<string> CSharpExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".cs",
-        ".csx",
-    };
-
     public CommandDescriptor Descriptor { get; } = new(
         Id: "edit.replace_text",
         Summary: "Replace an exact text snippet in one file with immediate optional C# diagnostics.",
@@ -37,6 +29,8 @@ public sealed class ReplaceTextCommand : IAgentCommand
             errors.Add(new CommandError("invalid_input", "Property 'old_text' must not be empty."));
         }
 
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         return errors;
     }
 
@@ -55,6 +49,8 @@ public sealed class ReplaceTextCommand : IAgentCommand
         bool replaceAll = InputParsing.GetOptionalBool(input, "replace_all", defaultValue: false);
         bool includeDiagnostics = InputParsing.GetOptionalBool(input, "include_diagnostics", defaultValue: true);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 2_000);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
 
         string originalContent = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         int matchCount = CountOccurrences(originalContent, oldText);
@@ -86,11 +82,21 @@ public sealed class ReplaceTextCommand : IAgentCommand
             wroteFile = true;
         }
 
-        object diagnosticsData = BuildDiagnosticsData(filePath, updatedContent, includeDiagnostics, maxDiagnostics, cancellationToken);
+        object diagnosticsData = await ExactEditDiagnostics.BuildAsync(
+                filePath,
+                updatedContent,
+                includeDiagnostics,
+                maxDiagnostics,
+                workspacePath,
+                workspaceHandle,
+                cancellationToken)
+            .ConfigureAwait(false);
 
         object data = new
         {
             file_path = filePath,
+            workspace_path = workspacePath,
+            workspace_handle = workspaceHandle,
             apply_changes = apply,
             replace_all = replaceAll,
             match_count = matchCount,
@@ -103,46 +109,6 @@ public sealed class ReplaceTextCommand : IAgentCommand
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
-    }
-
-    private static object BuildDiagnosticsData(
-        string filePath,
-        string content,
-        bool includeDiagnostics,
-        int maxDiagnostics,
-        CancellationToken cancellationToken)
-    {
-        bool isCSharpFile = CSharpExtensions.Contains(Path.GetExtension(filePath));
-        if (!includeDiagnostics || !isCSharpFile)
-        {
-            return new
-            {
-                evaluated = false,
-                reason = isCSharpFile ? "diagnostics_disabled" : "not_csharp_source_file",
-                total = 0,
-                returned = 0,
-                errors = 0,
-                warnings = 0,
-                diagnostics = Array.Empty<NormalizedDiagnostic>(),
-            };
-        }
-
-        SyntaxTree tree = CSharpSyntaxTree.ParseText(content, path: filePath, cancellationToken: cancellationToken);
-        IReadOnlyList<Microsoft.CodeAnalysis.Diagnostic> diagnostics = CompilationDiagnostics.GetDiagnostics(new[] { tree }, cancellationToken);
-        NormalizedDiagnostic[] normalized = CompilationDiagnostics.Normalize(diagnostics)
-            .Take(maxDiagnostics)
-            .ToArray();
-
-        return new
-        {
-            evaluated = true,
-            reason = string.Empty,
-            total = diagnostics.Count,
-            returned = normalized.Length,
-            errors = normalized.Count(d => string.Equals(d.severity, "Error", StringComparison.OrdinalIgnoreCase)),
-            warnings = normalized.Count(d => string.Equals(d.severity, "Warning", StringComparison.OrdinalIgnoreCase)),
-            diagnostics = normalized,
-        };
     }
 
     private static int CountOccurrences(string text, string search)

@@ -1352,6 +1352,83 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_ReplaceText_UsesWorkspaceDiagnosticsWhenWorkspacePathProvided()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-workspace-{Guid.NewGuid():N}");
+        string projectPath = Path.Combine(tempDir, "Demo.csproj");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+        string helperPath = Path.Combine(tempDir, "Helper.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                projectPath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <ImplicitUsings>disable</ImplicitUsings>
+                    <Nullable>disable</Nullable>
+                  </PropertyGroup>
+                </Project>
+                """);
+            await File.WriteAllTextAsync(
+                helperPath,
+                """
+                namespace Smoke;
+
+                public static class Helper
+                {
+                    public static int Value => 42;
+                }
+                """);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                namespace Smoke;
+
+                public class Demo
+                {
+                    public int Run() => 1;
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.replace_text",
+                    filePath,
+                    "--old-text", "=> 1",
+                    "--new-text", "=> Helper.Value",
+                    "--workspace-path", projectPath,
+                    "--apply", "false",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"mode\": \"workspace_updated_source\"", output);
+            Assert.Contains("\"errors\": 0", output);
+            Assert.DoesNotContain("CS0103", output);
+            Assert.Contains("public int Run() => 1;", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DescribeCommand_ReplaceText_IncludesMutationBridgeGuidance()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());

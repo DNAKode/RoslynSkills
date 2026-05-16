@@ -3194,11 +3194,12 @@ Workflow:
                 direct = "edit.replace_text <file-path> --old-text <exact text> --new-text <replacement text> [--apply true] [--replace-all true]",
                 run = "run edit.replace_text --input '{\"file_path\":\"src/MyFile.cs\",\"old_text\":\"Title = \\\"Help\\\"\",\"new_text\":\"Title = BuildHelpTitle(state.HelpOverlayScroll)\",\"apply\":true}'",
                 required_properties = new[] { "file_path", "old_text", "new_text" },
-                optional_properties = new[] { "apply", "replace_all", "include_diagnostics", "max_diagnostics" },
+                optional_properties = new[] { "apply", "replace_all", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle" },
                 notes = new[]
                 {
                     "Use after edit.claim for small exact snippet changes when edit.rename_symbol or edit.replace_member_body do not fit.",
                     "Defaults: apply=true, replace_all=false, include_diagnostics=true.",
+                    "When a solution/project is preloaded, diagnostics_after_replace uses the hot workspace by default. Pass workspace_path/workspace_handle explicitly when needed.",
                     "replace_all=false fails if old_text is ambiguous; make old_text more specific instead of falling back to patching.",
                     "For multiline old_text/new_text, prefer --input-stdin JSON to avoid shell quoting issues.",
                     "This is a structured roscli mutation bridge, not a semantic refactor. Prefer semantic edit commands when available.",
@@ -3213,11 +3214,12 @@ Workflow:
                 direct = "edit.insert_text <file-path> --anchor-text <exact anchor> --insert-text <text to insert> [--position after|before] [--apply true]",
                 run = "run edit.insert_text --input '{\"file_path\":\"src/MyFile.cs\",\"anchor_text\":\"[\\\"help_visible\\\"] = state.HelpVisible,\",\"insert_text\":\"\\n            [\\\"help_overlay_title\\\"] = BuildHelpTitle(...),\",\"position\":\"after\",\"apply\":true}'",
                 required_properties = new[] { "file_path", "anchor_text", "insert_text" },
-                optional_properties = new[] { "position", "apply", "include_diagnostics", "max_diagnostics" },
+                optional_properties = new[] { "position", "apply", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle" },
                 notes = new[]
                 {
                     "Use after edit.claim for small insertions when you know an exact nearby anchor line/snippet.",
                     "Default position=after, apply=true, include_diagnostics=true.",
+                    "When a solution/project is preloaded, diagnostics_after_insert uses the hot workspace by default. Pass workspace_path/workspace_handle explicitly when needed.",
                     "Fails if anchor_text is missing or ambiguous; make anchor_text more specific instead of falling back to patching.",
                     "For multiline insert_text, prefer --input-stdin JSON to avoid shell quoting issues.",
                     "This command exists because agents often need to add one evidence field or assertion after a known line.",

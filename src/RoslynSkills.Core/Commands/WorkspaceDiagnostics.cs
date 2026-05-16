@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
 
 namespace RoslynSkills.Core.Commands;
 
@@ -39,7 +40,10 @@ internal static class WorkspaceDiagnostics
         {
             // Replace the document syntax tree in the project compilation. This preserves project references,
             // NuGet restore state, and language version settings where MSBuildWorkspace was successfully loaded.
-            Compilation updatedCompilation = analysis.Compilation.ReplaceSyntaxTree(analysis.SyntaxTree, updatedTree);
+            SyntaxTree? compilationTree = analysis.Compilation.SyntaxTrees.FirstOrDefault(tree =>
+                string.Equals(Path.GetFullPath(tree.FilePath), filePath, PathComparison));
+            compilationTree ??= analysis.SyntaxTree;
+            Compilation updatedCompilation = analysis.Compilation.ReplaceSyntaxTree(compilationTree, updatedTree);
             return updatedCompilation
                 .GetDiagnostics(cancellationToken)
                 .Where(diagnostic => IsDiagnosticForFile(diagnostic, filePath))
@@ -51,6 +55,46 @@ internal static class WorkspaceDiagnostics
             return CompilationDiagnostics.GetDiagnostics(new[] { updatedTree }, cancellationToken, analysis.Language);
         }
     }
+
+    public static async Task<IReadOnlyList<Diagnostic>> GetDiagnosticsForUpdatedSourceAsync(
+        CommandFileAnalysis analysis,
+        string updatedSource,
+        CancellationToken cancellationToken)
+    {
+        string filePath = Path.GetFullPath(analysis.FilePath);
+        if (!string.Equals(analysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase) ||
+            analysis.Document is null)
+        {
+            return GetDiagnosticsForUpdatedSource(analysis, updatedSource, cancellationToken);
+        }
+
+        try
+        {
+            Solution updatedSolution = analysis.Document.Project.Solution.WithDocumentText(
+                analysis.Document.Id,
+                SourceText.From(updatedSource));
+            Document? updatedDocument = updatedSolution.GetDocument(analysis.Document.Id);
+            Compilation? updatedCompilation = updatedDocument is null
+                ? null
+                : await updatedDocument.Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+            if (updatedCompilation is null)
+            {
+                return GetDiagnosticsForUpdatedSource(analysis, updatedSource, cancellationToken);
+            }
+
+            return updatedCompilation
+                .GetDiagnostics(cancellationToken)
+                .Where(diagnostic => IsDiagnosticForFile(diagnostic, filePath))
+                .ToArray();
+        }
+        catch
+        {
+            return GetDiagnosticsForUpdatedSource(analysis, updatedSource, cancellationToken);
+        }
+    }
+
+    private static StringComparison PathComparison
+        => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static bool IsDiagnosticForFile(Diagnostic diagnostic, string filePath)
     {
