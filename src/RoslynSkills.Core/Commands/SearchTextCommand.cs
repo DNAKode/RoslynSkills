@@ -330,6 +330,16 @@ public sealed class SearchTextCommand : IAgentCommand
             }).ToArray()
             : matches;
 
+        object? resultGuidance = BuildResultGuidance(
+            matches.Count,
+            truncated,
+            fileLimitReached,
+            maxResults,
+            contextLines,
+            previewMaxChars,
+            filePath,
+            roots);
+
         object data = new
         {
             analysis_scope = new
@@ -365,10 +375,65 @@ public sealed class SearchTextCommand : IAgentCommand
             total_matches = matches.Count,
             truncated,
             file_limit_reached = fileLimitReached,
+            result_guidance = resultGuidance,
             matches = matchPayload,
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static object? BuildResultGuidance(
+        int matchCount,
+        bool truncated,
+        bool fileLimitReached,
+        int maxResults,
+        int contextLines,
+        int previewMaxChars,
+        string? filePath,
+        IReadOnlyList<string> roots)
+    {
+        bool largeResultSet = matchCount >= 20;
+        bool highRequestedLimit = maxResults > 40;
+        bool highPayloadShape = largeResultSet && (contextLines > 0 || previewMaxChars > 180 || highRequestedLimit);
+        if (!truncated && !fileLimitReached && !highPayloadShape)
+        {
+            return null;
+        }
+
+        List<string> reasons = new();
+        if (truncated)
+        {
+            reasons.Add("result limit reached before search completed");
+        }
+
+        if (fileLimitReached)
+        {
+            reasons.Add("file scan limit reached before search completed");
+        }
+
+        if (highPayloadShape)
+        {
+            reasons.Add("broad search returned many preview-bearing matches");
+        }
+
+        string scopeHint = filePath is not null
+            ? "--file-path <same-file>"
+            : roots.Count > 0
+                ? "--root <narrower-dir>"
+                : "--workspace-path <solution-or-project>";
+
+        return new
+        {
+            severity = truncated || fileLimitReached ? "warning" : "info",
+            reasons = reasons.ToArray(),
+            recommended_next_step = "Narrow before repeating broad search: use a more specific literal with --max-results 20 --context-lines 0, or switch to ctx.file_outline/member_source for member-local context.",
+            suggested_commands = new[]
+            {
+                $"roscli ctx.search_text <more-specific-literal> {scopeHint} --max-results 20 --context-lines 0",
+                "roscli ctx.file_outline <file-path> --member-name-contains <term> --max-members 20",
+                "roscli ctx.member_source <file-path> --member-name <name> --focus-text <literal> --context-lines-before 8 --context-lines-after 16",
+            },
+        };
     }
 
     private static bool TryGetPatterns(JsonElement input, List<CommandError> errors, out string[] patterns)

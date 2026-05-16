@@ -3085,9 +3085,13 @@ Workflow:
             int filesScanned = TryGetInt(element, "files_scanned", out int scanned) ? scanned : -1;
             if (totalMatches >= 0)
             {
+                string guidanceSuffix = TryGetObject(element, "result_guidance", out JsonElement guidanceElement) &&
+                                        guidanceElement.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
+                    ? ", guidance=narrow"
+                    : string.Empty;
                 return filesScanned >= 0
-                    ? $"matches={totalMatches}, files={filesScanned}"
-                    : $"matches={totalMatches}";
+                    ? $"matches={totalMatches}, files={filesScanned}{guidanceSuffix}"
+                    : $"matches={totalMatches}{guidanceSuffix}";
             }
         }
 

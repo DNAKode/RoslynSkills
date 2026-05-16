@@ -1130,6 +1130,43 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_SearchText_SummarizesNarrowingGuidance()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-guidance-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Target.cs");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            await File.WriteAllLinesAsync(
+                filePath,
+                Enumerable.Range(0, 25).Select(index => $"public class Remote{index} {{ public string Action => \"RepeatedEvidenceMarker\"; }}"));
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.search_text", "--file-path", filePath, "--text", "RepeatedEvidenceMarker", "--max-results", "80", "--context-lines", "1" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"result_guidance\": {", output);
+            Assert.Contains("\"Summary\": \"ctx.search_text ok: matches=25, files=1, guidance=narrow\"", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_FindSymbol_AcceptsDeclarationAndSnippetOptions()
     {
         string filePath = Path.GetTempFileName();

@@ -96,6 +96,48 @@ public sealed class BreadthCommandTests
     }
 
     [Fact]
+    public async Task SearchTextCommand_AddsGuidanceForBroadPreviewSearches()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-search-guidance-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string sourcePath = Path.Combine(root, "Target.cs");
+
+        await File.WriteAllLinesAsync(
+            sourcePath,
+            Enumerable.Range(0, 25).Select(index => $"public class Target{index} {{ public string Name => \"RepeatedEvidenceMarker\"; }}"));
+
+        try
+        {
+            SearchTextCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                pattern = "RepeatedEvidenceMarker",
+                roots = new[] { root },
+                max_results = 80,
+                context_lines = 1,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"total_matches\":25", json);
+            Assert.Contains("\"result_guidance\":{", json);
+            Assert.Contains("\"broad search returned many preview-bearing matches\"", json);
+            Assert.Contains("\"recommended_next_step\"", json);
+            Assert.Contains("ctx.file_outline", json);
+            Assert.Contains("ctx.member_source", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task FindInvocationsCommand_FindsCrossFileCallsInWorkspace()
     {
         string root = Path.Combine(Path.GetTempPath(), $"roslynskills-invocations-{Guid.NewGuid():N}");
