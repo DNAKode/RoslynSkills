@@ -105,7 +105,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         string originalContent = analysis.SourceText.ToString();
         string targetText = originalContent.Substring(targetSpan.Start, targetSpan.Length);
         (int MatchCount, string EffectiveOldText, string MatchMode) match = ResolveOldText(targetText, oldText);
-        MatchLocation[] matchLocations = GetMatchLocations(analysis.SourceText, targetSpan.Start, targetText, match.EffectiveOldText);
+        MatchLocation[] matchLocations = GetMatchLocations(analysis.SourceText, targetSpan.Start, targetText, match.EffectiveOldText, newText);
         if (match.MatchCount == 0)
         {
             CommandError error = new("old_text_not_found", "The supplied old_text was not found in the selected member.");
@@ -389,7 +389,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         return (0, oldText, "none");
     }
 
-    private static MatchLocation[] GetMatchLocations(SourceText sourceText, int targetStart, string targetText, string oldText)
+    private static MatchLocation[] GetMatchLocations(SourceText sourceText, int targetStart, string targetText, string oldText, string newText)
     {
         if (string.IsNullOrEmpty(oldText))
         {
@@ -406,7 +406,8 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
                 column: position.Character + 1,
                 target_offset: index,
                 length: oldText.Length,
-                text_preview: BuildTextPreview(oldText)));
+                text_preview: BuildTextPreview(oldText),
+                new_text_preview: BuildTextPreview(newText)));
             index += oldText.Length;
         }
 
@@ -463,5 +464,5 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         => string.Equals(mode, "member", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(mode, "body", StringComparison.OrdinalIgnoreCase);
 
-    private sealed record MatchLocation(int line, int column, int target_offset, int length, string text_preview);
+    private sealed record MatchLocation(int line, int column, int target_offset, int length, string text_preview, string new_text_preview);
 }

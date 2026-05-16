@@ -845,6 +845,7 @@ public sealed class CommandTests
             Assert.True(firstMatch.GetProperty("line").GetInt32() > 0);
             Assert.True(firstMatch.GetProperty("column").GetInt32() > 0);
             Assert.Equal("Assert.Equal(1, value);", firstMatch.GetProperty("text_preview").GetString());
+            Assert.Equal("Assert.Equal(2, value);", firstMatch.GetProperty("new_text_preview").GetString());
 
             string updated = await File.ReadAllTextAsync(filePath);
             Assert.Contains("public void First()", updated);

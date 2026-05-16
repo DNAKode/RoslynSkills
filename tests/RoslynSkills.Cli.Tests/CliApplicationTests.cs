@@ -1704,6 +1704,7 @@ public sealed class CliApplicationTests
             Assert.Contains("\"matches\": [", output);
             Assert.Contains("\"line\":", output);
             Assert.Contains("\"text_preview\": \"var value = 1;\"", output);
+            Assert.Contains("\"new_text_preview\": \"var value = 2;\"", output);
             Assert.Contains("line=", output);
             Assert.Contains("var value = 2;", await File.ReadAllTextAsync(filePath));
         }
