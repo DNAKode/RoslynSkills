@@ -2312,6 +2312,11 @@ public sealed class CliApplicationTests
         Assert.Contains("span_member_edit_without_double_indent", output);
         Assert.Contains("include_edit_target_text=true", output);
         Assert.Contains("edit_target.exact_span_text.text", output);
+        Assert.Contains("csharp_fresh_session", output);
+        Assert.Contains("workspace.preload MySolution.slnx --alias default --require-solution true", output);
+        Assert.Contains("ctx.file_outline tests/MyTests.cs --member-name-contains Target", output);
+        Assert.Contains("edit.replace_in_member tests/MyTests.cs --member-name TargetTest", output);
+        Assert.Contains("Do not use git diff, rg, Get-Content, sed, cat, or patch-editor reads for .cs orientation", output);
     }
 
 

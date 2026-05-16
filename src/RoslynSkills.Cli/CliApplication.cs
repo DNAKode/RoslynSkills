@@ -261,6 +261,7 @@ public sealed class CliApplication
                     core_principle = "semantic-first, brief-first, verify-before-finalize",
                     pit_of_success = new[]
                     {
+                        "For fresh C# sessions, run the csharp_fresh_session sequence below before reading or editing .cs files.",
                         "Start with: roscli list-commands --ids-only",
                         "Use roscli list-commands --stable-only --ids-only for strict/default-safe command selection.",
                         "If arguments are unclear: roscli describe-command <command-id>",
@@ -279,11 +280,13 @@ public sealed class CliApplication
                     },
                     first_minute_sequence = new[]
                     {
+                        "roscli --version",
+                        "roscli workspace.preload MySolution.slnx --alias default --require-solution true",
+                        "roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20",
+                        "roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8",
+                        "roscli describe-command edit.replace_in_member",
                         "roscli list-commands --ids-only",
                         "roscli list-commands --stable-only --ids-only",
-                        "roscli describe-command session.open",
-                        "roscli describe-command edit.create_file",
-                        "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true",
                     },
                     example_paths = new[]
                     {
@@ -292,6 +295,22 @@ public sealed class CliApplication
                     },
                     quick_recipes = new object[]
                     {
+                        new
+                        {
+                            name = "csharp_fresh_session",
+                            commands = new[]
+                            {
+                                "roscli --version",
+                                "roscli workspace.preload MySolution.slnx --alias default --require-solution true",
+                                "roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20",
+                                "roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8",
+                                "roscli edit.claim claim tests/MyTests.cs --reason narrow-csharp-slice",
+                                "roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text \"Assert.Equal(1, value);\" --new-text \"Assert.Equal(2, value);\" --preview-chars 256",
+                                "dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~TargetTest",
+                                "roscli edit.claim release <claim_id>",
+                            },
+                            rule = "For .cs orientation, prefer ctx.file_outline/ctx.member_source before git diff, rg, Get-Content, sed, cat, or patch-editor reads. If fallback is required, say which roscli command was insufficient.",
+                        },
                         new
                         {
                             name = "rename_symbol_safely",
@@ -337,13 +356,13 @@ public sealed class CliApplication
                     agent_intro_prompt = """
 Use roscli for C# and VB.NET work in this session.
 Workflow:
-1) run "roscli list-commands --ids-only" once.
-2) run "roscli list-commands --stable-only --ids-only" when task constraints are unclear.
-3) run "roscli quickstart" and follow its recipes.
+1) before reading or editing .cs files, run "roscli --version" and "roscli quickstart".
+2) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
+3) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
 4) if argument shape is unclear, run "roscli describe-command <command-id>".
-5) prefer nav.* / ctx.* / diag.* before text-only fallback.
-6) for large member edits, use ctx.member_source include_edit_target_text=true, then edit.batch_exact replace_span from edit_target.exact_span_text.text.
-7) run diagnostics/build/tests before finalizing.
+5) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
+6) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
+7) run diagnostics/build/tests and release claims before finalizing.
 """,
                     complementary_tools = new[]
                     {
@@ -362,6 +381,7 @@ Workflow:
                         "If workspace_context.resolved_workspace_path is a .csproj when solution scope was expected, rerun with the .sln/.slnx path.",
                         "For project-backed files where ad_hoc is unacceptable, set --require-workspace true.",
                         "For complex JSON payloads, prefer --input-stdin over shell-escaped inline JSON.",
+                        "Do not use git diff, rg, Get-Content, sed, cat, or patch-editor reads for .cs orientation until a roscli ctx/nav command has been tried.",
                         "If roscli cannot answer a C# query, state why before fallback.",
                         "For replace_span, do not duplicate edit_target.trivia.preserved_line_prefix_text in new_text.",
                     },

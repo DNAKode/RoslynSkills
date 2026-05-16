@@ -16,17 +16,22 @@ If an agent has to guess argument shapes or fumble through file types, this cont
 
 ## First Minute Workflow
 
-Run this sequence at session start:
+Run this sequence at session start before reading or editing `.cs` files:
 
 ```text
+roscli --version
+roscli quickstart
+roscli workspace.preload MySolution.slnx --alias default --require-solution true
+roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20
+roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text "ExpectedLiteral" --context-lines-before 3 --context-lines-after 8
+roscli describe-command edit.replace_in_member
 roscli list-commands --ids-only
 roscli list-commands --stable-only --ids-only
-roscli quickstart
-roscli describe-command session.open
-roscli describe-command edit.create_file
 ```
 
-This gives command discovery, guardrails, and two high-traffic argument schemas up front.
+This gives command discovery, a hot solution workspace, member-scoped source context, and the high-traffic scoped edit schema up front.
+
+For `.cs` orientation, try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
 
 ## Command Tiers
 
@@ -42,7 +47,19 @@ Default policy:
 
 ## Golden Paths
 
-### 1) Safe symbol rename
+### 1) Fresh C# slice
+
+```text
+roscli workspace.preload MySolution.slnx --alias default --require-solution true
+roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20
+roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text "ExpectedLiteral" --context-lines-before 3 --context-lines-after 8
+roscli edit.claim claim tests/MyTests.cs --reason narrow-csharp-slice
+roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text "Assert.Equal(1, value);" --new-text "Assert.Equal(2, value);" --preview-chars 256
+dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~TargetTest
+roscli edit.claim release <claim_id>
+```
+
+### 2) Safe symbol rename
 
 ```text
 roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
@@ -50,14 +67,14 @@ roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --w
 roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true
 ```
 
-### 2) Create new file in one shot
+### 3) Create new file in one shot
 
 ```text
 roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType { }"
 roscli diag.get_file_diagnostics src/MyProject/NewType.cs
 ```
 
-### 3) Session-based edit loop
+### 4) Session-based edit loop
 
 ```text
 roscli session.open src/MyProject/Program.cs demo-session
@@ -68,7 +85,7 @@ roscli session.commit demo-session --keep-session false --require-disk-unchanged
 
 Note: `session.*` diagnostics are file-only (`ad_hoc`). For project-backed errors/warnings, prefer `diag.get_file_diagnostics` or `diag.get_after_edit` with `--require-workspace true` and pass `--workspace-path` if needed.
 
-### 4) Workspace-backed directory triage
+### 5) Workspace-backed directory triage
 
 ```text
 roscli diag.get_workspace_snapshot src --brief true --require-workspace true
@@ -86,6 +103,7 @@ roscli diag.get_workspace_snapshot src --require-workspace true --workspace-path
 - Check `workspace_context.resolved_workspace_path`, `workspace_context.workspace_kind`, and `workspace_context.project_count` when full solution context matters.
 - If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.sln|.slnx|.csproj|dir>` and prefer `--require-workspace true`.
 - For complex payloads, prefer `--input-stdin` over shell-escaped JSON.
+- Do not use `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads for `.cs` orientation until a roscli `ctx.*` or `nav.*` command has been tried.
 - If RoslynSkills cannot answer a C# query, agent must state why before fallback.
 
 ## Complementary Tool Split
@@ -105,17 +123,19 @@ Combined migration pattern:
 
 Use roscli for C# work in this session.
 Workflow:
-1) run "roscli list-commands --ids-only" once.
-2) run "roscli quickstart" and follow its recipes.
-3) if argument shape is unclear, run "roscli describe-command <command-id>".
-4) prefer nav.* / ctx.* / diag.* before text-only fallback.
-5) verify `workspace_context.mode` for nav/diag file commands and force `--workspace-path` when needed; prefer `.sln/.slnx` for repo-wide context and use `--require-workspace true` for fail-closed checks.
-6) run diagnostics/build/tests before finalizing.
+1) before reading or editing .cs files, run "roscli --version" and "roscli quickstart".
+2) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
+3) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
+4) if argument shape is unclear, run "roscli describe-command <command-id>".
+5) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
+6) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
+7) run diagnostics/build/tests and release claims before finalizing.
 ```
 
 ## Anti-Patterns
 
 - Starting with full-solution diagnostics when file-level diagnostics are enough.
+- Starting `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads before trying roscli `ctx.*`/`nav.*`.
 - Repeated command retries without schema discovery (`describe-command`).
 - Text edits for multi-file semantic changes before trying Roslyn primitives.
 - Treating an LSP lane as valid evidence when tools were not actually available.
