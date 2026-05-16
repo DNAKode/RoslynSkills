@@ -405,11 +405,24 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
                 line: position.Line + 1,
                 column: position.Character + 1,
                 target_offset: index,
-                length: oldText.Length));
+                length: oldText.Length,
+                text_preview: BuildTextPreview(oldText)));
             index += oldText.Length;
         }
 
         return matches.ToArray();
+    }
+
+    private static string BuildTextPreview(string text)
+    {
+        string singleLine = text
+            .Replace("\r\n", "\\n", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\r", "\\n", StringComparison.Ordinal);
+        const int maxLength = 96;
+        return singleLine.Length <= maxLength
+            ? singleLine
+            : singleLine[..(maxLength - 3)] + "...";
     }
 
     private static string NormalizeLineEndingsForTarget(string value, string targetText)
@@ -450,5 +463,5 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         => string.Equals(mode, "member", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(mode, "body", StringComparison.OrdinalIgnoreCase);
 
-    private sealed record MatchLocation(int line, int column, int target_offset, int length);
+    private sealed record MatchLocation(int line, int column, int target_offset, int length, string text_preview);
 }

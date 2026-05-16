@@ -844,6 +844,7 @@ public sealed class CommandTests
             JsonElement firstMatch = doc.RootElement.GetProperty("matches")[0];
             Assert.True(firstMatch.GetProperty("line").GetInt32() > 0);
             Assert.True(firstMatch.GetProperty("column").GetInt32() > 0);
+            Assert.Equal("Assert.Equal(1, value);", firstMatch.GetProperty("text_preview").GetString());
 
             string updated = await File.ReadAllTextAsync(filePath);
             Assert.Contains("public void First()", updated);
