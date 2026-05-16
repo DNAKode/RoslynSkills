@@ -973,6 +973,8 @@ public sealed class CommandTests
             JsonElement firstMatch = doc.RootElement.GetProperty("matches")[0];
             string oldPreview = firstMatch.GetProperty("text_preview").GetString()!;
             string newPreview = firstMatch.GetProperty("new_text_preview").GetString()!;
+            string oldChangePreview = firstMatch.GetProperty("old_change_preview").GetString()!;
+            string newChangePreview = firstMatch.GetProperty("new_change_preview").GetString()!;
             Assert.StartsWith("...", oldPreview);
             Assert.StartsWith("...", newPreview);
             Assert.Contains("old", oldPreview);
@@ -982,6 +984,10 @@ public sealed class CommandTests
             Assert.True(firstMatch.GetProperty("first_changed_offset").GetInt32() > 0);
             Assert.Equal(12, firstMatch.GetProperty("first_changed_line_delta").GetInt32());
             Assert.True(firstMatch.GetProperty("first_changed_column_delta").GetInt32() > 0);
+            Assert.Contains("old", oldChangePreview);
+            Assert.Contains("new", newChangePreview);
+            Assert.True(oldChangePreview.Length <= 160);
+            Assert.True(newChangePreview.Length <= 160);
         }
         finally
         {
