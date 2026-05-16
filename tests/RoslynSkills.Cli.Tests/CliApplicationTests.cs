@@ -2367,7 +2367,7 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
-        Assert.Contains("edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source", output);
+        Assert.Contains("edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command", output);
     }
 
 
