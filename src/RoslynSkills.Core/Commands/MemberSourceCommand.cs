@@ -10,6 +10,9 @@ namespace RoslynSkills.Core.Commands;
 
 public sealed class MemberSourceCommand : IAgentCommand
 {
+    private const int LargeMissingFocusMemberLineThreshold = 200;
+    private const int MissingFocusFallbackLineWindow = 80;
+
     public CommandDescriptor Descriptor { get; } = new(
         Id: "ctx.member_source",
         Summary: "Return source for the anchored member (or body-only view) with bounded context.",
@@ -221,12 +224,18 @@ public sealed class MemberSourceCommand : IAgentCommand
         int targetEndColumn = targetLineSpan.End.Character + 1;
         int snippetStartLine = Math.Max(1, targetStartLine - contextBefore);
         int snippetEndLine = Math.Min(analysis.SourceText.Lines.Count, targetEndLine + contextAfter);
+        int fullSnippetStartLine = snippetStartLine;
+        int fullSnippetEndLine = snippetEndLine;
+        int fullSnippetLineCount = Math.Max(0, fullSnippetEndLine - fullSnippetStartLine + 1);
+        bool focusRequested = !string.IsNullOrWhiteSpace(focusText);
+        bool focusMatched = false;
+        bool missingFocusLargeMemberGuardApplied = false;
         object? focus = null;
-        if (!string.IsNullOrWhiteSpace(focusText) &&
+        if (focusRequested &&
             TryResolveFocusWindow(
                 analysis.SourceText,
                 targetSpan,
-                focusText,
+                focusText!,
                 contextBefore,
                 contextAfter,
                 out int focusLine,
@@ -234,6 +243,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                 out int focusStartLine,
                 out int focusEndLine))
         {
+            focusMatched = true;
             snippetStartLine = focusStartLine;
             snippetEndLine = focusEndLine;
             focus = new
@@ -246,8 +256,14 @@ public sealed class MemberSourceCommand : IAgentCommand
                 window_end_line = focusEndLine,
             };
         }
-        else if (!string.IsNullOrWhiteSpace(focusText))
+        else if (focusRequested)
         {
+            if (fullSnippetLineCount > LargeMissingFocusMemberLineThreshold)
+            {
+                missingFocusLargeMemberGuardApplied = true;
+                snippetEndLine = Math.Min(analysis.SourceText.Lines.Count, snippetStartLine + MissingFocusFallbackLineWindow - 1);
+            }
+
             focus = new
             {
                 text = focusText,
@@ -256,6 +272,9 @@ public sealed class MemberSourceCommand : IAgentCommand
                 column = (int?)null,
                 window_start_line = snippetStartLine,
                 window_end_line = snippetEndLine,
+                full_window_start_line = fullSnippetStartLine,
+                full_window_end_line = fullSnippetEndLine,
+                guard_applied = missingFocusLargeMemberGuardApplied,
             };
         }
 
@@ -336,10 +355,46 @@ public sealed class MemberSourceCommand : IAgentCommand
                     character_count = sourceCharacterCount,
                     focus,
                 },
+            ["payload_guidance"] = BuildPayloadGuidance(
+                focusRequested,
+                focusMatched,
+                missingFocusLargeMemberGuardApplied,
+                focusText,
+                analysis.FilePath,
+                memberName),
             ["edit_workflow"] = BuildEditWorkflow(analysis.FilePath, memberName, mode, targetStartLine, targetEndLine),
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static object? BuildPayloadGuidance(
+        bool focusRequested,
+        bool focusMatched,
+        bool missingFocusLargeMemberGuardApplied,
+        string? focusText,
+        string filePath,
+        string memberName)
+    {
+        if (!focusRequested || focusMatched)
+        {
+            return null;
+        }
+
+        string nextStep = $"roscli ctx.search_text {QuoteForSuggestion(focusText ?? string.Empty)} --file-path {QuoteForSuggestion(filePath)} --max-results 20 --context-lines 0";
+        return new
+        {
+            focus_not_found = true,
+            guard_applied = missingFocusLargeMemberGuardApplied,
+            message = missingFocusLargeMemberGuardApplied
+                ? "focus_text was not found in a large member, so source.text was capped. Use search_text or a different focus_text before requesting the full member."
+                : "focus_text was not found. Verify the term with search_text or rerun with a different focus_text.",
+            next_steps = new[]
+            {
+                nextStep,
+                $"roscli ctx.file_outline {QuoteForSuggestion(filePath)} --member-name-contains {QuoteForSuggestion(memberName)} --max-members 20",
+            },
+        };
     }
 
     private static object BuildEditWorkflow(string filePath, string memberName, SourceMode mode, int targetStartLine, int targetEndLine)
@@ -415,6 +470,18 @@ public sealed class MemberSourceCommand : IAgentCommand
         snippetStartLine = Math.Max(1, focusLine - contextBefore);
         snippetEndLine = Math.Min(sourceText.Lines.Count, focusLine + contextAfter);
         return true;
+    }
+
+    private static string QuoteForSuggestion(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        return value.Any(char.IsWhiteSpace)
+            ? "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
+            : value;
     }
 
     private static string? GetOptionalTrimmedString(JsonElement input, string propertyName)

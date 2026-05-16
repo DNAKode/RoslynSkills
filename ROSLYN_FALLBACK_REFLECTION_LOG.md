@@ -857,7 +857,22 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - `roscli edit.replace_text --input @<temp-json>`
 - Proposed Roslyn command/option improvement:
   - Add a whitespace-normalized or blank-line-focused formatting cleanup command, or expose a small `edit.normalize_blank_lines` operation scoped between adjacent members.
+  - Expected impact:
+    - correctness: low to medium; reduces manual cleanup after structured edits without broad formatter churn.
+    - latency: lower for small formatting repair loops.
+    - token_count: lower because agents would not need exact invisible whitespace reconstruction.
+
+## 2026-05-17 - Test formatting cleanup after Roslyn insertion
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.67`
+- Exact reason fallback was required/preferred:
+  - After using `edit.replace_text` to insert a new member-source regression test, the inserted block needed one blank line before the following `[Fact]`. This was a whitespace-only cleanup around a generated test insertion.
+- Roslyn command attempted:
+  - `roscli --no-daemon edit.replace_text --input @<temp-json>`
+- Proposed Roslyn command/option improvement:
+  - Add a member/test insertion command that preserves local blank-line conventions around adjacent attributes.
 - Expected impact:
-  - correctness: low to medium; reduces manual cleanup after structured edits without broad formatter churn.
-  - latency: lower for small formatting repair loops.
-  - token_count: lower because agents would not need exact invisible whitespace reconstruction.
+  - correctness: low; mostly formatting and readability.
+  - latency: lower for test scaffolding edits.
+  - token_count: lower because agents would not need a second exact whitespace repair.

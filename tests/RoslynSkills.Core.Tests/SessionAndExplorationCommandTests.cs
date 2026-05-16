@@ -243,6 +243,57 @@ public sealed class SessionAndExplorationCommandTests
     }
 
     [Fact]
+    public async Task MemberSourceCommand_MissingFocusInLargeMemberCapsSourceAndGuidesNarrowing()
+    {
+        string memberBody = string.Join(Environment.NewLine, Enumerable.Range(1, 240).Select(i => $"        Step{i}();"));
+        string filePath = WriteTempFile(
+            $$"""
+            public class Demo
+            {
+                public void Run()
+                {
+            {{memberBody}}
+                }
+            }
+            """);
+
+        try
+        {
+            MemberSourceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 3,
+                column = 17,
+                mode = "member",
+                focus_text = "MissingMarker",
+                context_lines_before = 0,
+                context_lines_after = 0,
+                max_chars = 200_000,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement member = doc.RootElement.GetProperty("member");
+            Assert.True(member.GetProperty("source_line_count").GetInt32() <= 80);
+            JsonElement source = doc.RootElement.GetProperty("source");
+            Assert.DoesNotContain("Step240", source.GetProperty("text").GetString()!);
+            JsonElement focus = source.GetProperty("focus");
+            Assert.False(focus.GetProperty("matched").GetBoolean());
+            Assert.True(focus.GetProperty("guard_applied").GetBoolean());
+            JsonElement guidance = doc.RootElement.GetProperty("payload_guidance");
+            Assert.True(guidance.GetProperty("focus_not_found").GetBoolean());
+            Assert.Contains("ctx.search_text", guidance.GetProperty("next_steps")[0].GetString());
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task MemberSourceCommand_MemberNameAnchorReturnsUniqueMember()
     {
         string filePath = WriteTempFile(
