@@ -268,7 +268,8 @@ public sealed class MemberSourceCommand : IAgentCommand
                 targetEndColumn,
                 includeTrivia,
                 includeEditTargetText,
-                maxChars),
+                maxChars,
+                focusText),
             ["source"] = includeSourceText
                 ? new
                 {
@@ -382,7 +383,8 @@ public sealed class MemberSourceCommand : IAgentCommand
         int endColumn,
         bool includeTrivia,
         bool includeEditTargetText,
-        int maxChars)
+        int maxChars,
+        string? focusText)
     {
         TextLine line = sourceText.Lines[startLine - 1];
         string preservedLinePrefix = sourceText.ToString(TextSpan.FromBounds(line.Start, targetSpan.Start));
@@ -395,6 +397,10 @@ public sealed class MemberSourceCommand : IAgentCommand
         {
             exactTargetText = exactTargetText[..maxChars];
         }
+        string exactTextGuidance = BuildExactSpanTextGuidance(includeEditTargetText, exactTextTruncated, focusText);
+        string? expectedTextOmittedReason = includeEditTargetText && exactTextTruncated
+            ? "expected_text is omitted because exact_span_text is truncated; do not run replace_span against this whole target without an untruncated expected_text guard."
+            : null;
         object replaceSpanOperation = includeEditTargetText && !exactTextTruncated
             ? new
             {
@@ -411,6 +417,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                 file_path = filePath,
                 span_start = targetSpan.Start,
                 span_length = targetSpan.Length,
+                expected_text_omitted_reason = expectedTextOmittedReason,
                 new_text = "<replacement text beginning exactly at span_start>",
             };
 
@@ -444,17 +451,43 @@ public sealed class MemberSourceCommand : IAgentCommand
                     text = exactTargetText,
                     truncated = exactTextTruncated,
                     character_count = exactTargetCharacterCount,
-                    use_as_replacement_base = "Edit this exact_span_text when constructing replace_span new_text; it matches span_start/span_length and avoids double indentation.",
+                    use_as_replacement_base = exactTextGuidance,
                 }
                 : new
                 {
                     omitted = true,
                     truncated = false,
                     character_count = 0,
-                    use_as_replacement_base = "Re-run ctx.member_source with include_edit_target_text=true when constructing a whole-target replace_span new_text.",
+                    use_as_replacement_base = exactTextGuidance,
                 },
             replace_span_operation = replaceSpanOperation,
         };
+    }
+
+    private static string BuildExactSpanTextGuidance(bool includeEditTargetText, bool exactTextTruncated, string? focusText)
+    {
+        bool hasFocusText = !string.IsNullOrWhiteSpace(focusText);
+        if (includeEditTargetText && exactTextTruncated && hasFocusText)
+        {
+            return "Do not use this truncated exact_span_text as a replace_span replacement base. For a small focused change, use source.text as the exact old_text for edit.replace_text or another exact small edit. For whole-target replace_span, rerun without focus_text and with max_chars high enough that exact_span_text.truncated=false.";
+        }
+
+        if (includeEditTargetText && exactTextTruncated)
+        {
+            return "Do not use this truncated exact_span_text as a replace_span replacement base. Rerun with max_chars high enough that exact_span_text.truncated=false before constructing a whole-target replace_span new_text.";
+        }
+
+        if (includeEditTargetText)
+        {
+            return "Edit this exact_span_text when constructing replace_span new_text; it matches span_start/span_length and avoids double indentation.";
+        }
+
+        if (hasFocusText)
+        {
+            return "For a small focused change, use source.text as the exact old_text for edit.replace_text or another exact small edit. Request include_edit_target_text=true only when constructing a whole-target replace_span.";
+        }
+
+        return "Re-run ctx.member_source with include_edit_target_text=true when constructing a whole-target replace_span new_text.";
     }
 
     private static bool TryParseMode(string modeRaw, out SourceMode mode)

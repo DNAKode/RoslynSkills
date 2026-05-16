@@ -731,3 +731,5 @@ roscli ctx.member_source apps/FrankenTui.Demo.Showcase/ShowcaseInteractiveProgra
 ```
 
 The response includes `source.focus` with matched state and line/column. This keeps Roslyn-native exploration practical for huge members without falling back to `rg`/`Get-Content` just to find the relevant branch.
+
+The follow-up supervised run showed one subtle pitfall: agents may combine `focus_text` with `include_edit_target_text=true`, which can still return a truncated whole-member `exact_span_text` for huge members. The command now marks truncated exact target text as unsafe for whole-target `replace_span`, omits `expected_text` with an explicit reason, and tells agents to use the focused `source.text` for small exact edits or rerun without `focus_text` and with a larger `max_chars` for whole-target replacement.

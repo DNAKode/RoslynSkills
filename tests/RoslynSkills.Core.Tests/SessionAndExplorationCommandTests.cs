@@ -238,6 +238,77 @@ public sealed class SessionAndExplorationCommandTests
     }
 
     [Fact]
+    public async Task MemberSourceCommand_TruncatedFocusedEditTargetWarnsAgainstWholeSpanReplacement()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Demo
+            {
+                public void Run()
+                {
+                    Step1();
+                    Step2();
+                    Step3();
+                    Step4();
+                    Step5();
+                    Step6();
+                    Step7();
+                    Step8();
+                    Step9();
+                    Step10();
+                    ImportantMarker();
+                    Step12();
+                    Step13();
+                    Step14();
+                    Step15();
+                    Step16();
+                    Step17();
+                    Step18();
+                    Step19();
+                    Step20();
+                }
+            }
+            """);
+
+        try
+        {
+            MemberSourceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 3,
+                column = 17,
+                mode = "member",
+                focus_text = "ImportantMarker",
+                context_lines_before = 1,
+                context_lines_after = 1,
+                include_edit_target_text = true,
+                max_chars = 200,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement editTarget = doc.RootElement.GetProperty("edit_target");
+            JsonElement exactSpanText = editTarget.GetProperty("exact_span_text");
+            Assert.True(exactSpanText.GetProperty("truncated").GetBoolean());
+            string guidance = exactSpanText.GetProperty("use_as_replacement_base").GetString()!;
+            Assert.Contains("Do not use this truncated exact_span_text", guidance);
+            Assert.Contains("source.text", guidance);
+            Assert.Contains("without focus_text", guidance);
+
+            JsonElement operation = editTarget.GetProperty("replace_span_operation");
+            Assert.False(operation.TryGetProperty("expected_text", out _));
+            Assert.Contains("expected_text is omitted", operation.GetProperty("expected_text_omitted_reason").GetString());
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task SessionCommands_OpenSetDiffCommitAndClose()
     {
         string filePath = WriteTempFile(
