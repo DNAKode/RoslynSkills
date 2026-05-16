@@ -146,6 +146,7 @@ public sealed class BreadthCommandTests
         await RunProcessAsync("git", root, "init");
         await File.WriteAllTextAsync(Path.Combine(root, "Target.cs"), "public class Target { }");
         await File.WriteAllTextAsync(Path.Combine(root, "notes.md"), "# Notes");
+        await File.WriteAllTextAsync(Path.Combine(root, "Sample.slnx"), "<Solution />");
 
         try
         {
@@ -157,11 +158,16 @@ public sealed class BreadthCommandTests
             Assert.True(result.Ok);
             string json = JsonSerializer.Serialize(result.Data);
             Assert.Contains("\"dirty\":true", json);
-            Assert.Contains("\"total_changed\":2", json);
+            Assert.Contains("\"total_changed\":3", json);
             Assert.Contains("\"csharp_changed\":1", json);
             Assert.Contains("\"path\":\"Target.cs\"", json);
             Assert.Contains("\"category\":\"csharp\"", json);
-            Assert.Contains("ctx.file_outline Target.cs", json);
+            Assert.Contains("workspace.preload Sample.slnx --alias default --require-solution true", json);
+            Assert.Contains("ctx.file_outline Target.cs --member-name-contains", json);
+            Assert.Contains("--max-members 20", json);
+            Assert.Contains("ctx.member_source Target.cs --member-name", json);
+            Assert.Contains("--focus-text", json);
+            Assert.DoesNotContain("--max-members 40", json);
             Assert.DoesNotContain("public class Target", json);
         }
         finally

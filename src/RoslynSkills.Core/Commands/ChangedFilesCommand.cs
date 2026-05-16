@@ -36,18 +36,26 @@ public sealed class ChangedFilesCommand : IAgentCommand
                 new[] { new CommandError("directory_not_found", $"Directory '{requestedRoot}' does not exist.") });
         }
 
-        (int rootExitCode, string rootStdout, string rootStderr) = await RunGitAsync(
-            fullRequestedRoot,
-            ["rev-parse", "--show-toplevel"],
-            cancellationToken).ConfigureAwait(false);
-        if (rootExitCode != 0)
+        string gitRoot;
+        if (Directory.Exists(Path.Combine(fullRequestedRoot, ".git")) || File.Exists(Path.Combine(fullRequestedRoot, ".git")))
         {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("not_git_repository", $"Could not resolve Git root from '{fullRequestedRoot}': {rootStderr.Trim()}") });
+            gitRoot = fullRequestedRoot;
         }
+        else
+        {
+            (int rootExitCode, string rootStdout, string rootStderr) = await RunGitAsync(
+                fullRequestedRoot,
+                ["rev-parse", "--show-toplevel"],
+                cancellationToken).ConfigureAwait(false);
+            if (rootExitCode != 0)
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("not_git_repository", $"Could not resolve Git root from '{fullRequestedRoot}': {rootStderr.Trim()}") });
+            }
 
-        string gitRoot = rootStdout.Trim();
+            gitRoot = rootStdout.Trim();
+        }
         (int statusExitCode, string statusStdout, string statusStderr) = await RunGitAsync(
             gitRoot,
             ["status", "--porcelain=v1"],
@@ -78,7 +86,7 @@ public sealed class ChangedFilesCommand : IAgentCommand
             other_changed = files.Count(file => file.category == "other"),
             files,
             csharp_files = csharpFiles,
-            suggested_next_steps = BuildSuggestedNextSteps(csharpFiles),
+            suggested_next_steps = BuildSuggestedNextSteps(csharpFiles, gitRoot),
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
@@ -117,24 +125,58 @@ public sealed class ChangedFilesCommand : IAgentCommand
             is_csharp: category == "csharp");
     }
 
-    private static string[] BuildSuggestedNextSteps(IReadOnlyList<ChangedFile> csharpFiles)
+    private static string[] BuildSuggestedNextSteps(IReadOnlyList<ChangedFile> csharpFiles, string gitRoot)
     {
-        if (csharpFiles.Count == 0)
+        List<string> steps = new();
+        string? solutionPath = FindPreferredSolutionPath(gitRoot);
+        if (solutionPath is not null)
         {
-            return
-            [
-                "No changed C# files found. Use ctx.search_text/nav.find_symbol to choose a new C# slice before editing.",
-            ];
+            steps.Add($"roscli workspace.preload {QuoteCliPath(solutionPath)} --alias default --require-solution true");
+        }
+        else
+        {
+            steps.Add("Run roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true before broad outlines or diagnostics.");
         }
 
-        string firstPath = csharpFiles[0].path;
-        return
-        [
-            $"roscli ctx.file_outline {firstPath} --max-members 40",
-            $"roscli edit.claim claim {firstPath} --reason <slice-name>",
-            "Use ctx.member_source for focused context before any C# edit; avoid git diff for .cs content reads.",
-        ];
+        if (csharpFiles.Count == 0)
+        {
+            steps.Add("No changed C# files found. Use capped ctx.search_text/nav.find_symbol to choose a new C# slice before editing.");
+            return steps.ToArray();
+        }
+
+        string firstPath = QuoteCliPath(csharpFiles[0].path);
+        steps.Add($"roscli ctx.file_outline {firstPath} --member-name-contains <focused-term> --max-members 20");
+        steps.Add($"roscli ctx.member_source {firstPath} --member-name <unique-member> --focus-text <nearby-text> --context-lines-before 3 --context-lines-after 8");
+        steps.Add($"roscli edit.claim claim {firstPath} --reason <slice-name>");
+        steps.Add("Avoid broad ctx.file_outline --max-members 80/120; filter first, then read focused members.");
+        return steps.ToArray();
     }
+
+    private static string? FindPreferredSolutionPath(string gitRoot)
+    {
+        foreach (string pattern in new[] { "*.slnx", "*.sln" })
+        {
+            string? solutionPath = Directory.EnumerateFiles(gitRoot, pattern, SearchOption.TopDirectoryOnly)
+                .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (solutionPath is not null)
+            {
+                return NormalizeSuggestionPath(Path.GetRelativePath(gitRoot, solutionPath));
+            }
+        }
+
+        return null;
+    }
+
+    private static string QuoteCliPath(string path)
+    {
+        string normalizedPath = NormalizeSuggestionPath(path);
+        return normalizedPath.Any(char.IsWhiteSpace)
+            ? "\"" + normalizedPath.Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
+            : normalizedPath;
+    }
+
+    private static string NormalizeSuggestionPath(string path) => path.Replace('\\', '/');
 
     private static string? GetOptionalTrimmedString(JsonElement input, string propertyName)
     {
@@ -165,6 +207,15 @@ public sealed class ChangedFilesCommand : IAgentCommand
             RedirectStandardError = true,
             UseShellExecute = false,
         };
+
+        startInfo.Environment.Remove("GIT_DIR");
+        startInfo.Environment.Remove("GIT_WORK_TREE");
+        startInfo.Environment.Remove("GIT_INDEX_FILE");
+        string? parentDirectory = Directory.GetParent(workingDirectory)?.FullName;
+        if (!string.IsNullOrWhiteSpace(parentDirectory))
+        {
+            startInfo.Environment["GIT_CEILING_DIRECTORIES"] = parentDirectory;
+        }
 
         foreach (string argument in arguments)
         {

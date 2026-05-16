@@ -846,3 +846,18 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
     - `docs/ROSCLI_WORKSPACE_HOST_PROTOCOL_2026-05-15.md`
     - `tests/RoslynSkills.Core.Tests/WorkspaceHostProcessTests.cs`
     - `tests/RoslynSkills.Core.Tests/WorkspaceHostProtocolContractTests.cs`
+
+## 2026-05-17 - Tiny helper-spacing cleanup after failed Roslyn exact replacement
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.66`
+- Exact reason fallback was required/preferred:
+  - `edit.replace_text` failed to match a whitespace-only span between methods because the hand-authored old_text line-ending/blank-line shape did not match the file. The remaining change was a one-line formatting cleanup after the functional Roslyn edit and tests already succeeded.
+- Roslyn command attempted:
+  - `roscli edit.replace_text --input @<temp-json>`
+- Proposed Roslyn command/option improvement:
+  - Add a whitespace-normalized or blank-line-focused formatting cleanup command, or expose a small `edit.normalize_blank_lines` operation scoped between adjacent members.
+- Expected impact:
+  - correctness: low to medium; reduces manual cleanup after structured edits without broad formatter churn.
+  - latency: lower for small formatting repair loops.
+  - token_count: lower because agents would not need exact invisible whitespace reconstruction.
