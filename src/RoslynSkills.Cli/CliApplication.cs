@@ -1350,7 +1350,9 @@ Workflow:
 
                 method = WorkspaceHostProtocol.Method.WorkspacePreload;
                 workspaceAlias ??= "default";
-                input["workspace_path"] = NormalizeCliPathValue(positional[0]);
+                string useWorkspacePath = NormalizeCliPathValue(positional[0]);
+                repoRoot = InferWorkspaceDaemonRepoRoot(repoRoot, useWorkspacePath);
+                input["workspace_path"] = useWorkspacePath;
                 if (!TryGetBoolOption(options, "--require-solution", defaultValue: true, out bool useRequireSolution, out error, verb))
                 {
                     return false;
@@ -1373,7 +1375,9 @@ Workflow:
 
                 method = WorkspaceHostProtocol.Method.WorkspacePreload;
                 workspaceAlias ??= "default";
-                input["workspace_path"] = NormalizeCliPathValue(positional[0]);
+                string preloadWorkspacePath = NormalizeCliPathValue(positional[0]);
+                repoRoot = InferWorkspaceDaemonRepoRoot(repoRoot, preloadWorkspacePath);
+                input["workspace_path"] = preloadWorkspacePath;
                 if (!TryGetBoolOption(options, "--require-solution", defaultValue: true, out bool preloadRequireSolution, out error, verb))
                 {
                     return false;
@@ -1446,6 +1450,32 @@ Workflow:
             RefreshPolicy: options.TryGetValue("--refresh-policy", out string? refreshPolicy) ? refreshPolicy : null,
             Input: inputElement);
         return true;
+    }
+
+    private static string? InferWorkspaceDaemonRepoRoot(string? explicitRepoRoot, string workspacePath)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitRepoRoot))
+        {
+            return explicitRepoRoot;
+        }
+
+        string fullPath = Path.GetFullPath(workspacePath);
+        string startDirectory = Directory.Exists(fullPath)
+            ? fullPath
+            : Path.GetDirectoryName(fullPath) ?? Directory.GetCurrentDirectory();
+
+        DirectoryInfo? current = new(startDirectory);
+        while (current is not null)
+        {
+            if (Directory.Exists(Path.Combine(current.FullName, ".git")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        return startDirectory;
     }
 
     private static void AddWorkspaceTargetToInput(
@@ -3623,6 +3653,7 @@ Workflow:
                 notes = new[]
                 {
                     "Prefer .sln/.slnx for hot workspace hosts.",
+                    "When --repo-root is omitted, workspace.use/preload infer the daemon root from the target solution/project path, not the caller's current directory.",
                     "Set require_solution=true in benchmark/promotion runs to fail closed if a loose project is resolved.",
                     "Response includes workspace_handle for repeated semantic commands.",
                     "Direct workspace.preload now persists alias=default unless --alias is provided; later daemon-capable commands can auto-route to that hot workspace.",
@@ -3906,6 +3937,7 @@ Workflow:
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
               - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
               - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
+              - workspace.use/preload infer daemon repo root from the target solution/project path unless --repo-root is provided.
               - Daemon-capable semantic commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
               - Set ROSCLI_DAEMON=required and ROSCLI_WORKSPACE_ALIAS=default to fail closed when a hot workspace is required.
               - Recommended first minute:

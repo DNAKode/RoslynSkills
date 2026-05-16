@@ -671,3 +671,9 @@ The `quickstart` and `llmstxt` guidance now include a span-member edit recipe:
 - Validate with file diagnostics and focused build/tests.
 
 This keeps the pit-of-success guidance aligned with the behavior observed in the FrankenTui.NET span trials.
+
+## 2026-05-16 Follow-Up: Cross-Repo Daemon Root Inference
+
+When supervising FrankenTui.NET from the RoslynSkills host pane, `workspace.preload C:\Work\FrankenTui.Net\FrankenTui.Net.sln` initially keyed the daemon to the caller's current repo. That made later `daemon.stop --repo-root C:\Work\FrankenTui.Net` miss the host and risked stale global-tool locks.
+
+`workspace.use` and `workspace.preload` now infer the daemon repo root from the target solution/project path when `--repo-root` is omitted. Explicit `--repo-root` still wins. This keeps cross-repo supervision, alias stores, and daemon lifecycle commands aligned with the workspace being loaded instead of the shell location that launched the command.

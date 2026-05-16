@@ -397,6 +397,39 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public void WorkspacePreload_InferredDaemonRootUsesWorkspaceGitRoot()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-daemon-root-{Guid.NewGuid():N}");
+        string repoRoot = Path.Combine(tempRoot, "TargetRepo");
+        string nestedDir = Path.Combine(repoRoot, "src", "App");
+        string solutionPath = Path.Combine(repoRoot, "Target.slnx");
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(repoRoot, ".git"));
+            Directory.CreateDirectory(nestedDir);
+            File.WriteAllText(solutionPath, string.Empty);
+
+            System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
+                "InferWorkspaceDaemonRepoRoot",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+            string inferred = (string)method.Invoke(null, new object?[] { null, solutionPath })!;
+            string explicitRoot = (string)method.Invoke(null, new object?[] { nestedDir, solutionPath })!;
+
+            Assert.Equal(Path.GetFullPath(repoRoot), inferred);
+            Assert.Equal(nestedDir, explicitRoot);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task WorkspaceStatus_WhenDaemonUnavailable_ReturnsDaemonUnavailable()
     {
         string repoRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-daemon-missing-{Guid.NewGuid():N}");
