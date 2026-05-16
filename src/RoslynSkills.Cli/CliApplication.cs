@@ -4057,7 +4057,7 @@ Workflow:
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
-            sb.AppendLine("Continue one narrow, testable C# slice. Use roscli for .cs context and edits: edit.claim list, ctx.file_outline, ctx.member_source, then a Roslyn edit command if mutation is needed. Report any .cs fallback explicitly.");
+            sb.AppendLine("Continue one narrow, testable C# slice. Use roscli for .cs context and edits: edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source, then a Roslyn edit command if mutation is needed. Report any .cs fallback explicitly.");
             sb.AppendLine("```");
             sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
         }

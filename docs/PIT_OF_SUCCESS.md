@@ -33,7 +33,7 @@ This gives command discovery, a hot solution workspace, member-scoped source con
 
 `roscli csharp-start` is the compact markdown version intended for fresh agents. Use it when a prompt can only point to one roscli onboarding command.
 
-For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a two-turn protocol. First require the agent to run only `roscli csharp-start` and report its first two headings. Assign the C# slice only after the transcript shows the command actually ran; prose promises are not enough.
+For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a two-turn protocol. First require the agent to run only `roscli csharp-start` and report its first two headings. Assign the C# slice only after the transcript shows the command actually ran; prose promises are not enough. Turn 2 should preload the solution with `workspace.preload` before `ctx.file_outline` or `ctx.member_source`.
 
 For `.cs` orientation, try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
 
