@@ -1847,6 +1847,69 @@ public sealed class CliApplicationTests
         }
     }
 
+    [Fact]
+    public async Task BatchExactEdit_AmbiguousTextFailureIncludesRecoveryHint()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-batch-exact-ambiguous-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public int A => 1;
+                    public int B => 1;
+                }
+                """);
+
+            string input = JsonSerializer.Serialize(new
+            {
+                file_path = filePath,
+                operations = new object[]
+                {
+                    new
+                    {
+                        kind = "replace_text",
+                        old_text = "=> 1",
+                        new_text = "=> 10",
+                    },
+                },
+                apply = true,
+                atomic = true,
+            });
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+            int exitCode = await app.RunAsync(
+                new[] { "--no-daemon", "run", "edit.batch_exact", "--input", input },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            string content = await File.ReadAllTextAsync(filePath);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("old_text_ambiguous", output);
+            Assert.Contains("recovery_hint", output);
+            Assert.Contains("ctx.member_source", output);
+            Assert.Contains("replace_span", output);
+            Assert.Contains("public int A => 1;", content);
+            Assert.Contains("public int B => 1;", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("edit.replace_text")]
     [InlineData("edit.insert_text")]

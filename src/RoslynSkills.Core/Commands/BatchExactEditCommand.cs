@@ -381,7 +381,50 @@ public sealed class BatchExactEditCommand : IAgentCommand
             match_count = matchCount,
             changed,
             error,
+            recovery_hint = BuildExactTextRecoveryHint(error, kind, matchCount),
         };
+
+    private static object? BuildExactTextRecoveryHint(CommandError? error, string kind, int matchCount)
+    {
+        if (error is null)
+        {
+            return null;
+        }
+
+        if (string.Equals(error.Code, "old_text_ambiguous", StringComparison.Ordinal) ||
+            string.Equals(error.Code, "anchor_text_ambiguous", StringComparison.Ordinal))
+        {
+            return new
+            {
+                problem = "text matched multiple locations",
+                match_count = matchCount,
+                preferred_next_step = "Use ctx.member_source on a precise line/column anchor and prefer edit.batch_exact kind=replace_span with expected_text when replacing a known member/span.",
+                alternatives = new[]
+                {
+                    "Make old_text/anchor_text include more unique surrounding context.",
+                    "Use replace_all=true only when every match should change.",
+                },
+            };
+        }
+
+        if (string.Equals(error.Code, "old_text_not_found", StringComparison.Ordinal) ||
+            string.Equals(error.Code, "anchor_text_not_found", StringComparison.Ordinal))
+        {
+            return new
+            {
+                problem = "text did not match current file content",
+                match_count = matchCount,
+                preferred_next_step = "Re-read the target with ctx.member_source or ctx.search_text before retrying; the file may have drifted.",
+                alternatives = new[]
+                {
+                    "Use replace_span with expected_text from an untruncated ctx.member_source edit_target.",
+                    "Refresh the hot workspace if a prior edit succeeded in this file.",
+                },
+            };
+        }
+
+        return null;
+    }
 
     private static object BuildSpanOperationData(
         int index,

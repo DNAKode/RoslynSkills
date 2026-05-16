@@ -3373,6 +3373,7 @@ Workflow:
                     "Prefer replace_span with ctx.member_source Data.edit_target spans for large member replacements to avoid copying fragile multiline old_text.",
                     "When building replace_span new_text from ctx.member_source, start from edit_target.exact_span_text.text and do not duplicate edit_target.trivia.preserved_line_prefix_text.",
                     "Atomic apply means any operation failure prevents all file writes; response still reports the failed operation.",
+                    "If old_text or anchor_text is ambiguous, inspect operation_results[].recovery_hint before retrying; it points to ctx.member_source/replace_span when span anchoring is safer.",
                     "When a preloaded hot workspace tracks changed files, file_results[].hot_workspace_refresh reports incremental updates.",
                     "Prefer this over chaining several edit.replace_text commands in one shell block.",
                 },

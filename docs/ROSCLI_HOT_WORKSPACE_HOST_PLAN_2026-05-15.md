@@ -733,3 +733,7 @@ roscli ctx.member_source apps/FrankenTui.Demo.Showcase/ShowcaseInteractiveProgra
 The response includes `source.focus` with matched state and line/column. This keeps Roslyn-native exploration practical for huge members without falling back to `rg`/`Get-Content` just to find the relevant branch.
 
 The follow-up supervised run showed one subtle pitfall: focused exploration still inherited the normal `include_edit_target_text=true` default and could return a truncated whole-member `exact_span_text` for huge members. When `focus_text` is supplied, `include_edit_target_text` now defaults to false. If agents explicitly request target text and it truncates, the command marks it unsafe for whole-target `replace_span`, omits `expected_text` with an explicit reason, and tells agents to use the focused `source.text` for small exact edits or rerun without `focus_text` and with a larger `max_chars` for whole-target replacement.
+
+## 2026-05-16 Follow-Up: Exact Edit Recovery Hints
+
+The `.39` supervised round showed `edit.batch_exact` doing the right safety thing on ambiguous `old_text`: atomic mode wrote nothing. The retry still required agent inference. `edit.batch_exact` now includes `operation_results[].recovery_hint` for ambiguous or missing exact text/anchors, steering agents toward `ctx.member_source` and `replace_span` with `expected_text` when span anchoring is safer than making larger copied `old_text` snippets.
