@@ -3766,7 +3766,8 @@ Workflow:
                 notes = new[]
                 {
                     "For huge test files, pass member_name_contains to return only matching member outlines and their containing type.",
-                    "Use returned line/column anchors with ctx.member_source; member_name is not accepted by ctx.member_source.",
+                    "Use ctx.member_source --member-name when the returned member name is unique; use returned line/column anchors only when names are ambiguous.",
+                    "Keep max_members low during orientation; if the outline is still large, narrow member_name_contains before reading source.",
                 },
             };
         }
@@ -3783,6 +3784,7 @@ Workflow:
                 {
                     "Scope is mandatory: set file_path, roots, or workspace_path.",
                     "Use mode=regex for advanced matching; invalid regex patterns fail fast.",
+                    "For orientation, start with --max-results 20 --context-lines 0. If matches are numerous, switch to ctx.file_outline or ctx.member_source focus_text instead of repeating broad searches.",
                 },
             };
         }
@@ -4066,7 +4068,7 @@ Workflow:
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
-            sb.AppendLine($"Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, workspace.preload {preloadTarget} --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command, then the edit command if mutation is needed. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report any .cs fallback explicitly.");
+            sb.AppendLine($"Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, workspace.preload {preloadTarget} --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows, describe-command before the first Roslyn edit command, then the edit command if mutation is needed. If a broad ctx.search_text returns many matches, stop broad searching and narrow with member_name_contains or member_source focus_text. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report any .cs fallback explicitly.");
             sb.AppendLine("```");
             sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
         }
@@ -4086,9 +4088,10 @@ Workflow:
             : "Replace file paths, member names, and focus text with the current repo targets.");
         sb.AppendLine();
         sb.AppendLine("## Source Context");
-        sb.AppendLine("- Use `ctx.file_outline` to find compact member anchors in large files.");
+        sb.AppendLine("- Use `ctx.file_outline --member-name-contains <term> --max-members 20` to find compact member anchors in large files.");
         sb.AppendLine("- Use `ctx.member_source --member-name <name>` when a member name is unique; this avoids stale line/column anchors.");
-        sb.AppendLine("- Add `--focus-text <literal>` plus small context windows for huge members instead of `rg`/`Get-Content`.");
+        sb.AppendLine("- Add `--focus-text <literal>` plus small context windows, usually 3-8 lines, for huge members instead of repeated broad search.");
+        sb.AppendLine("- Keep `ctx.search_text` scoped and capped (`--max-results 20 --context-lines 0` first); if it returns many matches, switch to outline/member_source rather than searching again.");
         sb.AppendLine("- Add `--include-edit-target-text true` only when constructing a whole-member/body span replacement.");
         sb.AppendLine("- For whole-target span edits, build `new_text` from `Data.edit_target.exact_span_text.text`, not from line-oriented `source.text`.");
         sb.AppendLine();
@@ -4105,7 +4108,8 @@ Workflow:
         sb.AppendLine();
         sb.AppendLine("## Multi-Agent Coordination");
         sb.AppendLine("- Each agent/subagent checks `edit.claim list` before `.cs` mutation.");
-        sb.AppendLine("- Claim every file to be changed before editing; use distinct `--owner` values.");
+        sb.AppendLine("- Claim every file to be changed before editing; use distinct stable `--owner` values such as `agent-ui-quake` or `agent-tests-quake`.");
+        sb.AppendLine("- When spawning subagents, assign disjoint claimed files up front; if the file set is unknown, each subagent claims before its first edit and reports the claim id.");
         sb.AppendLine("- Do not force through another active claim unless a human/operator decided ownership changed.");
         sb.AppendLine("- Prefer disjoint file ownership for parallel agents; for shared files, serialize edits through one owner.");
         sb.AppendLine("- Use guarded edits (`edit.replace_in_member`, `edit.batch_exact expected_text`, or `session.commit --require-disk-unchanged true`) so stale context fails closed.");

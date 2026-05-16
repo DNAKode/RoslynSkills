@@ -33,11 +33,11 @@ This gives command discovery, a hot solution workspace, member-scoped source con
 
 `roscli csharp-start` is the compact markdown version intended for fresh agents. Use it when a prompt can only point to one roscli onboarding command.
 
-For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a two-turn protocol. First require the agent to run only `roscli csharp-start` and report its first two headings. Assign the C# slice only after the transcript shows the command actually ran; prose promises are not enough. Turn 2 should preload the solution with `workspace.preload` before `ctx.file_outline` or `ctx.member_source`, should run `describe-command` before the first Roslyn edit command, and should use `ctx.search_text` or `ctx.member_source` instead of `rg` for `.cs` closeout anchors.
+For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a two-turn protocol. First require the agent to run only `roscli csharp-start` and report its first two headings. Assign the C# slice only after the transcript shows the command actually ran; prose promises are not enough. Turn 2 should preload the solution with `workspace.preload` before `ctx.file_outline` or `ctx.member_source`, should run `describe-command` before the first Roslyn edit command, should keep broad `ctx.search_text` capped and switch to focused outline/member-source reads after high-match results, and should use `ctx.search_text` or `ctx.member_source` instead of `rg` for `.cs` closeout anchors.
 
 When the solution filename is known, prefer `roscli csharp-start --supervised --solution <solution.sln|.slnx>` so Turn 2 contains a copyable `workspace.preload` command instead of a placeholder.
 
-For `.cs` orientation, try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
+For `.cs` orientation, try `ctx.file_outline --member-name-contains <term> --max-members 20`, `ctx.member_source --member-name <name> --focus-text <literal>`, capped `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
 
 ## Command Tiers
 
@@ -105,7 +105,7 @@ dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~Focuse
 roscli edit.claim release <claim_id>
 ```
 
-For multiple subagents, use distinct `--owner` names and disjoint file claims. Serialize shared-file work through one owner. Prefer guarded mutations: `edit.replace_in_member`, `edit.batch_exact` with `expected_text`, or `session.commit --require-disk-unchanged true`.
+For multiple subagents, use distinct stable `--owner` names and disjoint file claims. Assign known file ownership before spawning; if a subagent discovers a file later, it must claim before its first edit and report the claim id. Serialize shared-file work through one owner. Prefer guarded mutations: `edit.replace_in_member`, `edit.batch_exact` with `expected_text`, or `session.commit --require-disk-unchanged true`.
 
 ### 6) Workspace-backed directory triage
 
@@ -149,6 +149,7 @@ Workflow:
 1) before reading or editing .cs files, run "roscli --version" and "roscli csharp-start".
 2) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
 3) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
+3a) keep broad search capped; if "ctx.search_text" returns many matches, narrow with "ctx.file_outline --member-name-contains" or "ctx.member_source --focus-text" instead of repeating broad searches.
 4) if argument shape is unclear, run "roscli describe-command <command-id>".
 5) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
 6) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.

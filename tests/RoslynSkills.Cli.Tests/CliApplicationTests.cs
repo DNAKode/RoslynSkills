@@ -2341,10 +2341,12 @@ public sealed class CliApplicationTests
         Assert.Contains("workspace.preload MySolution.slnx --alias default --require-solution true", output);
         Assert.Contains("ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text", output);
         Assert.Contains("Data.edit_target.exact_span_text.text", output);
+        Assert.Contains("--max-results 20 --context-lines 0", output);
         Assert.Contains("edit.claim list", output);
         Assert.Contains("edit.replace_in_member tests/MyTests.cs --member-name TargetTest", output);
         Assert.Contains("Multi-Agent Coordination", output);
-        Assert.Contains("distinct `--owner` values", output);
+        Assert.Contains("distinct stable `--owner` values", output);
+        Assert.Contains("each subagent claims before its first edit", output);
         Assert.Contains("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads", output);
     }
 
@@ -2367,7 +2369,8 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
-        Assert.Contains("edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command", output);
+        Assert.Contains("edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows", output);
+        Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
     }
