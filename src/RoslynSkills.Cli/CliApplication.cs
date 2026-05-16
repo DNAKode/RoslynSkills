@@ -3096,8 +3096,11 @@ Workflow:
             int matchCount = TryGetInt(element, "match_count", out int matches) ? matches : -1;
             bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
             string action = wrote ? "written" : "dry-run";
+            string lineSuffix = TryGetFirstMatchLine(element, out int line)
+                ? $", line={line}"
+                : string.Empty;
             return matchCount >= 0
-                ? $"{file}:{member}, matches={matchCount}, {action}"
+                ? $"{file}:{member}, matches={matchCount}{lineSuffix}, {action}"
                 : $"{file}:{member}, {action}";
         }
 
@@ -3246,6 +3249,21 @@ Workflow:
         }
 
         return string.Empty;
+    }
+
+    private static bool TryGetFirstMatchLine(JsonElement element, out int line)
+    {
+        line = 0;
+        if (element.ValueKind != JsonValueKind.Object ||
+            !element.TryGetProperty("matches", out JsonElement matches) ||
+            matches.ValueKind != JsonValueKind.Array ||
+            matches.GetArrayLength() == 0)
+        {
+            return false;
+        }
+
+        JsonElement first = matches[0];
+        return TryGetInt(first, "line", out line) && line > 0;
     }
 
     private static bool TryGetObject(JsonElement element, string propertyName, out JsonElement value)
@@ -3410,6 +3428,7 @@ Workflow:
                     "Prefer member_name after ctx.file_outline/ctx.member_source identifies a unique member; use line+column only when names are ambiguous.",
                     "Defaults: mode=member, apply=true, replace_all=false, include_diagnostics=true.",
                     "Matching is confined to the selected member/body and tolerates LF snippets against CRLF files.",
+                    "Successful responses include matches[] with line/column/offset/length; the CLI preview shows the first matched line.",
                     "If old_text is missing or ambiguous inside the member, re-read with ctx.member_source --member-name <name> --focus-text <nearby text> before retrying.",
                     "For whole-member replacement, keep using ctx.member_source include_edit_target_text=true plus edit.batch_exact replace_span with expected_text.",
                 },

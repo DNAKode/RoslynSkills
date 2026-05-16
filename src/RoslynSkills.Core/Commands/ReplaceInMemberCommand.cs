@@ -105,6 +105,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         string originalContent = analysis.SourceText.ToString();
         string targetText = originalContent.Substring(targetSpan.Start, targetSpan.Length);
         (int MatchCount, string EffectiveOldText, string MatchMode) match = ResolveOldText(targetText, oldText);
+        MatchLocation[] matchLocations = GetMatchLocations(analysis.SourceText, targetSpan.Start, targetText, match.EffectiveOldText);
         if (match.MatchCount == 0)
         {
             CommandError error = new("old_text_not_found", "The supplied old_text was not found in the selected member.");
@@ -163,6 +164,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
             match_count = match.MatchCount,
             match_scope = "member",
             match_mode = match.MatchMode,
+            matches = matchLocations,
             changed,
             wrote_file = wroteFile,
             old_text_character_count = oldText.Length,
@@ -387,6 +389,29 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         return (0, oldText, "none");
     }
 
+    private static MatchLocation[] GetMatchLocations(SourceText sourceText, int targetStart, string targetText, string oldText)
+    {
+        if (string.IsNullOrEmpty(oldText))
+        {
+            return Array.Empty<MatchLocation>();
+        }
+
+        List<MatchLocation> matches = new();
+        int index = 0;
+        while ((index = targetText.IndexOf(oldText, index, StringComparison.Ordinal)) >= 0)
+        {
+            LinePosition position = sourceText.Lines.GetLinePosition(targetStart + index);
+            matches.Add(new MatchLocation(
+                line: position.Line + 1,
+                column: position.Character + 1,
+                target_offset: index,
+                length: oldText.Length));
+            index += oldText.Length;
+        }
+
+        return matches.ToArray();
+    }
+
     private static string NormalizeLineEndingsForTarget(string value, string targetText)
     {
         string lineEnding = targetText.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
@@ -424,4 +449,6 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
     private static bool IsValidMode(string? mode)
         => string.Equals(mode, "member", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(mode, "body", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record MatchLocation(int line, int column, int target_offset, int length);
 }

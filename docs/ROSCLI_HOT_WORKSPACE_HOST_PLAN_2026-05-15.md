@@ -765,3 +765,5 @@ roscli edit.replace_in_member tests/FrankenTui.Tests.Headless/ShowcaseShellTests
 ```
 
 The command anchors to a unique `member_name` or line/column, confines exact matching to the selected member/body, tolerates LF snippets against CRLF files, refreshes hot workspaces after writes, and returns diagnostics. `ctx.member_source.edit_workflow` now recommends it for small scoped edits, while keeping `edit.batch_exact replace_span` as the preferred path for whole-member or multi-file guarded edits. The multi-agent rule remains claim-first: acquire `edit.claim` before mutation and release after validation.
+
+The first `.44` supervised round confirmed the command removed the PowerShell span-rewrite step: the agent used `edit.replace_in_member` for a scoped status-toggle assertion expansion, got one match, refreshed the hot workspace, and passed the focused test without C# text fallback. The next audit need was faster human/agent verification of where the scoped exact match landed. `edit.replace_in_member` now returns `matches[]` with line, column, target offset, and length, and the CLI preview includes the first matched line (for example `line=3447`) when available.

@@ -1655,6 +1655,67 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_ReplaceInMember_ReportsMatchLineInPreview()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-member-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public void First()
+                    {
+                        var value = 1;
+                    }
+
+                    public void Second()
+                    {
+                        var value = 1;
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.replace_in_member",
+                    filePath,
+                    "--member-name", "Second",
+                    "--old-text", "var value = 1;",
+                    "--new-text", "var value = 2;",
+                    "--include-diagnostics", "false",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"edit.replace_in_member\"", output);
+            Assert.Contains("\"matches\": [", output);
+            Assert.Contains("\"line\":", output);
+            Assert.Contains("line=", output);
+            Assert.Contains("var value = 2;", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_ReplaceText_RefreshesHotWorkspaceAfterWrite()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-refresh-{Guid.NewGuid():N}");

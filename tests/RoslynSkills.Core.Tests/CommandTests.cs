@@ -841,6 +841,9 @@ public sealed class CommandTests
             Assert.Equal("Second", doc.RootElement.GetProperty("member").GetProperty("member_name").GetString());
             Assert.Equal(1, doc.RootElement.GetProperty("match_count").GetInt32());
             Assert.Equal("member", doc.RootElement.GetProperty("match_scope").GetString());
+            JsonElement firstMatch = doc.RootElement.GetProperty("matches")[0];
+            Assert.True(firstMatch.GetProperty("line").GetInt32() > 0);
+            Assert.True(firstMatch.GetProperty("column").GetInt32() > 0);
 
             string updated = await File.ReadAllTextAsync(filePath);
             Assert.Contains("public void First()", updated);
