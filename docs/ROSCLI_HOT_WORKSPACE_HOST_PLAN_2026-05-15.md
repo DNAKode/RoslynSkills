@@ -616,3 +616,20 @@ The fix is to make exact write commands update any matching in-process hot works
 This is intentionally limited to source-text writes. Structural changes such as project files, solution files, generated source configuration, and package references still need explicit refresh/reload semantics.
 
 Remaining workflow issue: agents currently batch several separate exact edit commands in one shell block, which can hide a failed first edit behind later successes. The next editing ergonomics improvement should be a multi-operation exact-edit command with per-operation results, optional fail-fast behavior, and atomic apply where practical.
+
+## 2026-05-16 Follow-Up: Batch Exact Edits
+
+The next FrankenTui.NET supervised run confirmed that `.27` fixed stale hot context for successful exact edits: `edit.replace_text` routed through the hot daemon, refreshed the matching workspace with `incremental_document_update`, and the next `ctx.member_source` saw the edited source.
+
+The same run also confirmed that prompt guidance alone is insufficient to prevent command batching. The agent still executed two exact edits in one shell block; the first failed while the second succeeded, and the visible summary emphasized the later success. After further exact-match churn, the agent started issuing dummy `old_text` probes, which is a poor workflow.
+
+`edit.batch_exact` addresses that failure class:
+
+- `operations[]` supports `replace_text` and `insert_text`.
+- A top-level `file_path` can apply to all operations, or each operation can specify its own file.
+- Defaults are `apply=true`, `atomic=true`, `continue_on_error=false`, and `include_diagnostics=true`.
+- Each operation reports its own `ok`, `match_count`, and error.
+- Atomic mode prevents all writes if any operation fails.
+- File results include one diagnostics pass and `hot_workspace_refresh` per changed file.
+
+Use this command when an agent would otherwise chain multiple `edit.replace_text` / `edit.insert_text` calls in one shell block. Keep single exact edits on the simpler commands.

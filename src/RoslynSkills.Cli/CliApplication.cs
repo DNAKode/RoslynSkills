@@ -713,6 +713,7 @@ Workflow:
             "query.batch" or
             "edit.replace_text" or
             "edit.insert_text" or
+            "edit.batch_exact" or
             "edit.rename_symbol" or
             "edit.change_signature";
 
@@ -2977,6 +2978,21 @@ Workflow:
                 : $"{file}, {position}, {action}";
         }
 
+        if (string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
+        {
+            int total = TryGetInt(element, "total_operations", out int totalOperations) ? totalOperations : -1;
+            int executed = TryGetInt(element, "executed_operations", out int executedOperations) ? executedOperations : -1;
+            int succeeded = TryGetInt(element, "succeeded_operations", out int succeededOperations) ? succeededOperations : -1;
+            int failed = TryGetInt(element, "failed_operations", out int failedOperations) ? failedOperations : -1;
+            int wroteFiles = TryGetInt(element, "wrote_file_count", out int wroteFileCount) ? wroteFileCount : -1;
+            bool skippedApply = TryGetBool(element, "skipped_apply_due_to_errors", out bool skipped) && skipped;
+            if (total >= 0)
+            {
+                string summary = $"operations={Math.Max(executed, 0)}/{total}, ok={Math.Max(succeeded, 0)}, failed={Math.Max(failed, 0)}, wrote_files={Math.Max(wroteFiles, 0)}";
+                return skippedApply ? $"{summary}, atomic-skip" : summary;
+            }
+        }
+
         if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
         {
             int total = TryGetInt(element, "total", out int totalDiagnostics) ? totalDiagnostics : -1;
@@ -3237,6 +3253,27 @@ Workflow:
                     "Fails if anchor_text is missing or ambiguous; make anchor_text more specific instead of falling back to patching.",
                     "For multiline insert_text, prefer --input-stdin JSON to avoid shell quoting issues.",
                     "This command exists because agents often need to add one evidence field or assertion after a known line.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "run edit.batch_exact --input-stdin",
+                run = "run edit.batch_exact --input '{\"file_path\":\"src/MyFile.cs\",\"operations\":[{\"kind\":\"replace_text\",\"old_text\":\"old\",\"new_text\":\"new\"},{\"kind\":\"insert_text\",\"anchor_text\":\"new\",\"insert_text\":\" suffix\",\"position\":\"after\"}],\"atomic\":true,\"apply\":true}'",
+                required_properties = new[] { "operations" },
+                optional_properties = new[] { "file_path", "apply", "atomic", "continue_on_error", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle" },
+                notes = new[]
+                {
+                    "Use after edit.claim when you need multiple exact replace/insert edits and want one per-operation report.",
+                    "Defaults: apply=true, atomic=true, continue_on_error=false, include_diagnostics=true.",
+                    "Each operation may specify file_path, or use top-level file_path for all operations.",
+                    "Operation kinds: replace_text uses old_text/new_text/replace_all; insert_text uses anchor_text/insert_text/position.",
+                    "Atomic apply means any operation failure prevents all file writes; response still reports the failed operation.",
+                    "When a preloaded hot workspace tracks changed files, file_results[].hot_workspace_refresh reports incremental updates.",
+                    "Prefer this over chaining several edit.replace_text commands in one shell block.",
                 },
             };
         }

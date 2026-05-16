@@ -53,6 +53,7 @@ public sealed class CliApplicationTests
         Assert.Contains("edit.create_file", output);
         Assert.Contains("edit.replace_text", output);
         Assert.Contains("edit.insert_text", output);
+        Assert.Contains("edit.batch_exact", output);
         Assert.Contains("edit.transaction", output);
         Assert.Contains("edit.claim", output);
         Assert.Contains("repair.propose_from_diagnostics", output);
@@ -1511,9 +1512,145 @@ public sealed class CliApplicationTests
         }
     }
 
+    [Fact]
+    public async Task BatchExactEdit_AppliesSequentialReplaceAndInsert()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-batch-exact-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public string Title => "Help";
+                }
+                """);
+
+            string input = JsonSerializer.Serialize(new
+            {
+                file_path = filePath,
+                operations = new object[]
+                {
+                    new
+                    {
+                        kind = "replace_text",
+                        old_text = "\"Help\"",
+                        new_text = "BuildTitle()",
+                    },
+                    new
+                    {
+                        kind = "insert_text",
+                        anchor_text = "    public string Title => BuildTitle();",
+                        insert_text = "\n\n    private static string BuildTitle() => \"Help\";",
+                        position = "after",
+                    },
+                },
+                apply = true,
+            });
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+            int exitCode = await app.RunAsync(
+                new[] { "--no-daemon", "run", "edit.batch_exact", "--input", input },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            string content = await File.ReadAllTextAsync(filePath);
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"succeeded_operations\": 2", output);
+            Assert.Contains("\"wrote_file_count\": 1", output);
+            Assert.Contains("operations=2/2, ok=2, failed=0, wrote_files=1", output);
+            Assert.Contains("public string Title => BuildTitle();", content);
+            Assert.Contains("private static string BuildTitle() => \"Help\";", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task BatchExactEdit_AtomicFailureDoesNotWritePartialChanges()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-batch-exact-atomic-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public int A => 1;
+                    public int B => 2;
+                }
+                """);
+
+            string input = JsonSerializer.Serialize(new
+            {
+                file_path = filePath,
+                operations = new object[]
+                {
+                    new
+                    {
+                        kind = "replace_text",
+                        old_text = "=> 1",
+                        new_text = "=> 10",
+                    },
+                    new
+                    {
+                        kind = "replace_text",
+                        old_text = "missing text",
+                        new_text = "never written",
+                    },
+                },
+                apply = true,
+                atomic = true,
+            });
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+            int exitCode = await app.RunAsync(
+                new[] { "--no-daemon", "run", "edit.batch_exact", "--input", input },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            string content = await File.ReadAllTextAsync(filePath);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("\"failed_operations\": 1", output);
+            Assert.Contains("\"skipped_apply_due_to_errors\": true", output);
+            Assert.Contains("old_text_not_found", output);
+            Assert.Contains("public int A => 1;", content);
+            Assert.DoesNotContain("=> 10", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("edit.replace_text")]
     [InlineData("edit.insert_text")]
+    [InlineData("edit.batch_exact")]
     public void ExactEditBridgeCommands_AreDaemonCapable(string commandId)
     {
         System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
