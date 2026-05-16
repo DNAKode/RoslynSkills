@@ -2242,6 +2242,27 @@ public sealed class CliApplicationTests
         Assert.Contains("replace_all", output);
     }
 
+
+    [Fact]
+    public async Task DescribeCommand_ReplaceInMember_IncludesSameMemberGuidance()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "describe-command", "edit.replace_in_member" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("edit.replace_in_member <file-path>", output);
+        Assert.Contains("same member", output);
+        Assert.Contains("do not run parallel edit commands", output);
+    }
+
     [Fact]
     public async Task DirectCommand_InsertText_AcceptsAnchorShorthand()
     {
@@ -2468,6 +2489,8 @@ public sealed class CliApplicationTests
         Assert.Contains("Multi-Agent Coordination", output);
         Assert.Contains("distinct stable `--owner` values", output);
         Assert.Contains("each subagent claims before its first edit", output);
+        Assert.Contains("same-member multi-edit", output);
+        Assert.Contains("Do not run parallel edit commands against the same member", output);
         Assert.Contains("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads", output);
     }
 

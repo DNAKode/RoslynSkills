@@ -3534,6 +3534,7 @@ Workflow:
                     "Matching is confined to the selected member/body and tolerates LF snippets against CRLF files.",
                     "Successful responses include matches[] with line/column/offset/length/first_changed_offset/first_changed_line_delta/first_changed_column_delta/old_change_line/old_change_column/new_change_line/new_change_column/old_change_preview/new_change_preview/text_preview/new_text_preview; increase preview_chars when auditing long assertion insertions. If truncation is still required, previews bias toward the first changed character.",
                     "If old_text is missing or ambiguous inside the member, re-read with ctx.member_source --member-name <name> --focus-text <nearby text> before retrying.",
+                    "If several edits target the same member, combine them into one edit.replace_in_member old/new block or one edit.batch_exact replace_span operation after a fresh ctx.member_source read; do not run parallel edit commands against stale member context.",
                     "For whole-member replacement, keep using ctx.member_source include_edit_target_text=true plus edit.batch_exact replace_span with expected_text.",
                 },
             };
@@ -4179,7 +4180,7 @@ Workflow:
         sb.AppendLine("roscli edit.claim release <claim_id>");
         sb.AppendLine("```");
         sb.AppendLine();
-        sb.AppendLine("Use `edit.replace_in_member` for small exact changes inside one member. Use `edit.batch_exact` with `replace_span` and `expected_text` for coordinated whole-member or multi-file edits. Use `edit.insert_text` for exact-anchor insertions.");
+        sb.AppendLine("Use `edit.replace_in_member` for small exact changes inside one member. Use `edit.batch_exact` with `replace_span` and `expected_text` for coordinated whole-member, same-member multi-edit, or multi-file edits. Do not run parallel edit commands against the same member from an older `ctx.member_source` read. Use `edit.insert_text` for exact-anchor insertions.");
         sb.AppendLine();
         sb.AppendLine("## Multi-Agent Coordination");
         sb.AppendLine("- Each agent/subagent checks `edit.claim list` before `.cs` mutation.");

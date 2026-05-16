@@ -348,6 +348,7 @@ public sealed class MemberSourceCommand : IAgentCommand
         return new
         {
             multi_agent_rule = "Before mutating this file/member, reserve it with edit.claim; release the claim after validation.",
+            same_member_multi_edit_rule = "If more than one change targets this same member, combine the changes into one edit.replace_in_member old/new block or one edit.batch_exact replace_span operation; do not run parallel edit commands against stale member reads.",
             claim_example = $"edit.claim claim {filePath} --reason edit-{memberName}",
             target = new
             {
