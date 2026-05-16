@@ -1855,7 +1855,11 @@ Workflow:
         if (string.Equals(commandId, "ctx.search_text", StringComparison.OrdinalIgnoreCase))
         {
             TryPromoteOptionToPositional(options, "pattern", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "text", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "query", ref positionalArgs, 0);
             TryPromoteOptionToPositional(options, "root", ref positionalArgs, 1);
+            TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 1);
+            TryPromoteOptionToPositional(options, "path", ref positionalArgs, 1);
         }
 
         if (string.Equals(commandId, "edit.claim", StringComparison.OrdinalIgnoreCase))
@@ -3790,13 +3794,14 @@ Workflow:
         {
             return new
             {
-                direct = "ctx.search_text <pattern> [root-or-file] [--option value ...]",
+                direct = "ctx.search_text <pattern> [root-or-file] [--option value ...] OR ctx.search_text --file-path <file> --text <pattern>",
                 run = "run ctx.search_text --input '{\"patterns\":[\"RemoteUserAction\",\"ReplicationUpdate\"],\"mode\":\"literal\",\"roots\":[\"src\"],\"max_results\":200}'",
                 required_properties = new[] { "pattern|patterns", "file_path|roots|workspace_path" },
-                optional_properties = new[] { "mode", "case_sensitive", "include_globs", "exclude_globs", "max_results", "max_files", "context_lines", "brief" },
+                optional_properties = new[] { "text", "query", "root", "path", "mode", "case_sensitive", "include_globs", "exclude_globs", "max_results", "max_files", "context_lines", "brief" },
                 notes = new[]
                 {
                     "Scope is mandatory: set file_path, roots, or workspace_path.",
+                    "Direct CLI aliases: --text/--query map to pattern; --file-path/--path map to file scope; --root maps to root scope.",
                     "Use mode=regex for advanced matching; invalid regex patterns fail fast.",
                     "For orientation, start with --max-results 20 --context-lines 0. If matches are numerous, switch to ctx.file_outline or ctx.member_source focus_text instead of repeating broad searches.",
                 },

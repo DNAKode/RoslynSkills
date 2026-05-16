@@ -37,7 +37,7 @@ For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a t
 
 When the solution filename is known, prefer `roscli csharp-start --supervised --solution <solution.sln|.slnx>` so Turn 2 contains a copyable `workspace.preload` command instead of a placeholder.
 
-For `.cs` orientation, try `ctx.file_outline --member-name-contains <term> --max-members 20`, `ctx.member_source --member-name <name> --focus-text <literal>`, capped `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
+For `.cs` orientation, try `ctx.file_outline --member-name-contains <term> --max-members 20`, `ctx.member_source --member-name <name> --focus-text <literal>`, capped `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. `ctx.search_text` accepts both positional scope and direct aliases such as `roscli ctx.search_text --file-path src/MyFile.cs --text RemoteUserAction --max-results 20 --context-lines 0`. If fallback is required, state which roscli command was missing or insufficient.
 
 ## Command Tiers
 

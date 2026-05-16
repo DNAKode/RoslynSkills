@@ -1086,6 +1086,50 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_SearchText_AcceptsFilePathAndTextAliases()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-alias-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Target.cs");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Remote
+                {
+                    public string Action => "RemoteUserAction";
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.search_text", "--file-path", filePath, "--text", "RemoteUserAction", "--mode", "literal", "--max-results", "10" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"ctx.search_text\"", output);
+            Assert.Contains("\"analysis_mode\": \"directory_scan\"", output);
+            Assert.Contains("\"file_path\":", output);
+            Assert.Contains("\"total_matches\": 1", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_FindSymbol_AcceptsDeclarationAndSnippetOptions()
     {
         string filePath = Path.GetTempFileName();
