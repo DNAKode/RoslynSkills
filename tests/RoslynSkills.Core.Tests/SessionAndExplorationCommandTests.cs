@@ -243,6 +243,57 @@ public sealed class SessionAndExplorationCommandTests
     }
 
     [Fact]
+    public async Task MemberSourceCommand_MemberNameAnchorReturnsUniqueMember()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Demo
+            {
+                public void First()
+                {
+                    Step1();
+                }
+
+                public void TargetCase()
+                {
+                    ImportantMarker();
+                }
+            }
+            """);
+
+        try
+        {
+            MemberSourceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name = "TargetCase",
+                mode = "member",
+                focus_text = "ImportantMarker",
+                context_lines_before = 1,
+                context_lines_after = 1,
+                max_chars = 1000,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement root = doc.RootElement;
+            Assert.Equal("TargetCase", root.GetProperty("member").GetProperty("member_name").GetString());
+            Assert.Equal("TargetCase", root.GetProperty("query").GetProperty("member_name").GetString());
+            Assert.Equal(8, root.GetProperty("query").GetProperty("line").GetInt32());
+            string source = root.GetProperty("source").GetProperty("text").GetString()!;
+            Assert.Contains("ImportantMarker", source);
+            Assert.DoesNotContain("Step1", source);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task MemberSourceCommand_TruncatedFocusedEditTargetWarnsAgainstWholeSpanReplacement()
     {
         string filePath = WriteTempFile(

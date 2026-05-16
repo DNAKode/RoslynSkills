@@ -924,6 +924,7 @@ internal static class Program
             properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
             properties["line"] = IntProperty("1-based line number for member anchor.", 1);
             properties["column"] = IntProperty("1-based column number for member anchor.", 1);
+            properties["member_name"] = StringProperty("Optional exact member name anchor. Use when the member name is unique in the file; otherwise provide line/column.");
             properties["mode"] = StringProperty("member or body.");
             properties["brief"] = BoolProperty("Compact output; omits source text by default.");
             properties["include_source_text"] = BoolProperty("Include extracted source snippet.");

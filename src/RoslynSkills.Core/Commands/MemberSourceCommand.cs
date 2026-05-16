@@ -25,8 +25,17 @@ public sealed class MemberSourceCommand : IAgentCommand
             return errors;
         }
 
-        InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
-        InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+        string? memberName = GetOptionalTrimmedString(input, "member_name");
+        if (string.IsNullOrWhiteSpace(memberName))
+        {
+            InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
+            InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+        }
+        else
+        {
+            InputParsing.ValidateOptionalInt(input, "line", errors, minValue: 1, maxValue: 1_000_000);
+            InputParsing.ValidateOptionalInt(input, "column", errors, minValue: 1, maxValue: 1_000_000);
+        }
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
@@ -54,9 +63,18 @@ public sealed class MemberSourceCommand : IAgentCommand
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
-            !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredInt(input, "column", errors, out int column, minValue: 1, maxValue: 1_000_000))
+        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
+        {
+            return new CommandExecutionResult(null, errors);
+        }
+
+        string? requestedMemberName = GetOptionalTrimmedString(input, "member_name");
+        bool hasMemberNameAnchor = !string.IsNullOrWhiteSpace(requestedMemberName);
+        int line = InputParsing.GetOptionalInt(input, "line", defaultValue: 0, minValue: 0, maxValue: 1_000_000);
+        int column = InputParsing.GetOptionalInt(input, "column", defaultValue: 0, minValue: 0, maxValue: 1_000_000);
+        if (!hasMemberNameAnchor &&
+            (!InputParsing.TryGetRequiredInt(input, "line", errors, out line, minValue: 1, maxValue: 1_000_000) ||
+             !InputParsing.TryGetRequiredInt(input, "column", errors, out column, minValue: 1, maxValue: 1_000_000)))
         {
             return new CommandExecutionResult(null, errors);
         }
@@ -105,20 +123,11 @@ public sealed class MemberSourceCommand : IAgentCommand
             return workspaceError;
         }
 
-        if (line > analysis.SourceText.Lines.Count)
+        if (!hasMemberNameAnchor && line > analysis.SourceText.Lines.Count)
         {
             return new CommandExecutionResult(
                 null,
                 new[] { new CommandError("invalid_input", $"Requested line '{line}' exceeds file line count ({analysis.SourceText.Lines.Count}).") });
-        }
-
-        SyntaxToken anchorToken = analysis.FindAnchorToken(line, column);
-        SyntaxNode? anchorNode = anchorToken.Parent;
-        if (anchorNode is null)
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("invalid_target", "No syntax node exists at the provided location.") });
         }
 
         SyntaxNode memberNode;
@@ -126,8 +135,39 @@ public sealed class MemberSourceCommand : IAgentCommand
         ISymbol? symbol;
         string memberName;
 
-        if (string.Equals(analysis.Language, LanguageNames.VisualBasic, StringComparison.Ordinal))
+        if (hasMemberNameAnchor)
         {
+            CommandExecutionResult? resolved = TryResolveMemberByName(
+                analysis,
+                requestedMemberName!,
+                mode,
+                includeTrivia,
+                cancellationToken,
+                out memberNode!,
+                out targetSpan,
+                out symbol,
+                out memberName);
+
+            if (resolved is not null)
+            {
+                return resolved;
+            }
+
+            LinePosition anchorPosition = analysis.SourceText.Lines.GetLinePosition(memberNode.SpanStart);
+            line = anchorPosition.Line + 1;
+            column = anchorPosition.Character + 1;
+        }
+        else if (string.Equals(analysis.Language, LanguageNames.VisualBasic, StringComparison.Ordinal))
+        {
+            SyntaxToken anchorToken = analysis.FindAnchorToken(line, column);
+            SyntaxNode? anchorNode = anchorToken.Parent;
+            if (anchorNode is null)
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("invalid_target", "No syntax node exists at the provided location.") });
+            }
+
             SyntaxNode? vbMemberNode = FindVbMemberNode(anchorNode, preferBodyContainer: mode == SourceMode.Body);
             if (vbMemberNode is null)
             {
@@ -143,6 +183,15 @@ public sealed class MemberSourceCommand : IAgentCommand
         }
         else
         {
+            SyntaxToken anchorToken = analysis.FindAnchorToken(line, column);
+            SyntaxNode? anchorNode = anchorToken.Parent;
+            if (anchorNode is null)
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("invalid_target", "No syntax node exists at the provided location.") });
+            }
+
             CSharpSyntax.MemberDeclarationSyntax? csharpMember = anchorNode
                 .AncestorsAndSelf()
                 .OfType<CSharpSyntax.MemberDeclarationSyntax>()
@@ -239,6 +288,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                 include_line_numbers = includeLineNumbers,
                 include_trivia = includeTrivia,
                 focus_text = focusText,
+                member_name = requestedMemberName,
                 context_lines_before = contextBefore,
                 context_lines_after = contextAfter,
                 max_chars = maxChars,
@@ -372,6 +422,126 @@ public sealed class MemberSourceCommand : IAgentCommand
             ? null
             : value.Trim();
     }
+
+    private static CommandExecutionResult? TryResolveMemberByName(
+        CommandFileAnalysis analysis,
+        string requestedMemberName,
+        SourceMode mode,
+        bool includeTrivia,
+        CancellationToken cancellationToken,
+        out SyntaxNode memberNode,
+        out TextSpan targetSpan,
+        out ISymbol? symbol,
+        out string memberName)
+    {
+        if (string.Equals(analysis.Language, LanguageNames.VisualBasic, StringComparison.Ordinal))
+        {
+            List<(SyntaxNode node, string name, ISymbol? symbol)> matches = analysis.Root
+                .DescendantNodes()
+                .Where(IsVbMemberCandidate)
+                .Select(node =>
+                {
+                    ISymbol? candidateSymbol = GetVbMemberSymbol(node, analysis.SemanticModel, cancellationToken);
+                    return (node, name: GetVbMemberName(node, candidateSymbol), symbol: candidateSymbol);
+                })
+                .Where(candidate => string.Equals(candidate.name, requestedMemberName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            return CompleteMemberNameResolution(
+                analysis,
+                requestedMemberName,
+                matches,
+                node => ResolveVbTargetSpan(node, mode, includeTrivia),
+                out memberNode,
+                out targetSpan,
+                out symbol,
+                out memberName);
+        }
+
+        List<(CSharpSyntax.MemberDeclarationSyntax node, string name, ISymbol? symbol)> csharpMatches = analysis.Root
+            .DescendantNodes()
+            .OfType<CSharpSyntax.MemberDeclarationSyntax>()
+            .Where(member => member is not CSharpSyntax.BaseNamespaceDeclarationSyntax)
+            .Select(member => (node: member, name: GetCSharpMemberName(member), symbol: analysis.SemanticModel.GetDeclaredSymbol(member, cancellationToken)))
+            .Where(candidate => string.Equals(candidate.name, requestedMemberName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return CompleteMemberNameResolution(
+            analysis,
+            requestedMemberName,
+            csharpMatches,
+            node =>
+            {
+                SyntaxNode targetNode = ResolveCSharpTargetNode(node, mode);
+                return includeTrivia ? targetNode.FullSpan : targetNode.Span;
+            },
+            out memberNode,
+            out targetSpan,
+            out symbol,
+            out memberName);
+    }
+
+    private static CommandExecutionResult? CompleteMemberNameResolution<TNode>(
+        CommandFileAnalysis analysis,
+        string requestedMemberName,
+        IReadOnlyList<(TNode node, string name, ISymbol? symbol)> matches,
+        Func<TNode, TextSpan> resolveTargetSpan,
+        out SyntaxNode memberNode,
+        out TextSpan targetSpan,
+        out ISymbol? symbol,
+        out string memberName)
+        where TNode : SyntaxNode
+    {
+        if (matches.Count == 0)
+        {
+            memberNode = null!;
+            targetSpan = default;
+            symbol = null;
+            memberName = string.Empty;
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("member_not_found", $"No member named '{requestedMemberName}' was found in the file.") });
+        }
+
+        if (matches.Count > 1)
+        {
+            memberNode = null!;
+            targetSpan = default;
+            symbol = null;
+            memberName = string.Empty;
+            string locations = string.Join(", ", matches.Take(10).Select(match =>
+            {
+                LinePosition position = analysis.SourceText.Lines.GetLinePosition(match.node.SpanStart);
+                return $"{match.name}@{position.Line + 1}:{position.Character + 1}";
+            }));
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("member_name_ambiguous", $"Member name '{requestedMemberName}' matched {matches.Count} members. Use line/column instead. Matches: {locations}") });
+        }
+
+        (TNode node, string name, ISymbol? candidateSymbol) = matches[0];
+        memberNode = node;
+        targetSpan = resolveTargetSpan(node);
+        symbol = candidateSymbol;
+        memberName = name;
+        return null;
+    }
+
+    private static bool IsVbMemberCandidate(SyntaxNode node)
+        => node is VbSyntax.MethodBlockBaseSyntax or
+            VbSyntax.MethodStatementSyntax or
+            VbSyntax.PropertyBlockSyntax or
+            VbSyntax.PropertyStatementSyntax or
+            VbSyntax.FieldDeclarationSyntax or
+            VbSyntax.EventBlockSyntax or
+            VbSyntax.EventStatementSyntax or
+            VbSyntax.EnumMemberDeclarationSyntax or
+            VbSyntax.DelegateStatementSyntax or
+            VbSyntax.ClassBlockSyntax or
+            VbSyntax.StructureBlockSyntax or
+            VbSyntax.InterfaceBlockSyntax or
+            VbSyntax.ModuleBlockSyntax or
+            VbSyntax.EnumBlockSyntax;
 
     private static object BuildEditTarget(
         SourceText sourceText,

@@ -1849,6 +1849,12 @@ Workflow:
                 break;
 
             case "ctx.member_source":
+                if (positionalArgs.Length == 1 && options.ContainsKey("member_name"))
+                {
+                    input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                    break;
+                }
+
                 if (positionalArgs.Length < 3 ||
                     positionalArgs.Length > 4 ||
                     string.IsNullOrWhiteSpace(positionalArgs[0]) ||
@@ -3664,13 +3670,14 @@ Workflow:
         {
             return new
             {
-                direct = "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...]",
-                run = "run ctx.member_source --input '{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":17,\"mode\":\"member\",\"include_edit_target_text\":true,\"max_chars\":12000,\"workspace_handle\":\"ws_...\"}'",
-                required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "mode", "brief", "include_source_text", "include_edit_target_text", "include_line_numbers", "include_trivia", "focus_text", "context_lines_before", "context_lines_after", "max_chars", "workspace_path", "workspace_handle", "require_workspace" },
+                direct = "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...] OR ctx.member_source <file-path> --member-name <name> [--option value ...]",
+                run = "run ctx.member_source --input '{\"file_path\":\"src/MyFile.cs\",\"member_name\":\"HandleInput\",\"mode\":\"member\",\"include_edit_target_text\":true,\"max_chars\":12000,\"workspace_handle\":\"ws_...\"}'",
+                required_properties = new[] { "file_path plus line+column OR member_name" },
+                optional_properties = new[] { "line", "column", "member_name", "mode", "brief", "include_source_text", "include_edit_target_text", "include_line_numbers", "include_trivia", "focus_text", "context_lines_before", "context_lines_after", "max_chars", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
-                    "Use line/column from ctx.file_outline or nav.find_symbol; member_name is not accepted.",
+                    "Use line/column from ctx.file_outline or nav.find_symbol, or use member_name when the name is unique in the file.",
+                    "If member_name is ambiguous, rerun with a line/column anchor from ctx.file_outline.",
                     "mode=member returns the whole declaration; mode=body returns only the body when available.",
                     "For huge members, pass focus_text with context_lines_before/context_lines_after to return a small window around the first literal match while edit_target still describes the anchored target.",
                     "When focus_text is supplied, include_edit_target_text defaults to false. Set it true only for whole-target replacement, and do not use exact_span_text when truncated=true.",

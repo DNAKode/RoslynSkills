@@ -741,3 +741,13 @@ The `.39` supervised round showed `edit.batch_exact` doing the right safety thin
 ## 2026-05-16 Follow-Up: Focus Match in Member Source Preview
 
 The `.41` supervised round stayed on roscli after a stale line anchor, but the first clue was the returned member name rather than the preview line. `ctx.member_source` CLI previews now include focus state when `focus_text` is supplied, for example `focus=matched:719` or `focus=not-found:OverlayHelpClose`. This makes stale anchors and wrong-member reads visible in the one-line command summary before agents inspect the full JSON.
+
+## 2026-05-16 Follow-Up: Member-Name Anchors
+
+Repeated supervised runs showed line numbers in large test files drifting after each edit. `ctx.file_outline --member-name-contains` gives the right member names, but agents still had to copy the current line/column into `ctx.member_source`. `ctx.member_source` now accepts a unique `member_name` anchor:
+
+```powershell
+roscli ctx.member_source tests/FrankenTui.Tests.Headless/ShowcaseShellTests.cs --member-name ShowcaseEvidenceJsonlWriterEmitsStatusUnknownForMismatchedStatusHit --focus-text status_unknown --context-lines-before 12 --context-lines-after 12
+```
+
+If the name is ambiguous, the command fails closed and asks for a line/column anchor. This gives agents a stable path from filtered outline to member source when edits keep moving line numbers.

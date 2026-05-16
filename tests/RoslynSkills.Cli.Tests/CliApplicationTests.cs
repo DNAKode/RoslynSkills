@@ -90,7 +90,8 @@ public sealed class CliApplicationTests
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
         Assert.Contains("ctx.member_source <file-path> <line> <column>", output);
-        Assert.Contains("member_name is not accepted", output);
+        Assert.Contains("--member-name", output);
+        Assert.Contains("member_name", output);
         Assert.Contains("focus_text", output);
         Assert.Contains("workspace_cache_mode", output);
     }
@@ -988,6 +989,51 @@ public sealed class CliApplicationTests
             Assert.Equal(0, exitCode);
             Assert.Contains("focus=matched:6", output);
             Assert.Contains("\"include_edit_target_text\": false", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_MemberSource_AcceptsMemberNameAnchor()
+    {
+        string filePath = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public void First()
+                    {
+                        Step1();
+                    }
+
+                    public void TargetCase()
+                    {
+                        ImportantMarker();
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.member_source", filePath, "--member-name", "TargetCase", "--focus-text", "ImportantMarker", "--context-lines-before", "1", "--context-lines-after", "1" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("TargetCase", output);
+            Assert.Contains("focus=matched:10", output);
+            Assert.Contains("\"member_name\": \"TargetCase\"", output);
         }
         finally
         {
