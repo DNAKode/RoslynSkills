@@ -695,3 +695,9 @@ When a command has no routeable file or workspace path, agents should still pass
 The `.33` FrankenTui.NET repair round showed correct agent behavior but one remaining discoverability gap. The agent first used `ctx.member_source --include-edit-target-text true`, saw the duplicated indentation, and only then reasoned that the default span preserved the bad prefix outside `span_start`. Rerunning with `--include-trivia true` produced a span that could repair the indentation.
 
 `ctx.member_source.Data.edit_target.trivia` now includes `prefix_edit_rule`. For the default no-trivia span, it explicitly says to rerun with `include_trivia=true` when the preserved prefix is the thing being fixed, such as duplicated indentation before a member or attribute. This keeps the normal non-trivia span safe for body edits while making prefix repair discoverable at the edit target.
+
+## 2026-05-16 Follow-Up: Expected Text in Span Edit Templates
+
+The next `.34` live round used `edit.batch_exact replace_span` successfully but still built operations by copying only `span_start` and `span_length`. In a multi-agent or long-running hot-workspace session, that leaves span edits vulnerable to stale coordinates if another change shifts or rewrites the same declaration between read and write.
+
+When `ctx.member_source` is called with `include_edit_target_text=true` and the exact span text is not truncated, `edit_target.replace_span_operation` now includes `expected_text`. Agents should keep that field in the final `edit.batch_exact` payload and change only `new_text`; this turns stale span coordinates into a guarded operation failure instead of an accidental overwrite.

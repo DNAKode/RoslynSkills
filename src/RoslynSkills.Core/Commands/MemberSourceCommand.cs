@@ -311,6 +311,24 @@ public sealed class MemberSourceCommand : IAgentCommand
         {
             exactTargetText = exactTargetText[..maxChars];
         }
+        object replaceSpanOperation = includeEditTargetText && !exactTextTruncated
+            ? new
+            {
+                kind = "replace_span",
+                file_path = filePath,
+                span_start = targetSpan.Start,
+                span_length = targetSpan.Length,
+                expected_text = exactTargetText,
+                new_text = "<replacement text beginning exactly at span_start>",
+            }
+            : new
+            {
+                kind = "replace_span",
+                file_path = filePath,
+                span_start = targetSpan.Start,
+                span_length = targetSpan.Length,
+                new_text = "<replacement text beginning exactly at span_start>",
+            };
 
         return new
         {
@@ -351,14 +369,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                     character_count = 0,
                     use_as_replacement_base = "Re-run ctx.member_source with include_edit_target_text=true when constructing a whole-target replace_span new_text.",
                 },
-            replace_span_operation = new
-            {
-                kind = "replace_span",
-                file_path = filePath,
-                span_start = targetSpan.Start,
-                span_length = targetSpan.Length,
-                new_text = "<replacement text beginning exactly at span_start>",
-            },
+            replace_span_operation = replaceSpanOperation,
         };
     }
 
