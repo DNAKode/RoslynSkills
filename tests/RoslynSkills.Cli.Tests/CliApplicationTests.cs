@@ -2368,6 +2368,8 @@ public sealed class CliApplicationTests
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
         Assert.Contains("edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command", output);
+        Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
+        Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
     }
 
 

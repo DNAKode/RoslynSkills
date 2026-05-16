@@ -4057,7 +4057,7 @@ Workflow:
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
-            sb.AppendLine("Continue one narrow, testable C# slice. Use roscli for .cs context and edits: edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command, then the edit command if mutation is needed. Report any .cs fallback explicitly.");
+            sb.AppendLine("Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command, then the edit command if mutation is needed. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report any .cs fallback explicitly.");
             sb.AppendLine("```");
             sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
         }
@@ -4102,6 +4102,7 @@ Workflow:
         sb.AppendLine();
         sb.AppendLine("## Fallback Rule");
         sb.AppendLine("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads. Try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` first. If roscli cannot answer, state the attempted command and the missing capability before fallback.");
+        sb.AppendLine("For post-edit `.cs` audit anchors and closeout line numbers, use `ctx.search_text` or `ctx.member_source`; do not fall back to `rg` just to find the line you changed.");
         return sb.ToString();
     }
 

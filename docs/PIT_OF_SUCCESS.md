@@ -33,7 +33,7 @@ This gives command discovery, a hot solution workspace, member-scoped source con
 
 `roscli csharp-start` is the compact markdown version intended for fresh agents. Use it when a prompt can only point to one roscli onboarding command.
 
-For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a two-turn protocol. First require the agent to run only `roscli csharp-start` and report its first two headings. Assign the C# slice only after the transcript shows the command actually ran; prose promises are not enough. Turn 2 should preload the solution with `workspace.preload` before `ctx.file_outline` or `ctx.member_source`, and should run `describe-command` before the first Roslyn edit command.
+For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a two-turn protocol. First require the agent to run only `roscli csharp-start` and report its first two headings. Assign the C# slice only after the transcript shows the command actually ran; prose promises are not enough. Turn 2 should preload the solution with `workspace.preload` before `ctx.file_outline` or `ctx.member_source`, should run `describe-command` before the first Roslyn edit command, and should use `ctx.search_text` or `ctx.member_source` instead of `rg` for `.cs` closeout anchors.
 
 For `.cs` orientation, try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
 
@@ -123,6 +123,7 @@ roscli diag.get_workspace_snapshot src --require-workspace true --workspace-path
 - If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.sln|.slnx|.csproj|dir>` and prefer `--require-workspace true`.
 - For complex payloads, prefer `--input-stdin` over shell-escaped JSON.
 - Do not use `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads for `.cs` orientation until a roscli `ctx.*` or `nav.*` command has been tried.
+- Do not use `rg`/`git diff`/file reads merely to report the line number of a changed `.cs` assertion; use `ctx.search_text` or `ctx.member_source`.
 - If RoslynSkills cannot answer a C# query, agent must state why before fallback.
 
 ## Complementary Tool Split
