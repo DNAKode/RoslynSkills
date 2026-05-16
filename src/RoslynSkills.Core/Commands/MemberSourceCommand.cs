@@ -31,6 +31,7 @@ public sealed class MemberSourceCommand : IAgentCommand
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+        InputParsing.ValidateOptionalBool(input, "include_edit_target_text", errors);
 
         if (!File.Exists(filePath))
         {
@@ -86,6 +87,7 @@ public sealed class MemberSourceCommand : IAgentCommand
         bool includeTrivia = InputParsing.GetOptionalBool(input, "include_trivia", defaultValue: false);
         bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
         bool includeSourceText = InputParsing.GetOptionalBool(input, "include_source_text", defaultValue: !brief);
+        bool includeEditTargetText = InputParsing.GetOptionalBool(input, "include_edit_target_text", defaultValue: includeSourceText);
         int contextBefore = InputParsing.GetOptionalInt(input, "context_lines_before", defaultValue: 0, minValue: 0, maxValue: 500);
         int contextAfter = InputParsing.GetOptionalInt(input, "context_lines_after", defaultValue: 0, minValue: 0, maxValue: 500);
         int maxChars = InputParsing.GetOptionalInt(input, "max_chars", defaultValue: 8_000, minValue: 200, maxValue: 200_000);
@@ -194,6 +196,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                 mode = modeRaw,
                 brief,
                 include_source_text = includeSourceText,
+                include_edit_target_text = includeEditTargetText,
                 include_line_numbers = includeLineNumbers,
                 include_trivia = includeTrivia,
                 context_lines_before = contextBefore,
@@ -215,26 +218,18 @@ public sealed class MemberSourceCommand : IAgentCommand
                 source_end_line = snippetEndLine,
                 source_line_count = Math.Max(0, snippetEndLine - snippetStartLine + 1),
             },
-            ["edit_target"] = new
-            {
-                file_path = analysis.FilePath,
-                mode = modeRaw,
-                span_start = targetSpan.Start,
-                span_length = targetSpan.Length,
-                span_end = targetSpan.End,
-                start_line = targetStartLine,
-                start_column = targetStartColumn,
-                end_line = targetEndLine,
-                end_column = targetEndColumn,
-                replace_span_operation = new
-                {
-                    kind = "replace_span",
-                    file_path = analysis.FilePath,
-                    span_start = targetSpan.Start,
-                    span_length = targetSpan.Length,
-                    new_text = "<replacement text>",
-                },
-            },
+            ["edit_target"] = BuildEditTarget(
+                analysis.SourceText,
+                analysis.FilePath,
+                modeRaw,
+                targetSpan,
+                targetStartLine,
+                targetStartColumn,
+                targetEndLine,
+                targetEndColumn,
+                includeTrivia,
+                includeEditTargetText,
+                maxChars),
             ["source"] = includeSourceText
                 ? new
                 {
@@ -272,7 +267,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                 new
                 {
                     command = "edit.batch_exact",
-                    when = "Use kind=replace_span with edit_target.span_start/span_length when replacing this whole target or several claimed targets atomically.",
+                    when = "Use kind=replace_span with edit_target.span_start/span_length when replacing this whole target or several claimed targets atomically. Start new_text exactly at the span; do not duplicate edit_target.trivia.preserved_line_prefix_text.",
                     next_step = "describe-command edit.batch_exact",
                 },
                 new
@@ -289,6 +284,78 @@ public sealed class MemberSourceCommand : IAgentCommand
                 },
             },
             fallback_rule = "If a .cs mutation cannot use a Roslyn edit command, record the attempted command and reason in ROSLYN_FALLBACK_REFLECTION_LOG.md.",
+        };
+    }
+
+    private static object BuildEditTarget(
+        SourceText sourceText,
+        string filePath,
+        string modeRaw,
+        TextSpan targetSpan,
+        int startLine,
+        int startColumn,
+        int endLine,
+        int endColumn,
+        bool includeTrivia,
+        bool includeEditTargetText,
+        int maxChars)
+    {
+        TextLine line = sourceText.Lines[startLine - 1];
+        string preservedLinePrefix = sourceText.ToString(TextSpan.FromBounds(line.Start, targetSpan.Start));
+        string exactTargetText = includeEditTargetText
+            ? sourceText.ToString(targetSpan)
+            : string.Empty;
+        int exactTargetCharacterCount = exactTargetText.Length;
+        bool exactTextTruncated = exactTargetText.Length > maxChars;
+        if (exactTextTruncated)
+        {
+            exactTargetText = exactTargetText[..maxChars];
+        }
+
+        return new
+        {
+            file_path = filePath,
+            mode = modeRaw,
+            span_start = targetSpan.Start,
+            span_length = targetSpan.Length,
+            span_end = targetSpan.End,
+            start_line = startLine,
+            start_column = startColumn,
+            end_line = endLine,
+            end_column = endColumn,
+            trivia = new
+            {
+                include_trivia = includeTrivia,
+                span_preserves_existing_line_prefix = !includeTrivia && preservedLinePrefix.Length > 0,
+                preserved_line_prefix_text = preservedLinePrefix,
+                preserved_line_prefix_char_count = preservedLinePrefix.Length,
+                new_text_first_line_rule = !includeTrivia && preservedLinePrefix.Length > 0
+                    ? "Do not include preserved_line_prefix_text at the start of new_text; the file keeps that prefix before span_start."
+                    : "Start new_text exactly at span_start.",
+            },
+            exact_span_text = includeEditTargetText
+                ? (object)new
+                {
+                    text = exactTargetText,
+                    truncated = exactTextTruncated,
+                    character_count = exactTargetCharacterCount,
+                    use_as_replacement_base = "Edit this exact_span_text when constructing replace_span new_text; it matches span_start/span_length and avoids double indentation.",
+                }
+                : new
+                {
+                    omitted = true,
+                    truncated = false,
+                    character_count = 0,
+                    use_as_replacement_base = "Re-run ctx.member_source with include_edit_target_text=true when constructing a whole-target replace_span new_text.",
+                },
+            replace_span_operation = new
+            {
+                kind = "replace_span",
+                file_path = filePath,
+                span_start = targetSpan.Start,
+                span_length = targetSpan.Length,
+                new_text = "<replacement text beginning exactly at span_start>",
+            },
         };
     }
 

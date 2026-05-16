@@ -806,11 +806,20 @@ public sealed class CliApplicationTests
             Assert.Contains("right;", output);
             Assert.Contains("\"edit_target\"", output);
             Assert.Contains("\"replace_span_operation\"", output);
+            Assert.Contains("\"exact_span_text\"", output);
+            Assert.Contains("\"trivia\"", output);
             Assert.Contains("\"edit_workflow\"", output);
             Assert.Contains("edit.claim", output);
             Assert.Contains("edit.batch_exact", output);
             Assert.Contains("edit.replace_text", output);
             Assert.Contains("edit.transaction", output);
+
+            using JsonDocument document = JsonDocument.Parse(output);
+            JsonElement editTarget = document.RootElement.GetProperty("Data").GetProperty("edit_target");
+            string exactSpanText = editTarget.GetProperty("exact_span_text").GetProperty("text").GetString()!;
+            string preservedPrefix = editTarget.GetProperty("trivia").GetProperty("preserved_line_prefix_text").GetString()!;
+            Assert.StartsWith("{", exactSpanText, StringComparison.Ordinal);
+            Assert.Equal("    ", preservedPrefix);
         }
         finally
         {

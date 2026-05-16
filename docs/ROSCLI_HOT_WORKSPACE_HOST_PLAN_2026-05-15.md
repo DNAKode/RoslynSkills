@@ -645,3 +645,16 @@ The next adjustment is to connect context and editing by span rather than copied
 - Agents should prefer `replace_span` for whole-member or large-target replacement after claiming the file/member, and use `expected_text` when they want a lightweight stale-source guard.
 
 This keeps multi-agent safety in the claim layer, preserves atomic multi-file/multi-operation behavior in `edit.batch_exact`, and removes the need to paste large escaped source strings through the shell.
+
+## 2026-05-16 Follow-Up: Trivia-Safe Span Replacement Guidance
+
+The next FrankenTui.NET `.29` round validated the span path: `edit.batch_exact` `replace_span` succeeded repeatedly, refreshed the hot workspace, and returned zero edit diagnostics. The focused test still failed for product/layout reasons, but the tooling failure changed shape. Whole-member span replacement can still cause indentation drift if an agent uses line-based `source.text` as `new_text`, because the syntax-node span excludes leading trivia while the file preserves the indentation before `span_start`.
+
+`ctx.member_source` now makes that contract explicit:
+
+- `edit_target.exact_span_text.text` is the copy-safe replacement base that exactly matches `span_start/span_length`.
+- `edit_target.trivia.preserved_line_prefix_text` shows the text the file keeps before `span_start`.
+- `edit_target.trivia.new_text_first_line_rule` tells agents whether to omit that preserved prefix from `new_text`.
+- `describe-command ctx.member_source` and `describe-command edit.batch_exact` point agents to this path.
+
+This should steer agents away from using line-oriented snippets for span replacement and reduce formatting churn in repeated whole-member edits.

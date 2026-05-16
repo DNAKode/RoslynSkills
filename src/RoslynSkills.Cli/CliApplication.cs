@@ -3272,6 +3272,7 @@ Workflow:
                     "Each operation may specify file_path, or use top-level file_path for all operations.",
                     "Operation kinds: replace_span uses span_start plus span_length or span_end, new_text, and optional expected_text; replace_text uses old_text/new_text/replace_all; insert_text uses anchor_text/insert_text/position.",
                     "Prefer replace_span with ctx.member_source Data.edit_target spans for large member replacements to avoid copying fragile multiline old_text.",
+                    "When building replace_span new_text from ctx.member_source, start from edit_target.exact_span_text.text and do not duplicate edit_target.trivia.preserved_line_prefix_text.",
                     "Atomic apply means any operation failure prevents all file writes; response still reports the failed operation.",
                     "When a preloaded hot workspace tracks changed files, file_results[].hot_workspace_refresh reports incremental updates.",
                     "Prefer this over chaining several edit.replace_text commands in one shell block.",
@@ -3526,13 +3527,14 @@ Workflow:
             return new
             {
                 direct = "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...]",
-                run = "run ctx.member_source --input '{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":17,\"mode\":\"member\",\"max_chars\":12000,\"workspace_handle\":\"ws_...\"}'",
+                run = "run ctx.member_source --input '{\"file_path\":\"src/MyFile.cs\",\"line\":42,\"column\":17,\"mode\":\"member\",\"include_edit_target_text\":true,\"max_chars\":12000,\"workspace_handle\":\"ws_...\"}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "mode", "brief", "include_source_text", "include_line_numbers", "include_trivia", "context_lines_before", "context_lines_after", "max_chars", "workspace_path", "workspace_handle", "require_workspace" },
+                optional_properties = new[] { "mode", "brief", "include_source_text", "include_edit_target_text", "include_line_numbers", "include_trivia", "context_lines_before", "context_lines_after", "max_chars", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
                     "Use line/column from ctx.file_outline or nav.find_symbol; member_name is not accepted.",
                     "mode=member returns the whole declaration; mode=body returns only the body when available.",
+                    "For replace_span edits, use edit_target.exact_span_text.text as the replacement base and follow edit_target.trivia.new_text_first_line_rule to avoid double indentation.",
                     "After workspace.preload, omit workspace_handle only if you used the default alias; otherwise pass the returned handle explicitly.",
                     "Check query.workspace_context.workspace_cache_mode. process_hot means the daemon workspace was reused; process_balanced means a fresh CLI workspace was loaded.",
                 },
