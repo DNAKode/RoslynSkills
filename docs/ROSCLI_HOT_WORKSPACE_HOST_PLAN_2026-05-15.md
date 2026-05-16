@@ -737,3 +737,7 @@ The follow-up supervised run showed one subtle pitfall: focused exploration stil
 ## 2026-05-16 Follow-Up: Exact Edit Recovery Hints
 
 The `.39` supervised round showed `edit.batch_exact` doing the right safety thing on ambiguous `old_text`: atomic mode wrote nothing. The retry still required agent inference. `edit.batch_exact` now includes `operation_results[].recovery_hint` for ambiguous or missing exact text/anchors, steering agents toward `ctx.member_source` and `replace_span` with `expected_text` when span anchoring is safer than making larger copied `old_text` snippets.
+
+## 2026-05-16 Follow-Up: Focus Match in Member Source Preview
+
+The `.41` supervised round stayed on roscli after a stale line anchor, but the first clue was the returned member name rather than the preview line. `ctx.member_source` CLI previews now include focus state when `focus_text` is supplied, for example `focus=matched:719` or `focus=not-found:OverlayHelpClose`. This makes stale anchors and wrong-member reads visible in the one-line command summary before agents inspect the full JSON.

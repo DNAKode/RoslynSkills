@@ -955,6 +955,47 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_MemberSource_FocusTextPreviewReportsMatchedLine()
+    {
+        string filePath = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public void Run()
+                    {
+                        Step1();
+                        ImportantMarker();
+                        Step2();
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.member_source", filePath, "3", "17", "member", "--focus-text", "ImportantMarker", "--context-lines-before", "1", "--context-lines-after", "1" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("focus=matched:6", output);
+            Assert.Contains("\"include_edit_target_text\": false", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_SearchText_AcceptsPositionalShorthand()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-{Guid.NewGuid():N}");

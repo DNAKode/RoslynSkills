@@ -2879,9 +2879,10 @@ Workflow:
             {
                 string memberName = TryGetString(memberElement, "member_name", out string name) ? name : "<member>";
                 int lineCount = TryGetInt(memberElement, "source_line_count", out int lc) ? lc : -1;
+                string focusSuffix = BuildMemberSourceFocusPreview(element);
                 return lineCount > 0
-                    ? $"{memberName}, lines={lineCount}"
-                    : memberName;
+                    ? $"{memberName}, lines={lineCount}{focusSuffix}"
+                    : $"{memberName}{focusSuffix}";
             }
         }
 
@@ -3165,6 +3166,27 @@ Workflow:
         }
 
         return null;
+    }
+
+    private static string BuildMemberSourceFocusPreview(JsonElement element)
+    {
+        if (!TryGetObject(element, "source", out JsonElement source) ||
+            !TryGetObject(source, "focus", out JsonElement focus) ||
+            !TryGetString(focus, "text", out string focusText) ||
+            string.IsNullOrWhiteSpace(focusText))
+        {
+            return string.Empty;
+        }
+
+        string shortText = focusText.Length > 32 ? string.Concat(focusText.AsSpan(0, 29), "...") : focusText;
+        if (TryGetBool(focus, "matched", out bool matched) && matched)
+        {
+            return TryGetInt(focus, "line", out int line) && line > 0
+                ? $", focus=matched:{line}"
+                : ", focus=matched";
+        }
+
+        return $", focus=not-found:{shortText}";
     }
 
     private static string ResolveWorkspaceMode(JsonElement element)
