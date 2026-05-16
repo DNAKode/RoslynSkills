@@ -751,3 +751,17 @@ roscli ctx.member_source tests/FrankenTui.Tests.Headless/ShowcaseShellTests.cs -
 ```
 
 If the name is ambiguous, the command fails closed and asks for a line/column anchor. This gives agents a stable path from filtered outline to member source when edits keep moving line numbers.
+
+## 2026-05-16 Follow-Up: Member-Scoped Exact Replacement
+
+The `.43` supervised FrankenTui.NET round validated member-name anchors: the agent used `ctx.member_source --member-name ... --focus-text ...` for both test and writer members, and the one-line previews showed `focus=matched` without copying line anchors. The round also exercised `edit.batch_exact` recovery hints: an `old_text_not_found` failure correctly steered the agent back to `ctx.member_source` and then to span replacement.
+
+The remaining friction was the recovery step itself. For a small assertion trim inside a known test member, the agent still had to hand-write PowerShell that re-read the full member JSON, extracted `edit_target`, constructed a new full-member string, and called `replace_span`. That is too much shell glue for a common C# edit and creates avoidable line-ending/escaping churn.
+
+`edit.replace_in_member` now covers that middle path:
+
+```powershell
+roscli edit.replace_in_member tests/FrankenTui.Tests.Headless/ShowcaseShellTests.cs --member-name ShowcaseEvidenceJsonlWriterEmitsMouseCaptureToggleEvent --old-text "Assert.Equal(2, value);" --new-text "Assert.Equal(3, value);"
+```
+
+The command anchors to a unique `member_name` or line/column, confines exact matching to the selected member/body, tolerates LF snippets against CRLF files, refreshes hot workspaces after writes, and returns diagnostics. `ctx.member_source.edit_workflow` now recommends it for small scoped edits, while keeping `edit.batch_exact replace_span` as the preferred path for whole-member or multi-file guarded edits. The multi-agent rule remains claim-first: acquire `edit.claim` before mutation and release after validation.

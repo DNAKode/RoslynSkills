@@ -365,8 +365,14 @@ public sealed class MemberSourceCommand : IAgentCommand
                 },
                 new
                 {
+                    command = "edit.replace_in_member",
+                    when = "Use for small exact snippet replacement scoped to this unique member/body after edit.claim; avoids file-wide ambiguity and tolerates line-ending-only snippet drift.",
+                    next_step = "describe-command edit.replace_in_member",
+                },
+                new
+                {
                     command = "edit.replace_text",
-                    when = "Use for small exact snippet replacement inside this member after copying the exact old_text from source.text.",
+                    when = "Use for small exact snippet replacement only when a file-wide exact match is intended or already known unique.",
                     next_step = "describe-command edit.replace_text",
                 },
                 new

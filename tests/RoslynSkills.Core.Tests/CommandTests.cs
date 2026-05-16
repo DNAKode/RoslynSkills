@@ -803,6 +803,128 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public async Task ReplaceInMemberCommand_ReplacesOnlySelectedMember()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Demo
+            {
+                public void First()
+                {
+                    Assert.Equal(1, value);
+                }
+
+                public void Second()
+                {
+                    Assert.Equal(1, value);
+                }
+            }
+            """);
+
+        try
+        {
+            ReplaceInMemberCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name = "Second",
+                old_text = "Assert.Equal(1, value);",
+                new_text = "Assert.Equal(2, value);",
+                apply = true,
+                include_diagnostics = false,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            Assert.Equal("Second", doc.RootElement.GetProperty("member").GetProperty("member_name").GetString());
+            Assert.Equal(1, doc.RootElement.GetProperty("match_count").GetInt32());
+            Assert.Equal("member", doc.RootElement.GetProperty("match_scope").GetString());
+
+            string updated = await File.ReadAllTextAsync(filePath);
+            Assert.Contains("public void First()", updated);
+            Assert.Contains("public void Second()", updated);
+            Assert.Equal(1, CountOccurrences(updated, "Assert.Equal(1, value);"));
+            Assert.Equal(1, CountOccurrences(updated, "Assert.Equal(2, value);"));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task ReplaceInMemberCommand_NormalizesLineEndingsForSnippet()
+    {
+        string filePath = WriteTempFile(
+            "public class Demo\r\n{\r\n    public void Target()\r\n    {\r\n        var one = 1;\r\n        var two = 2;\r\n    }\r\n}\r\n");
+
+        try
+        {
+            ReplaceInMemberCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name = "Target",
+                old_text = "var one = 1;\n        var two = 2;",
+                new_text = "var one = 10;\r\n        var two = 20;",
+                apply = true,
+                include_diagnostics = false,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            Assert.Equal("line_ending_normalized", doc.RootElement.GetProperty("match_mode").GetString());
+            string updated = await File.ReadAllTextAsync(filePath);
+            Assert.Contains("var one = 10;\r\n        var two = 20;", updated);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task ReplaceInMemberCommand_ReportsAmbiguousMemberName()
+    {
+        string filePath = WriteTempFile(
+            """
+            public partial class Demo
+            {
+                partial void Hook();
+                partial void Hook()
+                {
+                }
+            }
+            """);
+
+        try
+        {
+            ReplaceInMemberCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name = "Hook",
+                old_text = "{",
+                new_text = "{",
+                apply = false,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.False(result.Ok);
+            Assert.Contains(result.Errors, error => error.Code == "member_name_ambiguous");
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task CreateFileCommand_CreatesFileAndReturnsDiagnostics()
     {
         string root = Path.Combine(Path.GetTempPath(), $"roslynskills-create-{Guid.NewGuid():N}");
@@ -982,6 +1104,19 @@ public sealed class CommandTests
         string json = JsonSerializer.Serialize(value);
         using JsonDocument doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
+    }
+
+    private static int CountOccurrences(string text, string search)
+    {
+        int count = 0;
+        int index = 0;
+        while ((index = text.IndexOf(search, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += search.Length;
+        }
+
+        return count;
     }
 
     private static string FindRepositoryRoot()

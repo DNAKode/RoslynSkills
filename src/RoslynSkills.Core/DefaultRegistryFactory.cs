@@ -45,6 +45,7 @@ public static class DefaultRegistryFactory
             new ApplyCodeFixCommand(),
             new CreateFileCommand(),
             new ReplaceTextCommand(),
+            new ReplaceInMemberCommand(),
             new InsertTextCommand(),
             new BatchExactEditCommand(),
             new EditTransactionCommand(),
