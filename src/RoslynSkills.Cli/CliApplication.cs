@@ -2159,7 +2159,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "edit.replace_in_member <file-path> --member-name <name> --old-text <text> --new-text <text> [--mode member|body] [--apply true] [--replace-all true] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "edit.replace_in_member <file-path> --member-name <name> --old-text <text> --new-text <text> [--mode member|body] [--apply true] [--replace-all true] [--preview-chars 256] [--option value ...]"));
                     return false;
                 }
 
@@ -3418,17 +3418,17 @@ Workflow:
         {
             return new
             {
-                direct = "edit.replace_in_member <file-path> --member-name <unique member name> --old-text <exact text> --new-text <replacement text> [--mode member|body] [--apply true] [--replace-all true]",
+                direct = "edit.replace_in_member <file-path> --member-name <unique member name> --old-text <exact text> --new-text <replacement text> [--mode member|body] [--apply true] [--replace-all true] [--preview-chars 256]",
                 run = "run edit.replace_in_member --input '{\"file_path\":\"tests/MyTests.cs\",\"member_name\":\"TargetTest\",\"old_text\":\"Assert.Equal(1, value);\",\"new_text\":\"Assert.Equal(2, value);\",\"apply\":true}'",
                 required_properties = new[] { "file_path", "old_text", "new_text", "member_name or line+column" },
-                optional_properties = new[] { "member_name", "line", "column", "mode", "apply", "replace_all", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle" },
+                optional_properties = new[] { "member_name", "line", "column", "mode", "apply", "replace_all", "preview_chars", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle" },
                 notes = new[]
                 {
                     "Use after edit.claim for small exact edits that should be scoped to a single member rather than the whole file.",
                     "Prefer member_name after ctx.file_outline/ctx.member_source identifies a unique member; use line+column only when names are ambiguous.",
-                    "Defaults: mode=member, apply=true, replace_all=false, include_diagnostics=true.",
+                    "Defaults: mode=member, apply=true, replace_all=false, include_diagnostics=true, preview_chars=96.",
                     "Matching is confined to the selected member/body and tolerates LF snippets against CRLF files.",
-                    "Successful responses include matches[] with line/column/offset/length/text_preview/new_text_preview; the CLI preview shows the first matched line.",
+                    "Successful responses include matches[] with line/column/offset/length/text_preview/new_text_preview; increase preview_chars when auditing long assertion insertions.",
                     "If old_text is missing or ambiguous inside the member, re-read with ctx.member_source --member-name <name> --focus-text <nearby text> before retrying.",
                     "For whole-member replacement, keep using ctx.member_source include_edit_target_text=true plus edit.batch_exact replace_span with expected_text.",
                 },
@@ -3969,7 +3969,7 @@ Workflow:
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 body --brief true");
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 member --include-edit-target-text true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli ctx.member_source tests/MyTests.cs 1200 17 member --focus-text TargetCase --context-lines-before 3 --context-lines-after 8 --max-chars 12000");
-        sb.AppendLine("roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text \"Assert.Equal(1, value);\" --new-text \"Assert.Equal(2, value);\"");
+        sb.AppendLine("roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text \"Assert.Equal(1, value);\" --new-text \"Assert.Equal(2, value);\" --preview-chars 256");
         sb.AppendLine("roscli run edit.batch_exact --input-stdin  # use kind=replace_span from edit_target.exact_span_text.text");
         sb.AppendLine("roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true");
@@ -4152,7 +4152,7 @@ Workflow:
                 edit.rename_symbol <file-path> <line> <column> <new-name>
                 edit.create_file <file-path> [--content <text>]
                 edit.replace_text <file-path> --old-text <exact text> --new-text <replacement text>
-                edit.replace_in_member <file-path> --member-name <name> --old-text <exact text> --new-text <replacement text>
+                edit.replace_in_member <file-path> --member-name <name> --old-text <exact text> --new-text <replacement text> [--preview-chars 256]
                 edit.insert_text <file-path> --anchor-text <exact anchor> --insert-text <text> [--position after|before]
                 session.open <file-path> [session-id]
                 session.get_diagnostics <session-id>
@@ -4179,7 +4179,7 @@ Workflow:
                 query.batch --queries @batch-queries.json --continue-on-error true
                 edit.create_file src/NewType.cs --content "public class NewType { }" --overwrite false
                 edit.replace_text src/MyFile.cs --old-text "Title = \"Help\"" --new-text "Title = BuildHelpTitle(state.HelpOverlayScroll)"
-                edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text "Assert.Equal(1, value);" --new-text "Assert.Equal(2, value);"
+                edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text "Assert.Equal(1, value);" --new-text "Assert.Equal(2, value);" --preview-chars 256
                 edit.insert_text src/MyFile.cs --anchor-text "[\"help_visible\"] = state.HelpVisible," --insert-text "`n            [\"help_overlay_title\"] = BuildHelpTitle(...)," --position after
                 session.commit <session-id> --keep-session false --require-disk-unchanged true
               - For nav/diag file commands, check response workspace_context.mode.

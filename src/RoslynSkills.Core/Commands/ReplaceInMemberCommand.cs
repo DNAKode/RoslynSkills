@@ -59,6 +59,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         InputParsing.ValidateOptionalBool(input, "apply", errors);
         InputParsing.ValidateOptionalBool(input, "include_diagnostics", errors);
         InputParsing.ValidateOptionalInt(input, "max_diagnostics", errors, minValue: 1, maxValue: 2_000);
+        InputParsing.ValidateOptionalInt(input, "preview_chars", errors, minValue: 16, maxValue: 2_000);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         return errors;
@@ -83,6 +84,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
         bool includeDiagnostics = InputParsing.GetOptionalBool(input, "include_diagnostics", defaultValue: true);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 2_000);
+        int previewChars = InputParsing.GetOptionalInt(input, "preview_chars", defaultValue: 96, minValue: 16, maxValue: 2_000);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
 
@@ -105,7 +107,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         string originalContent = analysis.SourceText.ToString();
         string targetText = originalContent.Substring(targetSpan.Start, targetSpan.Length);
         (int MatchCount, string EffectiveOldText, string MatchMode) match = ResolveOldText(targetText, oldText);
-        MatchLocation[] matchLocations = GetMatchLocations(analysis.SourceText, targetSpan.Start, targetText, match.EffectiveOldText, newText);
+        MatchLocation[] matchLocations = GetMatchLocations(analysis.SourceText, targetSpan.Start, targetText, match.EffectiveOldText, newText, previewChars);
         if (match.MatchCount == 0)
         {
             CommandError error = new("old_text_not_found", "The supplied old_text was not found in the selected member.");
@@ -170,6 +172,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
             old_text_character_count = oldText.Length,
             effective_old_text_character_count = match.EffectiveOldText.Length,
             new_text_character_count = newText.Length,
+            preview_chars = previewChars,
             character_delta = updatedContent.Length - originalContent.Length,
             hot_workspace_refresh = hotWorkspaceRefresh,
             diagnostics_after_replace = diagnosticsData,
@@ -389,7 +392,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         return (0, oldText, "none");
     }
 
-    private static MatchLocation[] GetMatchLocations(SourceText sourceText, int targetStart, string targetText, string oldText, string newText)
+    private static MatchLocation[] GetMatchLocations(SourceText sourceText, int targetStart, string targetText, string oldText, string newText, int previewChars)
     {
         if (string.IsNullOrEmpty(oldText))
         {
@@ -406,21 +409,20 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
                 column: position.Character + 1,
                 target_offset: index,
                 length: oldText.Length,
-                text_preview: BuildTextPreview(oldText),
-                new_text_preview: BuildTextPreview(newText)));
+                text_preview: BuildTextPreview(oldText, previewChars),
+                new_text_preview: BuildTextPreview(newText, previewChars)));
             index += oldText.Length;
         }
 
         return matches.ToArray();
     }
 
-    private static string BuildTextPreview(string text)
+    private static string BuildTextPreview(string text, int maxLength)
     {
         string singleLine = text
             .Replace("\r\n", "\\n", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal)
             .Replace("\r", "\\n", StringComparison.Ordinal);
-        const int maxLength = 96;
         return singleLine.Length <= maxLength
             ? singleLine
             : singleLine[..(maxLength - 3)] + "...";

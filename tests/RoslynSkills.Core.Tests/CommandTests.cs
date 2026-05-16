@@ -893,6 +893,49 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public async Task ReplaceInMemberCommand_UsesRequestedPreviewChars()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Demo
+            {
+                public void Target()
+                {
+                    Assert.Equal("abcdefghijklmnopqrstuvwxyz", value);
+                }
+            }
+            """);
+
+        try
+        {
+            ReplaceInMemberCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name = "Target",
+                old_text = "Assert.Equal(\"abcdefghijklmnopqrstuvwxyz\", value);",
+                new_text = "Assert.Equal(\"abcdefghijklmnopqrstuvwxyz0123456789\", value);",
+                preview_chars = 128,
+                apply = false,
+                include_diagnostics = false,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement firstMatch = doc.RootElement.GetProperty("matches")[0];
+            Assert.Equal(128, doc.RootElement.GetProperty("preview_chars").GetInt32());
+            Assert.Equal("Assert.Equal(\"abcdefghijklmnopqrstuvwxyz\", value);", firstMatch.GetProperty("text_preview").GetString());
+            Assert.Equal("Assert.Equal(\"abcdefghijklmnopqrstuvwxyz0123456789\", value);", firstMatch.GetProperty("new_text_preview").GetString());
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task ReplaceInMemberCommand_ReportsAmbiguousMemberName()
     {
         string filePath = WriteTempFile(

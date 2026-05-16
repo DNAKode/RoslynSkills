@@ -366,7 +366,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                 new
                 {
                     command = "edit.replace_in_member",
-                    when = "Use for small exact snippet replacement scoped to this unique member/body after edit.claim; avoids file-wide ambiguity and tolerates line-ending-only snippet drift.",
+                    when = "Use for small exact snippet replacement scoped to this unique member/body after edit.claim; avoids file-wide ambiguity and tolerates line-ending-only snippet drift. Add preview_chars when auditing long old/new assertion blocks.",
                     next_step = "describe-command edit.replace_in_member",
                 },
                 new
