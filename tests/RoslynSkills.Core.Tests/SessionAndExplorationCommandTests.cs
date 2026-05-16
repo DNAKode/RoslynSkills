@@ -94,6 +94,50 @@ public sealed class SessionAndExplorationCommandTests
     }
 
     [Fact]
+    public async Task MemberSourceCommand_EditTargetExplainsPrefixRepairWithTrivia()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class Calculator
+            {
+                    public int Add(int left, int right)
+                {
+                    return left + right;
+                }
+            }
+            """);
+
+        try
+        {
+            MemberSourceCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                line = 3,
+                column = 13,
+                mode = "member",
+                include_edit_target_text = true,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
+            JsonElement trivia = doc.RootElement
+                .GetProperty("edit_target")
+                .GetProperty("trivia");
+
+            Assert.True(trivia.GetProperty("span_preserves_existing_line_prefix").GetBoolean());
+            Assert.Contains("include_trivia=true", trivia.GetProperty("prefix_edit_rule").GetString());
+            Assert.Contains("duplicated indentation", trivia.GetProperty("prefix_edit_rule").GetString());
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task SessionCommands_OpenSetDiffCommitAndClose()
     {
         string filePath = WriteTempFile(

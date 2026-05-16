@@ -3632,6 +3632,7 @@ Workflow:
                     "Use line/column from ctx.file_outline or nav.find_symbol; member_name is not accepted.",
                     "mode=member returns the whole declaration; mode=body returns only the body when available.",
                     "For replace_span edits, use edit_target.exact_span_text.text as the replacement base and follow edit_target.trivia.new_text_first_line_rule to avoid double indentation.",
+                    "If edit_target.trivia.prefix_edit_rule says the preserved line prefix is wrong, rerun with include_trivia=true before replacing indentation or attributes.",
                     "After workspace.preload, file/workspace-path commands infer the daemon root from file_path/workspace_path and can reuse alias=default across supervising cwd boundaries.",
                     "Pass workspace_handle explicitly when using a non-default alias or when the input has no file_path/workspace_path to route from.",
                     "Check query.workspace_context.workspace_cache_mode. process_hot means the daemon workspace was reused; process_balanced means a fresh CLI workspace was loaded.",

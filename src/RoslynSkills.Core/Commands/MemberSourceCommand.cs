@@ -332,6 +332,9 @@ public sealed class MemberSourceCommand : IAgentCommand
                 new_text_first_line_rule = !includeTrivia && preservedLinePrefix.Length > 0
                     ? "Do not include preserved_line_prefix_text at the start of new_text; the file keeps that prefix before span_start."
                     : "Start new_text exactly at span_start.",
+                prefix_edit_rule = !includeTrivia && preservedLinePrefix.Length > 0
+                    ? "If the existing line prefix itself is wrong, such as duplicated indentation before a member or attribute, rerun ctx.member_source with include_trivia=true so replace_span can cover and repair the prefix."
+                    : "This span includes leading trivia, so replace_span can repair indentation or attributes before the declaration.",
             },
             exact_span_text = includeEditTargetText
                 ? (object)new

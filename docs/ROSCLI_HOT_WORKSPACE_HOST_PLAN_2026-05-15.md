@@ -689,3 +689,9 @@ Daemon-capable tool calls now infer the daemon repo root from `workspace_path` o
 3. `roscli edit.batch_exact C:\Work\Target\src\File.cs --operation ...`
 
 When a command has no routeable file or workspace path, agents should still pass a `workspace_handle` or run from the target repo root.
+
+## 2026-05-16 Follow-Up: Prefix-Repair Hint for Trivia Spans
+
+The `.33` FrankenTui.NET repair round showed correct agent behavior but one remaining discoverability gap. The agent first used `ctx.member_source --include-edit-target-text true`, saw the duplicated indentation, and only then reasoned that the default span preserved the bad prefix outside `span_start`. Rerunning with `--include-trivia true` produced a span that could repair the indentation.
+
+`ctx.member_source.Data.edit_target.trivia` now includes `prefix_edit_rule`. For the default no-trivia span, it explicitly says to rerun with `include_trivia=true` when the preserved prefix is the thing being fixed, such as duplicated indentation before a member or attribute. This keeps the normal non-trivia span safe for body edits while making prefix repair discoverable at the edit target.
