@@ -961,7 +961,7 @@ public sealed class CommandTests
                 member_name = "Target",
                 old_text = oldText,
                 new_text = newText,
-                preview_chars = 96,
+                preview_chars = 160,
                 apply = false,
                 include_diagnostics = false,
             });
@@ -978,7 +978,10 @@ public sealed class CommandTests
             Assert.Contains("old", oldPreview);
             Assert.Contains("new", newPreview);
             Assert.Contains("inserted", newPreview);
-            Assert.True(newPreview.Length <= 96);
+            Assert.True(newPreview.Length <= 160);
+            Assert.True(firstMatch.GetProperty("first_changed_offset").GetInt32() > 0);
+            Assert.Equal(12, firstMatch.GetProperty("first_changed_line_delta").GetInt32());
+            Assert.True(firstMatch.GetProperty("first_changed_column_delta").GetInt32() > 0);
         }
         finally
         {

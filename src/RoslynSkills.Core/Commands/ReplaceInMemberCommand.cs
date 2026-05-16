@@ -404,12 +404,16 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         while ((index = targetText.IndexOf(oldText, index, StringComparison.Ordinal)) >= 0)
         {
             LinePosition position = sourceText.Lines.GetLinePosition(targetStart + index);
-            (string oldPreview, string newPreview) = BuildTextPreviews(oldText, newText, previewChars);
+            ChangeLocation change = BuildChangeLocation(oldText, newText);
+            (string oldPreview, string newPreview) = BuildTextPreviews(oldText, newText, previewChars, change.first_changed_offset);
             matches.Add(new MatchLocation(
                 line: position.Line + 1,
                 column: position.Character + 1,
                 target_offset: index,
                 length: oldText.Length,
+                first_changed_offset: change.first_changed_offset,
+                first_changed_line_delta: change.first_changed_line_delta,
+                first_changed_column_delta: change.first_changed_column_delta,
                 text_preview: oldPreview,
                 new_text_preview: newPreview));
             index += oldText.Length;
@@ -418,11 +422,10 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         return matches.ToArray();
     }
 
-    private static (string oldPreview, string newPreview) BuildTextPreviews(string oldText, string newText, int maxLength)
+    private static (string oldPreview, string newPreview) BuildTextPreviews(string oldText, string newText, int maxLength, int firstDifference)
     {
         string oldSingleLine = BuildSingleLinePreviewText(oldText);
         string newSingleLine = BuildSingleLinePreviewText(newText);
-        int firstDifference = FindFirstDifference(oldSingleLine, newSingleLine);
         if (firstDifference < 0 ||
             (oldSingleLine.Length <= maxLength && newSingleLine.Length <= maxLength) ||
             firstDifference < Math.Max(8, maxLength / 2))
@@ -478,6 +481,32 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         return left.Length == right.Length ? -1 : length;
     }
 
+    private static ChangeLocation BuildChangeLocation(string oldText, string newText)
+    {
+        int firstDifference = FindFirstDifference(oldText, newText);
+        if (firstDifference < 0)
+        {
+            return new ChangeLocation(-1, -1, -1);
+        }
+
+        int line = 0;
+        int column = 0;
+        for (int i = 0; i < firstDifference; i++)
+        {
+            if (oldText[i] == '\n')
+            {
+                line++;
+                column = 0;
+            }
+            else if (oldText[i] != '\r')
+            {
+                column++;
+            }
+        }
+
+        return new ChangeLocation(firstDifference, line, column);
+    }
+
     private static string NormalizeLineEndingsForTarget(string value, string targetText)
     {
         string lineEnding = targetText.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
@@ -516,5 +545,16 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         => string.Equals(mode, "member", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(mode, "body", StringComparison.OrdinalIgnoreCase);
 
-    private sealed record MatchLocation(int line, int column, int target_offset, int length, string text_preview, string new_text_preview);
+    private sealed record ChangeLocation(int first_changed_offset, int first_changed_line_delta, int first_changed_column_delta);
+
+    private sealed record MatchLocation(
+        int line,
+        int column,
+        int target_offset,
+        int length,
+        int first_changed_offset,
+        int first_changed_line_delta,
+        int first_changed_column_delta,
+        string text_preview,
+        string new_text_preview);
 }
