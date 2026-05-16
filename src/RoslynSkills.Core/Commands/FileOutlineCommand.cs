@@ -51,6 +51,8 @@ public sealed class FileOutlineCommand : IAgentCommand
         bool includeMembers = InputParsing.GetOptionalBool(input, "include_members", defaultValue: true);
         int maxTypes = InputParsing.GetOptionalInt(input, "max_types", defaultValue: 500, minValue: 1, maxValue: 10_000);
         int maxMembers = InputParsing.GetOptionalInt(input, "max_members", defaultValue: 2_000, minValue: 1, maxValue: 50_000);
+        string? typeNameContains = GetOptionalTrimmedString(input, "type_name_contains");
+        string? memberNameContains = GetOptionalTrimmedString(input, "member_name_contains");
 
         string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         string language = CommandLanguageServices.DetectLanguageFromFilePath(filePath);
@@ -68,6 +70,8 @@ public sealed class FileOutlineCommand : IAgentCommand
                 includeMembers,
                 maxTypes,
                 maxMembers,
+                typeNameContains,
+                memberNameContains,
                 cancellationToken);
         }
 
@@ -79,6 +83,8 @@ public sealed class FileOutlineCommand : IAgentCommand
             includeMembers,
             maxTypes,
             maxMembers,
+            typeNameContains,
+            memberNameContains,
             cancellationToken);
     }
 
@@ -90,6 +96,8 @@ public sealed class FileOutlineCommand : IAgentCommand
         bool includeMembers,
         int maxTypes,
         int maxMembers,
+        string? typeNameContains,
+        string? memberNameContains,
         CancellationToken cancellationToken)
     {
         if (rootNode is not CSharpSyntax.CompilationUnitSyntax root)
@@ -111,11 +119,12 @@ public sealed class FileOutlineCommand : IAgentCommand
         List<TypeOutline> typeOutlines = new();
         int remainingMembers = maxMembers;
         foreach (CSharpSyntax.BaseTypeDeclarationSyntax typeDeclaration in root.DescendantNodes(descendIntoTrivia: false)
-                     .OfType<CSharpSyntax.BaseTypeDeclarationSyntax>()
-                     .Take(maxTypes))
+                     .OfType<CSharpSyntax.BaseTypeDeclarationSyntax>())
         {
             cancellationToken.ThrowIfCancellationRequested();
             LinePosition position = sourceText.Lines.GetLinePosition(typeDeclaration.SpanStart);
+            string typeName = GetCSharpTypeName(typeDeclaration);
+            bool typeMatches = MatchesFilter(typeName, typeNameContains);
 
             List<MemberOutline> memberOutlines = new();
             if (includeMembers && remainingMembers > 0)
@@ -129,7 +138,13 @@ public sealed class FileOutlineCommand : IAgentCommand
                             break;
                         }
 
-                        memberOutlines.Add(CreateCSharpMemberOutline(member, sourceText));
+                        MemberOutline outline = CreateCSharpMemberOutline(member, sourceText);
+                        if (!MatchesMemberFilter(outline, memberNameContains))
+                        {
+                            continue;
+                        }
+
+                        memberOutlines.Add(outline);
                         remainingMembers--;
                     }
                 }
@@ -142,10 +157,21 @@ public sealed class FileOutlineCommand : IAgentCommand
                             break;
                         }
 
-                        memberOutlines.Add(CreateCSharpEnumMemberOutline(enumMember, sourceText));
+                        MemberOutline outline = CreateCSharpEnumMemberOutline(enumMember, sourceText);
+                        if (!MatchesMemberFilter(outline, memberNameContains))
+                        {
+                            continue;
+                        }
+
+                        memberOutlines.Add(outline);
                         remainingMembers--;
                     }
                 }
+            }
+
+            if (!typeMatches && (string.IsNullOrWhiteSpace(memberNameContains) || memberOutlines.Count == 0))
+            {
+                continue;
             }
 
             typeOutlines.Add(new TypeOutline(
@@ -156,12 +182,16 @@ public sealed class FileOutlineCommand : IAgentCommand
                     .Name
                     .ToString(),
                 type_kind: typeDeclaration.Kind().ToString(),
-                type_name: GetCSharpTypeName(typeDeclaration),
+                type_name: typeName,
                 line: position.Line + 1,
                 column: position.Character + 1,
                 modifiers: typeDeclaration.Modifiers.Select(m => m.ValueText).ToArray(),
                 base_types: GetCSharpBaseTypes(typeDeclaration),
                 members: memberOutlines));
+            if (typeOutlines.Count >= maxTypes)
+            {
+                break;
+            }
         }
 
         int globalStatementCount = root.Members.OfType<CSharpSyntax.GlobalStatementSyntax>().Count();
@@ -178,6 +208,8 @@ public sealed class FileOutlineCommand : IAgentCommand
                 include_members = includeMembers,
                 max_types = maxTypes,
                 max_members = maxMembers,
+                type_name_contains = typeNameContains,
+                member_name_contains = memberNameContains,
             },
             usings,
             types = typeOutlines,
@@ -194,6 +226,8 @@ public sealed class FileOutlineCommand : IAgentCommand
         bool includeMembers,
         int maxTypes,
         int maxMembers,
+        string? typeNameContains,
+        string? memberNameContains,
         CancellationToken cancellationToken)
     {
         if (rootNode is not VbSyntax.CompilationUnitSyntax root)
@@ -215,11 +249,12 @@ public sealed class FileOutlineCommand : IAgentCommand
         List<TypeOutline> typeOutlines = new();
         int remainingMembers = maxMembers;
         foreach (SyntaxNode typeNode in root.DescendantNodes(descendIntoTrivia: false)
-                     .Where(IsVbTypeNode)
-                     .Take(maxTypes))
+                     .Where(IsVbTypeNode))
         {
             cancellationToken.ThrowIfCancellationRequested();
             LinePosition position = sourceText.Lines.GetLinePosition(typeNode.SpanStart);
+            string typeName = GetVbTypeName(typeNode);
+            bool typeMatches = MatchesFilter(typeName, typeNameContains);
 
             List<MemberOutline> memberOutlines = new();
             if (includeMembers && remainingMembers > 0)
@@ -231,9 +266,20 @@ public sealed class FileOutlineCommand : IAgentCommand
                         break;
                     }
 
-                    memberOutlines.Add(CreateVbMemberOutline(memberNode, sourceText));
+                    MemberOutline outline = CreateVbMemberOutline(memberNode, sourceText);
+                    if (!MatchesMemberFilter(outline, memberNameContains))
+                    {
+                        continue;
+                    }
+
+                    memberOutlines.Add(outline);
                     remainingMembers--;
                 }
+            }
+
+            if (!typeMatches && (string.IsNullOrWhiteSpace(memberNameContains) || memberOutlines.Count == 0))
+            {
+                continue;
             }
 
             typeOutlines.Add(new TypeOutline(
@@ -245,12 +291,16 @@ public sealed class FileOutlineCommand : IAgentCommand
                     .Name
                     .ToString(),
                 type_kind: CommandLanguageServices.GetSyntaxKindName(typeNode),
-                type_name: GetVbTypeName(typeNode),
+                type_name: typeName,
                 line: position.Line + 1,
                 column: position.Character + 1,
                 modifiers: GetVbTypeModifiers(typeNode),
                 base_types: GetVbBaseTypes(typeNode),
                 members: memberOutlines));
+            if (typeOutlines.Count >= maxTypes)
+            {
+                break;
+            }
         }
 
         object data = new
@@ -266,6 +316,8 @@ public sealed class FileOutlineCommand : IAgentCommand
                 include_members = includeMembers,
                 max_types = maxTypes,
                 max_members = maxMembers,
+                type_name_contains = typeNameContains,
+                member_name_contains = memberNameContains,
             },
             usings = imports,
             types = typeOutlines,
@@ -294,6 +346,28 @@ public sealed class FileOutlineCommand : IAgentCommand
             VbSyntax.EnumBlockSyntax enumBlock => enumBlock.Members.Cast<SyntaxNode>(),
             _ => Array.Empty<SyntaxNode>(),
         };
+    }
+
+    private static bool MatchesFilter(string value, string? contains)
+        => string.IsNullOrWhiteSpace(contains) ||
+           value.Contains(contains, StringComparison.OrdinalIgnoreCase);
+
+    private static bool MatchesMemberFilter(MemberOutline outline, string? memberNameContains)
+        => string.IsNullOrWhiteSpace(memberNameContains) ||
+           outline.member_name.Contains(memberNameContains, StringComparison.OrdinalIgnoreCase) ||
+           outline.signature.Contains(memberNameContains, StringComparison.OrdinalIgnoreCase);
+
+    private static string? GetOptionalTrimmedString(JsonElement input, string propertyName)
+    {
+        if (!input.TryGetProperty(propertyName, out JsonElement property) || property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        string? value = property.GetString();
+        return string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Trim();
     }
 
     private static string GetVbTypeName(SyntaxNode typeNode)

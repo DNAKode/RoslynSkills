@@ -707,3 +707,15 @@ When `ctx.member_source` is called with `include_edit_target_text=true` and the 
 In the next supervised pass, the agent tried `edit.claim list` even though the supported status operation was `edit.claim status`. That is a pit-of-success issue rather than a meaningful user error: agents commonly use `list` for stateful resources.
 
 `edit.claim list` is now accepted as an alias for `edit.claim status` in both direct CLI shorthand and JSON input. Help text advertises `status|list|claim|release`.
+
+## 2026-05-16 Follow-Up: Filtered File Outlines for Large Test Files
+
+The next supervised pass used `ctx.search_text` well, but reported that `ctx.file_outline` stayed noisy on `ShowcaseShellTests.cs`. Large test fixtures need a way to get line/column anchors for one focused test without returning thousands of unrelated members.
+
+`ctx.file_outline` now accepts `member_name_contains` and `type_name_contains`. For example:
+
+```powershell
+roscli ctx.file_outline tests/FrankenTui.Tests.Headless/ShowcaseShellTests.cs --member-name-contains EvidenceLedger --max-members 40
+```
+
+The command returns matching member outlines plus the containing type, keeping the response small enough to use directly as input for `ctx.member_source`.

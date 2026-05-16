@@ -3605,6 +3605,22 @@ Workflow:
             };
         }
 
+        if (string.Equals(commandId, "ctx.file_outline", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "ctx.file_outline <file-path> [--option value ...]",
+                run = "run ctx.file_outline --input '{\"file_path\":\"tests/MyTests.cs\",\"member_name_contains\":\"EvidenceLedger\",\"include_members\":true,\"max_members\":40}'",
+                required_properties = new[] { "file_path" },
+                optional_properties = new[] { "include_usings", "include_members", "max_types", "max_members", "type_name_contains", "member_name_contains" },
+                notes = new[]
+                {
+                    "For huge test files, pass member_name_contains to return only matching member outlines and their containing type.",
+                    "Use returned line/column anchors with ctx.member_source; member_name is not accepted by ctx.member_source.",
+                },
+            };
+        }
+
         if (string.Equals(commandId, "ctx.search_text", StringComparison.OrdinalIgnoreCase))
         {
             return new
@@ -4038,7 +4054,7 @@ Workflow:
                 session.commit <session-id>
                 session.close <session-id>
               - Direct shorthand also accepts command options:
-                ctx.file_outline <file-path> --include-members false --max-members 50
+                ctx.file_outline <file-path> --member-name-contains TestName --max-members 20
                 diag.get_file_diagnostics <file-path> --workspace-path MySolution.slnx --require-workspace true
                 ctx.search_text "RemoteUserAction" src --mode literal --max-results 100
                 nav.find_symbol src/MyFile.cs Run --first-declaration true --brief true

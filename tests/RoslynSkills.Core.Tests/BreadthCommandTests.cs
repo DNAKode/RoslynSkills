@@ -1080,6 +1080,48 @@ public sealed class BreadthCommandTests
     }
 
     [Fact]
+    public async Task FileOutlineCommand_FiltersMembersByNameContains()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class ShowcaseShellTests
+            {
+                public void ShowcaseEvidenceLedgerListsScrolledHelpOverlayTitle()
+                {
+                }
+
+                public void UnrelatedPaletteTest()
+                {
+                }
+            }
+            """);
+
+        try
+        {
+            FileOutlineCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name_contains = "EvidenceLedger",
+                max_members = 20,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"type_name\":\"ShowcaseShellTests\"", json);
+            Assert.Contains("ShowcaseEvidenceLedgerListsScrolledHelpOverlayTitle", json);
+            Assert.DoesNotContain("UnrelatedPaletteTest", json);
+            Assert.Contains("\"member_name_contains\":\"EvidenceLedger\"", json);
+            Assert.Contains("\"member_count\":1", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task ChangeSignatureAndAddMemberCommands_ApplyUpdates()
     {
         string filePath = WriteTempFile(

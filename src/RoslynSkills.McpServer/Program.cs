@@ -913,6 +913,8 @@ internal static class Program
             properties["include_members"] = BoolProperty("Include member outlines for each type.");
             properties["max_types"] = IntProperty("Maximum type declarations returned.", 1);
             properties["max_members"] = IntProperty("Maximum member declarations returned.", 1);
+            properties["type_name_contains"] = StringProperty("Optional case-insensitive type-name substring filter.");
+            properties["member_name_contains"] = StringProperty("Optional case-insensitive member-name/signature substring filter; useful for huge test files.");
             required.Add("file_path");
             return;
         }
