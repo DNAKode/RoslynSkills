@@ -430,6 +430,86 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public void DaemonCapableToolCall_InferredDaemonRootUsesFilePathGitRoot()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-tool-root-{Guid.NewGuid():N}");
+        string repoRoot = Path.Combine(tempRoot, "TargetRepo");
+        string filePath = Path.Combine(repoRoot, "src", "App", "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(repoRoot, ".git"));
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            File.WriteAllText(filePath, "public class Demo { }\n");
+
+            System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
+                "InferToolCallDaemonRepoRoot",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            JsonElement input = JsonSerializer.SerializeToElement(new
+            {
+                file_path = filePath,
+                line = 1,
+                column = 14,
+            });
+
+            string inferred = (string)method.Invoke(null, new object?[] { input })!;
+
+            Assert.Equal(Path.GetFullPath(repoRoot), inferred);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void DaemonCapableToolCall_InferredDaemonRootUsesNestedBatchOperationPath()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-tool-batch-root-{Guid.NewGuid():N}");
+        string repoRoot = Path.Combine(tempRoot, "TargetRepo");
+        string filePath = Path.Combine(repoRoot, "src", "App", "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(repoRoot, ".git"));
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            File.WriteAllText(filePath, "public class Demo { }\n");
+
+            System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
+                "InferToolCallDaemonRepoRoot",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            JsonElement input = JsonSerializer.SerializeToElement(new
+            {
+                operations = new object[]
+                {
+                    new
+                    {
+                        kind = "replace_span",
+                        file_path = filePath,
+                        span_start = 0,
+                        span_length = 6,
+                        new_text = "public",
+                    },
+                },
+            });
+
+            string inferred = (string)method.Invoke(null, new object?[] { input })!;
+
+            Assert.Equal(Path.GetFullPath(repoRoot), inferred);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task WorkspaceStatus_WhenDaemonUnavailable_ReturnsDaemonUnavailable()
     {
         string repoRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-daemon-missing-{Guid.NewGuid():N}");

@@ -677,3 +677,15 @@ This keeps the pit-of-success guidance aligned with the behavior observed in the
 When supervising FrankenTui.NET from the RoslynSkills host pane, `workspace.preload C:\Work\FrankenTui.Net\FrankenTui.Net.sln` initially keyed the daemon to the caller's current repo. That made later `daemon.stop --repo-root C:\Work\FrankenTui.Net` miss the host and risked stale global-tool locks.
 
 `workspace.use` and `workspace.preload` now infer the daemon repo root from the target solution/project path when `--repo-root` is omitted. Explicit `--repo-root` still wins. This keeps cross-repo supervision, alias stores, and daemon lifecycle commands aligned with the workspace being loaded instead of the shell location that launched the command.
+
+## 2026-05-16 Follow-Up: File-Based Hot Command Routing
+
+The next cross-repo smoke exposed the companion routing gap: after `workspace.preload C:\Work\FrankenTui.Net\FrankenTui.Net.sln` correctly started the FrankenTui daemon, `ctx.member_source C:\Work\FrankenTui.Net\...\ShowcaseSurface.cs ...` launched from the RoslynSkills host pane still looked for the RoslynSkills cwd daemon and returned `daemon_unavailable`.
+
+Daemon-capable tool calls now infer the daemon repo root from `workspace_path` or `file_path` in the command input, including nested operation payloads such as `edit.batch_exact.operations[].file_path`. This makes the canonical supervised loop work without changing directories:
+
+1. `roscli workspace.preload C:\Work\Target\Target.sln --alias default`
+2. `roscli ctx.member_source C:\Work\Target\src\File.cs 42 17 member --include-edit-target-text true`
+3. `roscli edit.batch_exact C:\Work\Target\src\File.cs --operation ...`
+
+When a command has no routeable file or workspace path, agents should still pass a `workspace_handle` or run from the target repo root.

@@ -306,7 +306,7 @@ public sealed class CliApplication
                             name = "span_member_edit_without_double_indent",
                             commands = new[]
                             {
-                                "roscli ctx.member_source src/MyProject/Program.cs 42 17 member --include-edit-target-text true --workspace-path MySolution.slnx --require-workspace true",
+                                "roscli ctx.member_source src/MyProject/Program.cs 42 17 member --include-edit-target-text true",
                                 "roscli edit.claim claim src/MyProject/Program.cs --reason span-member-edit",
                                 "roscli run edit.batch_exact --input-stdin",
                                 "roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true",
@@ -969,7 +969,8 @@ Workflow:
         bool requireHotWorkspace = string.Equals(routingMode, "required", StringComparison.OrdinalIgnoreCase) ||
                                    IsPublishedModeEnabled("ROSCLI_REQUIRE_HOT_WORKSPACE");
         WorkspaceHostDaemonManager manager = new();
-        WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint();
+        string? repoRoot = InferToolCallDaemonRepoRoot(input);
+        WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
         if (!TryResolveHotWorkspaceInput(
                 input,
                 endpoint.RepoRoot,
@@ -1034,6 +1035,57 @@ Workflow:
 
     private static bool HasErrorCode(IEnumerable<CommandError> errors, string code)
         => errors.Any(error => string.Equals(error.Code, code, StringComparison.OrdinalIgnoreCase));
+
+    private static string? InferToolCallDaemonRepoRoot(JsonElement input)
+    {
+        if (TryFindWorkspaceOrFilePath(input, out string targetPath))
+        {
+            return InferWorkspaceDaemonRepoRoot(explicitRepoRoot: null, targetPath);
+        }
+
+        return null;
+    }
+
+    private static bool TryFindWorkspaceOrFilePath(JsonElement element, out string targetPath)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (TryGetString(element, "workspace_path", out string workspacePath) &&
+                !string.IsNullOrWhiteSpace(workspacePath))
+            {
+                targetPath = workspacePath;
+                return true;
+            }
+
+            if (TryGetString(element, "file_path", out string filePath) &&
+                !string.IsNullOrWhiteSpace(filePath))
+            {
+                targetPath = filePath;
+                return true;
+            }
+
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (TryFindWorkspaceOrFilePath(property.Value, out targetPath))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in element.EnumerateArray())
+            {
+                if (TryFindWorkspaceOrFilePath(item, out targetPath))
+                {
+                    return true;
+                }
+            }
+        }
+
+        targetPath = string.Empty;
+        return false;
+    }
 
     private async Task<int> HandleRunDirectAsync(
         string commandId,
@@ -3580,7 +3632,8 @@ Workflow:
                     "Use line/column from ctx.file_outline or nav.find_symbol; member_name is not accepted.",
                     "mode=member returns the whole declaration; mode=body returns only the body when available.",
                     "For replace_span edits, use edit_target.exact_span_text.text as the replacement base and follow edit_target.trivia.new_text_first_line_rule to avoid double indentation.",
-                    "After workspace.preload, omit workspace_handle only if you used the default alias; otherwise pass the returned handle explicitly.",
+                    "After workspace.preload, file/workspace-path commands infer the daemon root from file_path/workspace_path and can reuse alias=default across supervising cwd boundaries.",
+                    "Pass workspace_handle explicitly when using a non-default alias or when the input has no file_path/workspace_path to route from.",
                     "Check query.workspace_context.workspace_cache_mode. process_hot means the daemon workspace was reused; process_balanced means a fresh CLI workspace was loaded.",
                 },
             };
@@ -3657,6 +3710,7 @@ Workflow:
                     "Set require_solution=true in benchmark/promotion runs to fail closed if a loose project is resolved.",
                     "Response includes workspace_handle for repeated semantic commands.",
                     "Direct workspace.preload now persists alias=default unless --alias is provided; later daemon-capable commands can auto-route to that hot workspace.",
+                    "Daemon-capable commands with file_path/workspace_path infer the same repo root from that path, so cross-repo supervisors do not need to cd into the target repo.",
                 },
             };
         }
@@ -3938,6 +3992,7 @@ Workflow:
               - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
               - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
               - workspace.use/preload infer daemon repo root from the target solution/project path unless --repo-root is provided.
+              - Daemon-capable tool calls with file_path/workspace_path infer the same daemon repo root, so supervising from another cwd still finds the target hot workspace.
               - Daemon-capable semantic commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
               - Set ROSCLI_DAEMON=required and ROSCLI_WORKSPACE_ALIAS=default to fail closed when a hot workspace is required.
               - Recommended first minute:
