@@ -2067,11 +2067,22 @@ Workflow:
                 input["operation"] = positionalArgs[0];
                 if (positionalArgs.Length > 1)
                 {
-                    input["paths"] = positionalArgs
+                    string[] claimArgs = positionalArgs
                         .Skip(1)
                         .Where(path => !string.IsNullOrWhiteSpace(path))
-                        .Select(NormalizeCliPathValue)
                         .ToArray();
+                    if (string.Equals(positionalArgs[0], "release", StringComparison.OrdinalIgnoreCase) &&
+                        claimArgs.Length == 1 &&
+                        claimArgs[0].StartsWith("claim_", StringComparison.Ordinal))
+                    {
+                        input["claim_id"] = claimArgs[0];
+                    }
+                    else
+                    {
+                        input["paths"] = claimArgs
+                            .Select(NormalizeCliPathValue)
+                            .ToArray();
+                    }
                 }
                 break;
 

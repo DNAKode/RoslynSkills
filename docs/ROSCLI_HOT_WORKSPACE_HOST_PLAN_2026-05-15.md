@@ -73,6 +73,13 @@ roscli --no-daemon nav.find_symbol src/App/Foo.cs Foo
 - This command targets the observed FrankenTui.NET pattern directly: add an evidence field or assertion after a known neighboring line without dropping into patch mode.
 - Next supervised prompt should explicitly prefer `edit.insert_text` for one-line additions and require the agent to state the anchor used.
 
+2026-05-16 `.25` follow-up:
+
+- Live `.24` FrankenTui.NET run used roscli hot workspace for search/member context, claims, diagnostics, and focused tests, but still mutated C# through the patch editor for a one-line replacement and test insertion.
+- `ctx.member_source` now returns an `edit_workflow` block that puts the claim-first rule, target line range, and preferred mutation commands (`edit.replace_text`, `edit.insert_text`, `edit.transaction`) next to the source payload.
+- Fixed `edit.claim release <claim_id>` direct CLI behavior so claim IDs act as explicit release tokens even when the releasing shell does not pass the original owner. Path-based release remains owner-scoped unless forced.
+- Next supervised prompt should require the agent to read `ctx.member_source.edit_workflow` and select one listed mutation command before any `.cs` patch-editor fallback.
+
 ## Architecture
 
 Add a long-running local host process:

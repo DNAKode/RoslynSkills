@@ -226,9 +226,48 @@ public sealed class MemberSourceCommand : IAgentCommand
                     truncated = false,
                     character_count = sourceCharacterCount,
                 },
+            ["edit_workflow"] = BuildEditWorkflow(analysis.FilePath, memberName, mode, targetStartLine, targetEndLine),
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static object BuildEditWorkflow(string filePath, string memberName, SourceMode mode, int targetStartLine, int targetEndLine)
+    {
+        string targetDescription = mode == SourceMode.Body ? "member body" : "member declaration";
+        return new
+        {
+            multi_agent_rule = "Before mutating this file/member, reserve it with edit.claim; release the claim after validation.",
+            claim_example = $"edit.claim claim {filePath} --reason edit-{memberName}",
+            target = new
+            {
+                description = targetDescription,
+                start_line = targetStartLine,
+                end_line = targetEndLine,
+            },
+            preferred_mutation_commands = new[]
+            {
+                new
+                {
+                    command = "edit.replace_text",
+                    when = "Use for exact snippet replacement inside this member after copying the exact old_text from source.text.",
+                    next_step = "describe-command edit.replace_text",
+                },
+                new
+                {
+                    command = "edit.insert_text",
+                    when = "Use for exact-anchor insertion before/after a unique nearby line from source.text.",
+                    next_step = "describe-command edit.insert_text",
+                },
+                new
+                {
+                    command = "edit.transaction",
+                    when = "Use for coordinated multi-span or multi-file edits after all affected files are claimed.",
+                    next_step = "describe-command edit.transaction",
+                },
+            },
+            fallback_rule = "If a .cs mutation cannot use a Roslyn edit command, record the attempted command and reason in ROSLYN_FALLBACK_REFLECTION_LOG.md.",
+        };
     }
 
     private static bool TryParseMode(string modeRaw, out SourceMode mode)

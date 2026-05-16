@@ -188,7 +188,7 @@ public sealed class EditClaimCommand : IAgentCommand
                                 string.Equals(claim.ClaimId, claimId, StringComparison.Ordinal);
             bool matchesPath = paths.Length > 0 &&
                                claim.Paths.Any(path => paths.Contains(path, StringComparer.OrdinalIgnoreCase));
-            bool ownerAllowed = force || string.Equals(claim.Owner, owner, StringComparison.OrdinalIgnoreCase);
+            bool ownerAllowed = matchesClaim || force || string.Equals(claim.Owner, owner, StringComparison.OrdinalIgnoreCase);
             return ownerAllowed && (matchesClaim || matchesPath);
         });
 

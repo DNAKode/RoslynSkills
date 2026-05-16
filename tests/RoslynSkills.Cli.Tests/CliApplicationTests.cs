@@ -1,5 +1,6 @@
 using RoslynSkills.Cli;
 using RoslynSkills.Core;
+using System.Text.Json;
 
 namespace RoslynSkills.Cli.Tests;
 
@@ -142,6 +143,69 @@ public sealed class CliApplicationTests
             Assert.Equal(0, statusExit);
             Assert.Contains("\"active_count\": 1", statusOutput);
             Assert.Contains("agent-a", statusOutput);
+        }
+        finally
+        {
+            Directory.Delete(repoRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EditClaim_ReleaseAcceptsClaimIdWithoutOwner()
+    {
+        string repoRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-edit-claim-release-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoRoot);
+        Directory.CreateDirectory(Path.Combine(repoRoot, ".git"));
+
+        try
+        {
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter claimOut = new();
+            StringWriter claimErr = new();
+
+            int claimExit = await app.RunAsync(
+                new[]
+                {
+                    "edit.claim",
+                    "claim",
+                    "src/Demo.cs",
+                    "--repo-root",
+                    repoRoot,
+                    "--owner",
+                    "agent-a",
+                    "--reason",
+                    "test claim",
+                },
+                claimOut,
+                claimErr,
+                CancellationToken.None);
+
+            Assert.Equal(0, claimExit);
+            using JsonDocument claimJson = JsonDocument.Parse(claimOut.ToString());
+            string claimId = claimJson.RootElement.GetProperty("Data").GetProperty("claimed").GetProperty("claim_id").GetString()!;
+
+            StringWriter releaseOut = new();
+            StringWriter releaseErr = new();
+            int releaseExit = await app.RunAsync(
+                new[] { "edit.claim", "release", claimId, "--repo-root", repoRoot },
+                releaseOut,
+                releaseErr,
+                CancellationToken.None);
+
+            string releaseOutput = releaseOut.ToString();
+            Assert.Equal(0, releaseExit);
+            Assert.Contains("\"released_count\": 1", releaseOutput);
+
+            StringWriter statusOut = new();
+            StringWriter statusErr = new();
+            int statusExit = await app.RunAsync(
+                new[] { "edit.claim", "status", "--repo-root", repoRoot },
+                statusOut,
+                statusErr,
+                CancellationToken.None);
+
+            Assert.Equal(0, statusExit);
+            Assert.Contains("\"active_count\": 0", statusOut.ToString());
         }
         finally
         {
@@ -739,6 +803,11 @@ public sealed class CliApplicationTests
             Assert.Contains("\"CommandId\": \"ctx.member_source\"", output);
             Assert.Contains("return left", output);
             Assert.Contains("right;", output);
+            Assert.Contains("\"edit_workflow\"", output);
+            Assert.Contains("edit.claim", output);
+            Assert.Contains("edit.replace_text", output);
+            Assert.Contains("edit.insert_text", output);
+            Assert.Contains("edit.transaction", output);
         }
         finally
         {
