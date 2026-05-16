@@ -2372,6 +2372,26 @@ public sealed class CliApplicationTests
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
     }
 
+    [Fact]
+    public async Task CSharpStartSupervised_WithSolution_ReturnsConcretePreload()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "csharp-start", "--supervised", "--solution", "FrankenTui.Net.sln" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("workspace.preload FrankenTui.Net.sln --alias default --require-solution true", output);
+        Assert.DoesNotContain("workspace.preload <solution.sln|.slnx>", output);
+        Assert.Contains("roscli workspace.preload FrankenTui.Net.sln --alias default --require-solution true", output);
+    }
+
 
     [Fact]
     public async Task Llmstxt_Default_ReturnsStableBootstrapGuide()

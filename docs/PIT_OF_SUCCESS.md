@@ -35,6 +35,8 @@ This gives command discovery, a hot solution workspace, member-scoped source con
 
 For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a two-turn protocol. First require the agent to run only `roscli csharp-start` and report its first two headings. Assign the C# slice only after the transcript shows the command actually ran; prose promises are not enough. Turn 2 should preload the solution with `workspace.preload` before `ctx.file_outline` or `ctx.member_source`, should run `describe-command` before the first Roslyn edit command, and should use `ctx.search_text` or `ctx.member_source` instead of `rg` for `.cs` closeout anchors.
 
+When the solution filename is known, prefer `roscli csharp-start --supervised --solution <solution.sln|.slnx>` so Turn 2 contains a copyable `workspace.preload` command instead of a placeholder.
+
 For `.cs` orientation, try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
 
 ## Command Tiers
@@ -55,6 +57,7 @@ Default policy:
 
 ```text
 roscli csharp-start --supervised
+roscli csharp-start --supervised --solution MySolution.slnx
 roscli csharp-start
 roscli workspace.preload MySolution.slnx --alias default --require-solution true
 roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20

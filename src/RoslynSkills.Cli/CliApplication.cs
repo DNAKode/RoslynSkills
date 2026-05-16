@@ -468,14 +468,16 @@ Workflow:
     {
         if (args.Any(a => IsHelp(a)))
         {
-            await stdout.WriteLineAsync("Usage: roscli csharp-start [--supervised]").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Usage: roscli csharp-start [--supervised] [--solution <path.sln|path.slnx>]").ConfigureAwait(false);
             await stdout.WriteLineAsync("Emit the shortest C# agent workflow for semantic navigation and claim-first edits.").ConfigureAwait(false);
             await stdout.WriteLineAsync("Use --supervised for a two-turn operator protocol that verifies the command was actually run before assigning C# work.").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Use --solution to print concrete workspace.preload commands instead of placeholders.").ConfigureAwait(false);
             return 0;
         }
 
         bool supervised = HasOption(args, "--supervised");
-        await stdout.WriteAsync(BuildCSharpStartGuide(supervised)).ConfigureAwait(false);
+        TryGetOption(args, "--solution", out string? solutionPath);
+        await stdout.WriteAsync(BuildCSharpStartGuide(supervised, solutionPath)).ConfigureAwait(false);
         return 0;
     }
 
@@ -4039,8 +4041,15 @@ Workflow:
         return sb.ToString();
     }
 
-    private static string BuildCSharpStartGuide(bool supervised)
+    private static string BuildCSharpStartGuide(bool supervised, string? solutionPath)
     {
+        string preloadTarget = string.IsNullOrWhiteSpace(solutionPath)
+            ? "<solution.sln|.slnx>"
+            : solutionPath.Trim();
+        string examplePreloadTarget = string.IsNullOrWhiteSpace(solutionPath)
+            ? "MySolution.slnx"
+            : solutionPath.Trim();
+
         StringBuilder sb = new();
         sb.AppendLine("# roscli csharp-start");
         sb.AppendLine();
@@ -4057,7 +4066,7 @@ Workflow:
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
-            sb.AppendLine("Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command, then the edit command if mutation is needed. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report any .cs fallback explicitly.");
+            sb.AppendLine($"Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, workspace.preload {preloadTarget} --alias default --require-solution true, ctx.file_outline, ctx.member_source, describe-command before the first Roslyn edit command, then the edit command if mutation is needed. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report any .cs fallback explicitly.");
             sb.AppendLine("```");
             sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
         }
@@ -4066,13 +4075,15 @@ Workflow:
         sb.AppendLine("## First Moves");
         sb.AppendLine("```text");
         sb.AppendLine("roscli --version");
-        sb.AppendLine("roscli workspace.preload MySolution.slnx --alias default --require-solution true");
+        sb.AppendLine($"roscli workspace.preload {examplePreloadTarget} --alias default --require-solution true");
         sb.AppendLine("roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20");
         sb.AppendLine("roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8");
         sb.AppendLine("roscli describe-command edit.replace_in_member");
         sb.AppendLine("```");
         sb.AppendLine();
-        sb.AppendLine("Replace `MySolution.slnx`, file paths, member names, and focus text with the current repo targets.");
+        sb.AppendLine(string.IsNullOrWhiteSpace(solutionPath)
+            ? "Replace `MySolution.slnx`, file paths, member names, and focus text with the current repo targets."
+            : "Replace file paths, member names, and focus text with the current repo targets.");
         sb.AppendLine();
         sb.AppendLine("## Source Context");
         sb.AppendLine("- Use `ctx.file_outline` to find compact member anchors in large files.");
