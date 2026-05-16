@@ -107,6 +107,8 @@ roscli edit.claim release <claim_id>
 
 For multiple subagents, use distinct stable `--owner` names and disjoint file claims. Assign known file ownership before spawning; if a subagent discovers a file later, it must claim before its first edit and report the claim id. Serialize shared-file work through one owner. Prefer guarded mutations: `edit.replace_in_member`, `edit.batch_exact` with `expected_text`, or `session.commit --require-disk-unchanged true`.
 
+Mutation command responses include `claim_status`. If a write summary says `unclaimed`, stop further C# mutation, run `edit.claim claim <file> --owner <owner> --reason <slice>`, then continue with guarded edits.
+
 ### 6) Workspace-backed directory triage
 
 ```text
@@ -153,7 +155,8 @@ Workflow:
 4) if argument shape is unclear, run "roscli describe-command <command-id>".
 5) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
 6) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
-7) run diagnostics/build/tests and release claims before finalizing.
+7) if an edit command reports claim_status.claimed=false or summary "unclaimed", claim before further C# mutation.
+8) run diagnostics/build/tests and release claims before finalizing.
 ```
 
 ## Anti-Patterns

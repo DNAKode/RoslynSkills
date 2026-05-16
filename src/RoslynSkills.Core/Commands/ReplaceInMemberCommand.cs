@@ -145,6 +145,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
                 workspaceHandle,
                 cancellationToken)
             .ConfigureAwait(false);
+        object claimStatus = EditClaimAwareness.BuildForFile(filePath, apply && changed);
 
         LinePositionSpan targetLineSpan = analysis.SourceText.Lines.GetLinePositionSpan(targetSpan);
         object data = new
@@ -174,6 +175,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
             new_text_character_count = newText.Length,
             preview_chars = previewChars,
             character_delta = updatedContent.Length - originalContent.Length,
+            claim_status = claimStatus,
             hot_workspace_refresh = hotWorkspaceRefresh,
             diagnostics_after_replace = diagnosticsData,
         };

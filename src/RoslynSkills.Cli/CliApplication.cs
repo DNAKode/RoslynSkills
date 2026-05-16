@@ -3128,9 +3128,10 @@ Workflow:
             int matchCount = TryGetInt(element, "match_count", out int matches) ? matches : -1;
             bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
             string action = wrote ? "written" : "dry-run";
+            string claimSuffix = BuildClaimStatusSuffix(element, wrote);
             return matchCount >= 0
-                ? $"{file}, matches={matchCount}, {action}"
-                : $"{file}, {action}";
+                ? $"{file}, matches={matchCount}, {action}{claimSuffix}"
+                : $"{file}, {action}{claimSuffix}";
         }
 
         if (string.Equals(commandId, "edit.replace_in_member", StringComparison.OrdinalIgnoreCase))
@@ -3148,9 +3149,10 @@ Workflow:
             string lineSuffix = TryGetFirstMatchLine(element, out int line)
                 ? $", line={line}"
                 : string.Empty;
+            string claimSuffix = BuildClaimStatusSuffix(element, wrote);
             return matchCount >= 0
-                ? $"{file}:{member}, matches={matchCount}{lineSuffix}, {action}"
-                : $"{file}:{member}, {action}";
+                ? $"{file}:{member}, matches={matchCount}{lineSuffix}, {action}{claimSuffix}"
+                : $"{file}:{member}, {action}{claimSuffix}";
         }
 
         if (string.Equals(commandId, "edit.insert_text", StringComparison.OrdinalIgnoreCase))
@@ -3327,6 +3329,18 @@ Workflow:
 
         value = default;
         return false;
+    }
+
+    private static string BuildClaimStatusSuffix(JsonElement element, bool wroteFile)
+    {
+        if (!wroteFile ||
+            !TryGetObject(element, "claim_status", out JsonElement claimStatus) ||
+            (TryGetBool(claimStatus, "claimed", out bool claimed) && claimed))
+        {
+            return string.Empty;
+        }
+
+        return ", unclaimed";
     }
 
     private static bool TryGetString(JsonElement element, string propertyName, out string value)

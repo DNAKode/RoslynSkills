@@ -97,6 +97,7 @@ public sealed class ReplaceTextCommand : IAgentCommand
                 workspaceHandle,
                 cancellationToken)
             .ConfigureAwait(false);
+        object claimStatus = EditClaimAwareness.BuildForFile(filePath, apply && changed);
 
         object data = new
         {
@@ -111,6 +112,7 @@ public sealed class ReplaceTextCommand : IAgentCommand
             old_text_character_count = oldText.Length,
             new_text_character_count = newText.Length,
             character_delta = updatedContent.Length - originalContent.Length,
+            claim_status = claimStatus,
             hot_workspace_refresh = hotWorkspaceRefresh,
             diagnostics_after_replace = diagnosticsData,
         };

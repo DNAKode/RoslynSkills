@@ -1567,6 +1567,9 @@ public sealed class CliApplicationTests
             Assert.Contains("\"CommandId\": \"edit.replace_text\"", output);
             Assert.Contains("\"match_count\": 1", output);
             Assert.Contains("\"wrote_file\": true", output);
+            Assert.Contains("\"claim_status\"", output);
+            Assert.Contains("\"claimed\": false", output);
+            Assert.Contains("unclaimed", output);
             Assert.Contains("BuildHelpTitle(state.HelpOverlayScroll)", await File.ReadAllTextAsync(filePath));
         }
         finally
