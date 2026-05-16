@@ -601,3 +601,18 @@ The daemon should be conservative about structural state, but optimistic about s
 - Unknown state: report uncertainty, do not silently continue.
 
 This gives RoslynSkills the "server keeping a project hot" model while respecting Roslyn's existing strengths instead of duplicating them.
+
+## 2026-05-16 Follow-Up: Exact Edit Refresh
+
+The FrankenTui.NET `.26` supervised trial found a correctness hazard in the intended hot loop:
+
+1. `workspace.preload` loaded the solution into the hot host.
+2. `edit.replace_text` wrote a tracked `.cs` file.
+3. `ctx.search_text` saw the new disk content.
+4. `ctx.member_source` still served the pre-edit source from the hot workspace.
+
+The fix is to make exact write commands update any matching in-process hot workspace immediately after a successful file write. `edit.replace_text` and `edit.insert_text` now include `hot_workspace_refresh` in their response. A successful tracked edit should report `matched_workspace_count > 0` and an incremental `refresh_action`, then the next `ctx.member_source` read should reflect the edited source without a manual `workspace.refresh`.
+
+This is intentionally limited to source-text writes. Structural changes such as project files, solution files, generated source configuration, and package references still need explicit refresh/reload semantics.
+
+Remaining workflow issue: agents currently batch several separate exact edit commands in one shell block, which can hide a failed first edit behind later successes. The next editing ergonomics improvement should be a multi-operation exact-edit command with per-operation results, optional fail-fast behavior, and atomic apply where practical.

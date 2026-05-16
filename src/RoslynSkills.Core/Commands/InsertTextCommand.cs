@@ -91,6 +91,12 @@ public sealed class InsertTextCommand : IAgentCommand
             wroteFile = true;
         }
 
+        object hotWorkspaceRefresh = await HotWorkspaceEditRefresh.RefreshAfterWriteAsync(
+                filePath,
+                wroteFile,
+                cancellationToken)
+            .ConfigureAwait(false);
+
         object diagnosticsData = await ExactEditDiagnostics.BuildAsync(
                 filePath,
                 updatedContent,
@@ -114,6 +120,7 @@ public sealed class InsertTextCommand : IAgentCommand
             anchor_text_character_count = anchorText.Length,
             insert_text_character_count = insertText.Length,
             character_delta = updatedContent.Length - originalContent.Length,
+            hot_workspace_refresh = hotWorkspaceRefresh,
             diagnostics_after_insert = diagnosticsData,
         };
 

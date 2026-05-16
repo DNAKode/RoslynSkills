@@ -60,9 +60,13 @@ public sealed class CliApplication
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.stop" => await HandleDaemonStopAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.restart" => await HandleDaemonRestartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.use" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
             "workspace.use" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.preload" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
             "workspace.preload" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.status" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
             "workspace.status" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.refresh" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
             "workspace.refresh" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
             "workspace.close" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
             "workspace.list" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
@@ -707,6 +711,8 @@ Workflow:
             "ctx.member_source" or
             "diag.get_file_diagnostics" or
             "query.batch" or
+            "edit.replace_text" or
+            "edit.insert_text" or
             "edit.rename_symbol" or
             "edit.change_signature";
 
@@ -2725,6 +2731,12 @@ Workflow:
         }
 
         JsonElement element = JsonSerializer.SerializeToElement(data);
+        if (TryGetObject(element, "envelope", out JsonElement hostEnvelope) &&
+            (TryGetObject(hostEnvelope, "Data", out JsonElement nestedData) ||
+             TryGetObject(hostEnvelope, "data", out nestedData)))
+        {
+            element = nestedData;
+        }
 
         if (string.Equals(commandId, "cli.list_commands", StringComparison.OrdinalIgnoreCase))
         {
@@ -3200,6 +3212,7 @@ Workflow:
                     "Use after edit.claim for small exact snippet changes when edit.rename_symbol or edit.replace_member_body do not fit.",
                     "Defaults: apply=true, replace_all=false, include_diagnostics=true.",
                     "When a solution/project is preloaded, diagnostics_after_replace uses the hot workspace by default. Pass workspace_path/workspace_handle explicitly when needed.",
+                    "When apply=true writes a tracked source file, hot_workspace_refresh reports whether preloaded workspaces were incrementally updated.",
                     "replace_all=false fails if old_text is ambiguous; make old_text more specific instead of falling back to patching.",
                     "For multiline old_text/new_text, prefer --input-stdin JSON to avoid shell quoting issues.",
                     "This is a structured roscli mutation bridge, not a semantic refactor. Prefer semantic edit commands when available.",
@@ -3220,6 +3233,7 @@ Workflow:
                     "Use after edit.claim for small insertions when you know an exact nearby anchor line/snippet.",
                     "Default position=after, apply=true, include_diagnostics=true.",
                     "When a solution/project is preloaded, diagnostics_after_insert uses the hot workspace by default. Pass workspace_path/workspace_handle explicitly when needed.",
+                    "When apply=true writes a tracked source file, hot_workspace_refresh reports whether preloaded workspaces were incrementally updated.",
                     "Fails if anchor_text is missing or ambiguous; make anchor_text more specific instead of falling back to patching.",
                     "For multiline insert_text, prefer --input-stdin JSON to avoid shell quoting issues.",
                     "This command exists because agents often need to add one evidence field or assertion after a known line.",

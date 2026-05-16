@@ -1429,6 +1429,127 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_ReplaceText_RefreshesHotWorkspaceAfterWrite()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-refresh-{Guid.NewGuid():N}");
+        string projectPath = Path.Combine(tempDir, "Demo.csproj");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                projectPath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <ImplicitUsings>disable</ImplicitUsings>
+                    <Nullable>disable</Nullable>
+                  </PropertyGroup>
+                </Project>
+                """);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public int Run() => 1;
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter preloadOut = new();
+            StringWriter preloadErr = new();
+            int preloadExit = await app.RunAsync(
+                new[] { "--no-daemon", "workspace.preload", projectPath, "--alias", "default" },
+                preloadOut,
+                preloadErr,
+                CancellationToken.None);
+
+            Assert.True(preloadExit == 0, preloadOut.ToString());
+
+            StringWriter replaceOut = new();
+            StringWriter replaceErr = new();
+            int replaceExit = await app.RunAsync(
+                new[]
+                {
+                    "--no-daemon",
+                    "edit.replace_text",
+                    filePath,
+                    "--old-text", "=> 1",
+                    "--new-text", "=> 2",
+                },
+                replaceOut,
+                replaceErr,
+                CancellationToken.None);
+
+            string replaceOutput = replaceOut.ToString();
+            Assert.Equal(0, replaceExit);
+            Assert.Contains("\"matched_workspace_count\": 1", replaceOutput);
+            Assert.Contains("\"refresh_action\": \"incremental_document_update\"", replaceOutput);
+
+            StringWriter memberOut = new();
+            StringWriter memberErr = new();
+            int memberExit = await app.RunAsync(
+                new[] { "--no-daemon", "ctx.member_source", filePath, "3", "16", "--max-chars", "2000" },
+                memberOut,
+                memberErr,
+                CancellationToken.None);
+
+            string memberOutput = memberOut.ToString();
+            Assert.Equal(0, memberExit);
+            Assert.Contains("=> 2", memberOutput);
+            Assert.DoesNotContain("=> 1", memberOutput);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("edit.replace_text")]
+    [InlineData("edit.insert_text")]
+    public void ExactEditBridgeCommands_AreDaemonCapable(string commandId)
+    {
+        System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
+            "IsDaemonCapableCommand",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        bool result = (bool)method.Invoke(null, new object[] { commandId })!;
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void BuildDataSummary_UsesNestedHostEnvelopeDataForDaemonRoutedExactEdit()
+    {
+        System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
+            "BuildDataSummary",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        object data = new
+        {
+            envelope = new
+            {
+                Data = new
+                {
+                    file_path = @"C:\Temp\Demo.cs",
+                    match_count = 1,
+                    wrote_file = true,
+                },
+            },
+        };
+
+        string? summary = (string?)method.Invoke(null, new object[] { "edit.replace_text", data });
+
+        Assert.Equal("Demo.cs, matches=1, written", summary);
+    }
+
+    [Fact]
     public async Task DescribeCommand_ReplaceText_IncludesMutationBridgeGuidance()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());
