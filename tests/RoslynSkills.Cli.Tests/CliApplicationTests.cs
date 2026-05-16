@@ -1,5 +1,6 @@
 using RoslynSkills.Cli;
 using RoslynSkills.Core;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace RoslynSkills.Cli.Tests;
@@ -32,6 +33,7 @@ public sealed class CliApplicationTests
         Assert.Contains("ctx.file_outline", output);
         Assert.Contains("ctx.member_source", output);
         Assert.Contains("ctx.search_text", output);
+        Assert.Contains("ctx.changed_files", output);
         Assert.Contains("ctx.call_chain_slice", output);
         Assert.Contains("ctx.dependency_slice", output);
         Assert.Contains("analyze.unused_private_symbols", output);
@@ -1156,6 +1158,41 @@ public sealed class CliApplicationTests
             Assert.Equal(0, exitCode);
             Assert.Contains("\"result_guidance\": {", output);
             Assert.Contains("\"Summary\": \"ctx.search_text ok: matches=25, files=1, guidance=narrow\"", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_ChangedFiles_ReportsCSharpDirtyCount()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-changed-files-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        await RunProcessAsync("git", tempDir, "init");
+        await File.WriteAllTextAsync(Path.Combine(tempDir, "Target.cs"), "public class Target { }");
+
+        try
+        {
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.changed_files", tempDir },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"ctx.changed_files\"", output);
+            Assert.Contains("\"csharp_changed\": 1", output);
+            Assert.Contains("\"Summary\": \"ctx.changed_files ok: changed=1, csharp=1\"", output);
         }
         finally
         {
@@ -2960,6 +2997,30 @@ public sealed class CliApplicationTests
         {
             File.Delete(filePath);
         }
+    }
+
+    private static async Task RunProcessAsync(string fileName, string workingDirectory, params string[] arguments)
+    {
+        ProcessStartInfo startInfo = new(fileName)
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using Process process = new() { StartInfo = startInfo };
+        process.Start();
+        string stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr) || stderr.Contains("hint:", StringComparison.OrdinalIgnoreCase), stderr);
     }
 }
 

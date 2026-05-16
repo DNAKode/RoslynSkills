@@ -1862,6 +1862,12 @@ Workflow:
             TryPromoteOptionToPositional(options, "path", ref positionalArgs, 1);
         }
 
+        if (string.Equals(commandId, "ctx.changed_files", StringComparison.OrdinalIgnoreCase))
+        {
+            TryPromoteOptionToPositional(options, "repo_root", ref positionalArgs, 0);
+            TryPromoteOptionToPositional(options, "root", ref positionalArgs, 0);
+        }
+
         if (string.Equals(commandId, "edit.claim", StringComparison.OrdinalIgnoreCase))
         {
             TryPromoteOptionToPositional(options, "operation", ref positionalArgs, 0);
@@ -2151,6 +2157,22 @@ Workflow:
                 }
                 break;
 
+            case "ctx.changed_files":
+                if (positionalArgs.Length > 1)
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "ctx.changed_files [repo-root] [--option value ...]"));
+                    return false;
+                }
+
+                if (positionalArgs.Length == 1 && !string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    input["repo_root"] = NormalizeCliPathValue(positionalArgs[0]);
+                }
+                break;
+
             case "query.batch":
                 if (!TryResolveQueriesArgument(commandId, positionalArgs, options, out object? queryBatchQueries, out error))
                 {
@@ -2393,6 +2415,7 @@ Workflow:
             "analyze.override_coverage" => true,
             "analyze.async_risk_scan" => true,
             "ctx.search_text" => true,
+            "ctx.changed_files" => true,
             "query.batch" => true,
             "edit.rename_symbol" => true,
             "edit.create_file" => true,
@@ -3092,6 +3115,16 @@ Workflow:
                 return filesScanned >= 0
                     ? $"matches={totalMatches}, files={filesScanned}{guidanceSuffix}"
                     : $"matches={totalMatches}{guidanceSuffix}";
+            }
+        }
+
+        if (string.Equals(commandId, "ctx.changed_files", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalChanged = TryGetInt(element, "total_changed", out int total) ? total : -1;
+            int csharpChanged = TryGetInt(element, "csharp_changed", out int csharp) ? csharp : -1;
+            if (totalChanged >= 0)
+            {
+                return $"changed={totalChanged}, csharp={Math.Max(csharpChanged, 0)}";
             }
         }
 
@@ -3812,6 +3845,23 @@ Workflow:
             };
         }
 
+        if (string.Equals(commandId, "ctx.changed_files", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "ctx.changed_files [repo-root] [--option value ...]",
+                run = "run ctx.changed_files --input '{\"repo_root\":\".\"}'",
+                required_properties = Array.Empty<string>(),
+                optional_properties = new[] { "repo_root" },
+                notes = new[]
+                {
+                    "Use this early in dirty worktrees instead of git diff --stat when you need changed C# paths for orientation.",
+                    "This command reports changed paths and categories only; it does not read .cs file contents.",
+                    "Follow suggested_next_steps with ctx.file_outline/ctx.member_source and edit.claim before C# mutation.",
+                },
+            };
+        }
+
         if (string.Equals(commandId, "ctx.member_source", StringComparison.OrdinalIgnoreCase))
         {
             return new
@@ -4100,6 +4150,7 @@ Workflow:
         sb.AppendLine("## First Moves");
         sb.AppendLine("```text");
         sb.AppendLine("roscli --version");
+        sb.AppendLine("roscli ctx.changed_files");
         sb.AppendLine($"roscli workspace.preload {examplePreloadTarget} --alias default --require-solution true");
         sb.AppendLine("roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20");
         sb.AppendLine("roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8");
@@ -4111,6 +4162,7 @@ Workflow:
             : "Replace file paths, member names, and focus text with the current repo targets.");
         sb.AppendLine();
         sb.AppendLine("## Source Context");
+        sb.AppendLine("- In dirty repos, start with `ctx.changed_files` for changed C# paths and suggested next steps instead of `git diff --stat`.");
         sb.AppendLine("- Use `ctx.file_outline --member-name-contains <term> --max-members 20` to find compact member anchors in large files.");
         sb.AppendLine("- Use `ctx.member_source --member-name <name>` when a member name is unique; this avoids stale line/column anchors.");
         sb.AppendLine("- Add `--focus-text <literal>` plus small context windows, usually 3-8 lines, for huge members instead of repeated broad search.");
@@ -4306,6 +4358,7 @@ Workflow:
                 analyze.impact_slice <file-path> <line> <column>
                 analyze.override_coverage <workspace-path>
                 analyze.async_risk_scan <workspace-path>
+                ctx.changed_files [repo-root]
                 ctx.search_text <pattern> [root-or-file]
                 query.batch [queries-json-or-file]
                 edit.rename_symbol <file-path> <line> <column> <new-name>

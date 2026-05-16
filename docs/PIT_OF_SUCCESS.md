@@ -21,6 +21,7 @@ Run this sequence at session start before reading or editing `.cs` files:
 ```text
 roscli --version
 roscli csharp-start
+roscli ctx.changed_files
 roscli workspace.preload MySolution.slnx --alias default --require-solution true
 roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20
 roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text "ExpectedLiteral" --context-lines-before 3 --context-lines-after 8
@@ -37,7 +38,7 @@ For supervised fresh-agent trials, use `roscli csharp-start --supervised` as a t
 
 When the solution filename is known, prefer `roscli csharp-start --supervised --solution <solution.sln|.slnx>` so Turn 2 contains a copyable `workspace.preload` command instead of a placeholder.
 
-For `.cs` orientation, try `ctx.file_outline --member-name-contains <term> --max-members 20`, `ctx.member_source --member-name <name> --focus-text <literal>`, capped `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. `ctx.search_text` accepts both positional scope and direct aliases such as `roscli ctx.search_text --file-path src/MyFile.cs --text RemoteUserAction --max-results 20 --context-lines 0`. If a search response includes `result_guidance`, follow its suggested narrowing command instead of repeating another broad search. If fallback is required, state which roscli command was missing or insufficient.
+For `.cs` orientation in a dirty repo, start with `ctx.changed_files` to see changed C# paths without reading file contents, then use `ctx.file_outline --member-name-contains <term> --max-members 20`, `ctx.member_source --member-name <name> --focus-text <literal>`, capped `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. `ctx.search_text` accepts both positional scope and direct aliases such as `roscli ctx.search_text --file-path src/MyFile.cs --text RemoteUserAction --max-results 20 --context-lines 0`. If a search response includes `result_guidance`, follow its suggested narrowing command instead of repeating another broad search. If fallback is required, state which roscli command was missing or insufficient.
 
 ## Command Tiers
 
@@ -59,6 +60,7 @@ Default policy:
 roscli csharp-start --supervised
 roscli csharp-start --supervised --solution MySolution.slnx
 roscli csharp-start
+roscli ctx.changed_files
 roscli workspace.preload MySolution.slnx --alias default --require-solution true
 roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20
 roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text "ExpectedLiteral" --context-lines-before 3 --context-lines-after 8
@@ -127,7 +129,7 @@ roscli diag.get_workspace_snapshot src --require-workspace true --workspace-path
 - Check `workspace_context.resolved_workspace_path`, `workspace_context.workspace_kind`, and `workspace_context.project_count` when full solution context matters.
 - If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.sln|.slnx|.csproj|dir>` and prefer `--require-workspace true`.
 - For complex payloads, prefer `--input-stdin` over shell-escaped JSON.
-- Do not use `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads for `.cs` orientation until a roscli `ctx.*` or `nav.*` command has been tried.
+- Do not use `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads for `.cs` orientation until a roscli `ctx.*` or `nav.*` command has been tried. In dirty repos, `ctx.changed_files` is the roscli-native first check for changed path scope.
 - Do not use `rg`/`git diff`/file reads merely to report the line number of a changed `.cs` assertion; use `ctx.search_text` or `ctx.member_source`.
 - If RoslynSkills cannot answer a C# query, agent must state why before fallback.
 
@@ -149,14 +151,15 @@ Combined migration pattern:
 Use roscli for C# work in this session.
 Workflow:
 1) before reading or editing .cs files, run "roscli --version" and "roscli csharp-start".
-2) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
-3) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
-3a) keep broad search capped; if "ctx.search_text" returns many matches, narrow with "ctx.file_outline --member-name-contains" or "ctx.member_source --focus-text" instead of repeating broad searches.
-4) if argument shape is unclear, run "roscli describe-command <command-id>".
-5) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
-6) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
-7) if an edit command reports claim_status.claimed=false or summary "unclaimed", claim before further C# mutation.
-8) run diagnostics/build/tests and release claims before finalizing.
+2) in dirty repos, run "roscli ctx.changed_files" for changed C# path scope instead of "git diff --stat".
+3) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
+4) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
+4a) keep broad search capped; if "ctx.search_text" returns many matches, narrow with "ctx.file_outline --member-name-contains" or "ctx.member_source --focus-text" instead of repeating broad searches.
+5) if argument shape is unclear, run "roscli describe-command <command-id>".
+6) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
+7) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
+8) if an edit command reports claim_status.claimed=false or summary "unclaimed", claim before further C# mutation.
+9) run diagnostics/build/tests and release claims before finalizing.
 ```
 
 ## Anti-Patterns

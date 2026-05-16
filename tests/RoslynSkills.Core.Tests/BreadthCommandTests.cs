@@ -1,5 +1,6 @@
 using RoslynSkills.Core.Commands;
 using RoslynSkills.Contracts;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace RoslynSkills.Core.Tests;
@@ -127,6 +128,41 @@ public sealed class BreadthCommandTests
             Assert.Contains("\"recommended_next_step\"", json);
             Assert.Contains("ctx.file_outline", json);
             Assert.Contains("ctx.member_source", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ChangedFilesCommand_ReportsChangedCSharpFilesWithoutReadingContents()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-changed-files-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        await RunProcessAsync("git", root, "init");
+        await File.WriteAllTextAsync(Path.Combine(root, "Target.cs"), "public class Target { }");
+        await File.WriteAllTextAsync(Path.Combine(root, "notes.md"), "# Notes");
+
+        try
+        {
+            ChangedFilesCommand command = new();
+            JsonElement input = ToJsonElement(new { repo_root = root });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"dirty\":true", json);
+            Assert.Contains("\"total_changed\":2", json);
+            Assert.Contains("\"csharp_changed\":1", json);
+            Assert.Contains("\"path\":\"Target.cs\"", json);
+            Assert.Contains("\"category\":\"csharp\"", json);
+            Assert.Contains("ctx.file_outline Target.cs", json);
+            Assert.DoesNotContain("public class Target", json);
         }
         finally
         {
@@ -1549,6 +1585,29 @@ public sealed class BreadthCommandTests
         string path = Path.Combine(Path.GetTempPath(), $"roslyn-agent-breadth-{Guid.NewGuid():N}.cs");
         File.WriteAllText(path, contents);
         return path;
+    }
+
+    private static async Task RunProcessAsync(string fileName, string workingDirectory, params string[] arguments)
+    {
+        ProcessStartInfo startInfo = new(fileName)
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using Process process = new() { StartInfo = startInfo };
+        process.Start();
+        string stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr) || stderr.Contains("hint:", StringComparison.OrdinalIgnoreCase), stderr);
     }
 
     private static JsonElement ToJsonElement(object value)

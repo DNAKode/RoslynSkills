@@ -29,6 +29,7 @@ public static class DefaultRegistryFactory
             new FileOutlineCommand(),
             new MemberSourceCommand(),
             new SearchTextCommand(),
+            new ChangedFilesCommand(),
             new CallChainSliceCommand(),
             new DependencySliceCommand(),
             new QueryBatchCommand(),
