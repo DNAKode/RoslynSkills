@@ -2316,6 +2316,7 @@ public sealed class CliApplicationTests
         Assert.Contains("csharp_fresh_session", output);
         Assert.Contains("workspace.preload MySolution.slnx --alias default --require-solution true", output);
         Assert.Contains("roscli csharp-start", output);
+        Assert.Contains("roscli csharp-start --supervised", output);
         Assert.Contains("ctx.file_outline tests/MyTests.cs --member-name-contains Target", output);
         Assert.Contains("edit.replace_in_member tests/MyTests.cs --member-name TargetTest", output);
         Assert.Contains("Do not use git diff, rg, Get-Content, sed, cat, or patch-editor reads for .cs orientation", output);
@@ -2347,6 +2348,28 @@ public sealed class CliApplicationTests
         Assert.Contains("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads", output);
     }
 
+    [Fact]
+    public async Task CSharpStartSupervised_ReturnsTwoTurnProtocol()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "csharp-start", "--supervised" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Supervised Two-Turn Protocol", output);
+        Assert.Contains("Run exactly this command now", output);
+        Assert.Contains("Ran roscli csharp-start", output);
+        Assert.Contains("do not treat prose promises as compliance", output);
+        Assert.Contains("edit.claim list, ctx.file_outline, ctx.member_source", output);
+    }
+
 
     [Fact]
     public async Task Llmstxt_Default_ReturnsStableBootstrapGuide()
@@ -2365,6 +2388,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("# roscli llmstxt", output);
         Assert.Contains("run `roscli csharp-start` before `.cs` text reads", output);
+        Assert.Contains("roscli csharp-start --supervised", output);
         Assert.Contains("catalog mode: `stable-only`", output);
         Assert.Contains("## Fast Start (Low Round-Trips)", output);
         Assert.Contains("`nav.find_symbol`", output);

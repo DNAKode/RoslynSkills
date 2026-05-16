@@ -283,6 +283,7 @@ public sealed class CliApplication
                     first_minute_sequence = new[]
                     {
                         "roscli --version",
+                        "roscli csharp-start --supervised",
                         "roscli csharp-start",
                         "roscli workspace.preload MySolution.slnx --alias default --require-solution true",
                         "roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20",
@@ -304,6 +305,7 @@ public sealed class CliApplication
                             commands = new[]
                             {
                                 "roscli --version",
+                                "roscli csharp-start --supervised",
                                 "roscli csharp-start",
                                 "roscli workspace.preload MySolution.slnx --alias default --require-solution true",
                                 "roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20",
@@ -466,12 +468,14 @@ Workflow:
     {
         if (args.Any(a => IsHelp(a)))
         {
-            await stdout.WriteLineAsync("Usage: roscli csharp-start").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Usage: roscli csharp-start [--supervised]").ConfigureAwait(false);
             await stdout.WriteLineAsync("Emit the shortest C# agent workflow for semantic navigation and claim-first edits.").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Use --supervised for a two-turn operator protocol that verifies the command was actually run before assigning C# work.").ConfigureAwait(false);
             return 0;
         }
 
-        await stdout.WriteAsync(BuildCSharpStartGuide()).ConfigureAwait(false);
+        bool supervised = HasOption(args, "--supervised");
+        await stdout.WriteAsync(BuildCSharpStartGuide(supervised)).ConfigureAwait(false);
         return 0;
     }
 
@@ -3995,6 +3999,7 @@ Workflow:
         sb.AppendLine();
         sb.AppendLine("## Fast Start (Low Round-Trips)");
         sb.AppendLine("1. For C#/.NET repo work, run `roscli csharp-start` before `.cs` text reads or patch-editor edits.");
+        sb.AppendLine("   For supervised fresh-agent trials, use `roscli csharp-start --supervised` and verify the transcript before assigning the slice.");
         sb.AppendLine("2. Pick a command from the catalog below and run it directly.");
         sb.AppendLine("3. Call `roscli describe-command <command-id>` only when argument shape is unclear.");
         sb.AppendLine("4. Use `diag.get_file_diagnostics` (or build/tests) before finalizing edits.");
@@ -4034,12 +4039,29 @@ Workflow:
         return sb.ToString();
     }
 
-    private static string BuildCSharpStartGuide()
+    private static string BuildCSharpStartGuide(bool supervised)
     {
         StringBuilder sb = new();
         sb.AppendLine("# roscli csharp-start");
         sb.AppendLine();
         sb.AppendLine("Use this before reading or editing `.cs` files in a C#/.NET repo.");
+        if (supervised)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Supervised Two-Turn Protocol");
+            sb.AppendLine("Turn 1 prompt:");
+            sb.AppendLine("```text");
+            sb.AppendLine("Run exactly this command now, then stop and report the first two headings it prints: roscli csharp-start");
+            sb.AppendLine("```");
+            sb.AppendLine("Accept only evidence that the transcript contains `Ran roscli csharp-start` before any `.cs` `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor read.");
+            sb.AppendLine();
+            sb.AppendLine("Turn 2 prompt after the heading report:");
+            sb.AppendLine("```text");
+            sb.AppendLine("Continue one narrow, testable C# slice. Use roscli for .cs context and edits: edit.claim list, ctx.file_outline, ctx.member_source, then a Roslyn edit command if mutation is needed. Report any .cs fallback explicitly.");
+            sb.AppendLine("```");
+            sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
+        }
+
         sb.AppendLine();
         sb.AppendLine("## First Moves");
         sb.AppendLine("```text");
