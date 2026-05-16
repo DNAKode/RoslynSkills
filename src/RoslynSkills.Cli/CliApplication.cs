@@ -55,6 +55,7 @@ public sealed class CliApplication
             "list-commands" => await HandleListCommandsAsync(remainder, stdout).ConfigureAwait(false),
             "describe-command" => await HandleDescribeCommandAsync(remainder, stdout).ConfigureAwait(false),
             "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
+            "csharp-start" => await HandleCSharpStartAsync(remainder, stdout).ConfigureAwait(false),
             "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
             "daemon.start" => await HandleDaemonStartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
@@ -262,6 +263,7 @@ public sealed class CliApplication
                     pit_of_success = new[]
                     {
                         "For fresh C# sessions, run the csharp_fresh_session sequence below before reading or editing .cs files.",
+                        "For a smaller copyable C# workflow, run: roscli csharp-start",
                         "Start with: roscli list-commands --ids-only",
                         "Use roscli list-commands --stable-only --ids-only for strict/default-safe command selection.",
                         "If arguments are unclear: roscli describe-command <command-id>",
@@ -281,6 +283,7 @@ public sealed class CliApplication
                     first_minute_sequence = new[]
                     {
                         "roscli --version",
+                        "roscli csharp-start",
                         "roscli workspace.preload MySolution.slnx --alias default --require-solution true",
                         "roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20",
                         "roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8",
@@ -301,6 +304,7 @@ public sealed class CliApplication
                             commands = new[]
                             {
                                 "roscli --version",
+                                "roscli csharp-start",
                                 "roscli workspace.preload MySolution.slnx --alias default --require-solution true",
                                 "roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20",
                                 "roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8",
@@ -356,7 +360,7 @@ public sealed class CliApplication
                     agent_intro_prompt = """
 Use roscli for C# and VB.NET work in this session.
 Workflow:
-1) before reading or editing .cs files, run "roscli --version" and "roscli quickstart".
+1) before reading or editing .cs files, run "roscli --version" and "roscli csharp-start".
 2) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
 3) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
 4) if argument shape is unclear, run "roscli describe-command <command-id>".
@@ -408,6 +412,12 @@ Workflow:
         => new[]
         {
             new CommandDescriptor(
+                Id: "csharp-start",
+                Summary: "Emit the shortest C# agent workflow: workspace preload, ctx.member_source, claim-first edits, and multi-agent coordination.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "markdown",
+                MutatesState: false),
+            new CommandDescriptor(
                 Id: "daemon.start",
                 Summary: "Start or reuse the process-hot Roslyn workspace host daemon.",
                 InputSchemaVersion: "1.0",
@@ -449,6 +459,19 @@ Workflow:
             await stdout.WriteLineAsync().ConfigureAwait(false);
         }
 
+        return 0;
+    }
+
+    private async Task<int> HandleCSharpStartAsync(string[] args, TextWriter stdout)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await stdout.WriteLineAsync("Usage: roscli csharp-start").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Emit the shortest C# agent workflow for semantic navigation and claim-first edits.").ConfigureAwait(false);
+            return 0;
+        }
+
+        await stdout.WriteAsync(BuildCSharpStartGuide()).ConfigureAwait(false);
         return 0;
     }
 
@@ -1158,7 +1181,7 @@ Workflow:
         await WriteEnvelopeAsync(stdout, ErrorEnvelope(
             commandId: "cli",
             code: "unknown_verb",
-            message: $"Unknown command '{verb}'. Use '--help', 'llmstxt', 'quickstart', or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
+            message: $"Unknown command '{verb}'. Use '--help', 'csharp-start', 'llmstxt', 'quickstart', or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
         await stderr.WriteLineAsync($"Unknown command '{verb}'.").ConfigureAwait(false);
         return 1;
     }
@@ -3913,8 +3936,10 @@ Workflow:
         return new
         {
             quickstart = "Run 'quickstart' for a compact pit-of-success workflow brief.",
+            csharp_start = "Run 'csharp-start' before .cs reads/edits for the shortest C# semantic workflow.",
             first_steps = new[]
             {
+                "csharp-start",
                 "list-commands --ids-only",
                 "describe-command session.open",
                 "describe-command edit.create_file",
@@ -3969,9 +3994,10 @@ Workflow:
 
         sb.AppendLine();
         sb.AppendLine("## Fast Start (Low Round-Trips)");
-        sb.AppendLine("1. Pick a command from the catalog below and run it directly.");
-        sb.AppendLine("2. Call `roscli describe-command <command-id>` only when argument shape is unclear.");
-        sb.AppendLine("3. Use `diag.get_file_diagnostics` (or build/tests) before finalizing edits.");
+        sb.AppendLine("1. For C#/.NET repo work, run `roscli csharp-start` before `.cs` text reads or patch-editor edits.");
+        sb.AppendLine("2. Pick a command from the catalog below and run it directly.");
+        sb.AppendLine("3. Call `roscli describe-command <command-id>` only when argument shape is unclear.");
+        sb.AppendLine("4. Use `diag.get_file_diagnostics` (or build/tests) before finalizing edits.");
         sb.AppendLine();
         sb.AppendLine("## Guardrails");
         sb.AppendLine("- `session.open` supports only `.cs/.csx` files.");
@@ -4005,6 +4031,55 @@ Workflow:
         sb.AppendLine("- Use `roscli` for in-repo semantic navigation, edits, diagnostics, and repair.");
         sb.AppendLine("- `roscli` is not a package index/version-diff tool; treat dotnet tools as complementary helpers.");
 
+        return sb.ToString();
+    }
+
+    private static string BuildCSharpStartGuide()
+    {
+        StringBuilder sb = new();
+        sb.AppendLine("# roscli csharp-start");
+        sb.AppendLine();
+        sb.AppendLine("Use this before reading or editing `.cs` files in a C#/.NET repo.");
+        sb.AppendLine();
+        sb.AppendLine("## First Moves");
+        sb.AppendLine("```text");
+        sb.AppendLine("roscli --version");
+        sb.AppendLine("roscli workspace.preload MySolution.slnx --alias default --require-solution true");
+        sb.AppendLine("roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20");
+        sb.AppendLine("roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8");
+        sb.AppendLine("roscli describe-command edit.replace_in_member");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("Replace `MySolution.slnx`, file paths, member names, and focus text with the current repo targets.");
+        sb.AppendLine();
+        sb.AppendLine("## Source Context");
+        sb.AppendLine("- Use `ctx.file_outline` to find compact member anchors in large files.");
+        sb.AppendLine("- Use `ctx.member_source --member-name <name>` when a member name is unique; this avoids stale line/column anchors.");
+        sb.AppendLine("- Add `--focus-text <literal>` plus small context windows for huge members instead of `rg`/`Get-Content`.");
+        sb.AppendLine("- Add `--include-edit-target-text true` only when constructing a whole-member/body span replacement.");
+        sb.AppendLine("- For whole-target span edits, build `new_text` from `Data.edit_target.exact_span_text.text`, not from line-oriented `source.text`.");
+        sb.AppendLine();
+        sb.AppendLine("## Editing");
+        sb.AppendLine("```text");
+        sb.AppendLine("roscli edit.claim list");
+        sb.AppendLine("roscli edit.claim claim tests/MyTests.cs --owner agent-main --reason narrow-csharp-slice");
+        sb.AppendLine("roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text \"Assert.Equal(1, value);\" --new-text \"Assert.Equal(2, value);\" --preview-chars 256");
+        sb.AppendLine("dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~TargetTest");
+        sb.AppendLine("roscli edit.claim release <claim_id>");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("Use `edit.replace_in_member` for small exact changes inside one member. Use `edit.batch_exact` with `replace_span` and `expected_text` for coordinated whole-member or multi-file edits. Use `edit.insert_text` for exact-anchor insertions.");
+        sb.AppendLine();
+        sb.AppendLine("## Multi-Agent Coordination");
+        sb.AppendLine("- Each agent/subagent checks `edit.claim list` before `.cs` mutation.");
+        sb.AppendLine("- Claim every file to be changed before editing; use distinct `--owner` values.");
+        sb.AppendLine("- Do not force through another active claim unless a human/operator decided ownership changed.");
+        sb.AppendLine("- Prefer disjoint file ownership for parallel agents; for shared files, serialize edits through one owner.");
+        sb.AppendLine("- Use guarded edits (`edit.replace_in_member`, `edit.batch_exact expected_text`, or `session.commit --require-disk-unchanged true`) so stale context fails closed.");
+        sb.AppendLine("- Release claims after focused tests or when abandoning the slice.");
+        sb.AppendLine();
+        sb.AppendLine("## Fallback Rule");
+        sb.AppendLine("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads. Try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` first. If roscli cannot answer, state the attempted command and the missing capability before fallback.");
         return sb.ToString();
     }
 
@@ -4117,6 +4192,7 @@ Workflow:
               list-commands [--compact] [--ids-only] [--stable-only]
               describe-command <command-id>
               quickstart
+              csharp-start
               llmstxt [--full]
               daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
               daemon.status [--repo-root <path>]
@@ -4135,6 +4211,7 @@ Workflow:
             Notes:
               - Use --version, -v, or version to print the installed roscli version.
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
+              - Use csharp-start for the shortest C# workflow: preload, ctx.member_source, claim, edit, verify.
               - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
               - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
               - workspace.use/preload infer daemon repo root from the target solution/project path unless --repo-root is provided.
@@ -4142,6 +4219,7 @@ Workflow:
               - Daemon-capable semantic commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
               - Set ROSCLI_DAEMON=required and ROSCLI_WORKSPACE_ALIAS=default to fail closed when a hot workspace is required.
               - Recommended first minute:
+                roscli csharp-start
                 roscli llmstxt
                 roscli list-commands --ids-only
                 roscli quickstart

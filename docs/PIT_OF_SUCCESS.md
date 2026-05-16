@@ -20,7 +20,7 @@ Run this sequence at session start before reading or editing `.cs` files:
 
 ```text
 roscli --version
-roscli quickstart
+roscli csharp-start
 roscli workspace.preload MySolution.slnx --alias default --require-solution true
 roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20
 roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text "ExpectedLiteral" --context-lines-before 3 --context-lines-after 8
@@ -30,6 +30,8 @@ roscli list-commands --stable-only --ids-only
 ```
 
 This gives command discovery, a hot solution workspace, member-scoped source context, and the high-traffic scoped edit schema up front.
+
+`roscli csharp-start` is the compact markdown version intended for fresh agents. Use it when a prompt can only point to one roscli onboarding command.
 
 For `.cs` orientation, try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` before `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or a patch-editor read. If fallback is required, state which roscli command was missing or insufficient.
 
@@ -50,6 +52,7 @@ Default policy:
 ### 1) Fresh C# slice
 
 ```text
+roscli csharp-start
 roscli workspace.preload MySolution.slnx --alias default --require-solution true
 roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20
 roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text "ExpectedLiteral" --context-lines-before 3 --context-lines-after 8
@@ -85,7 +88,20 @@ roscli session.commit demo-session --keep-session false --require-disk-unchanged
 
 Note: `session.*` diagnostics are file-only (`ad_hoc`). For project-backed errors/warnings, prefer `diag.get_file_diagnostics` or `diag.get_after_edit` with `--require-workspace true` and pass `--workspace-path` if needed.
 
-### 5) Workspace-backed directory triage
+### 5) Multi-agent claim-first edit loop
+
+```text
+roscli edit.claim list
+roscli edit.claim claim src/MyFile.cs --owner agent-a --reason focused-slice
+roscli ctx.member_source src/MyFile.cs --member-name HandleInput --focus-text "TargetLiteral" --context-lines-before 3 --context-lines-after 8
+roscli edit.replace_in_member src/MyFile.cs --member-name HandleInput --old-text "old exact text" --new-text "new exact text" --preview-chars 256
+dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~FocusedTest
+roscli edit.claim release <claim_id>
+```
+
+For multiple subagents, use distinct `--owner` names and disjoint file claims. Serialize shared-file work through one owner. Prefer guarded mutations: `edit.replace_in_member`, `edit.batch_exact` with `expected_text`, or `session.commit --require-disk-unchanged true`.
+
+### 6) Workspace-backed directory triage
 
 ```text
 roscli diag.get_workspace_snapshot src --brief true --require-workspace true
@@ -123,7 +139,7 @@ Combined migration pattern:
 
 Use roscli for C# work in this session.
 Workflow:
-1) before reading or editing .cs files, run "roscli --version" and "roscli quickstart".
+1) before reading or editing .cs files, run "roscli --version" and "roscli csharp-start".
 2) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
 3) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
 4) if argument shape is unclear, run "roscli describe-command <command-id>".

@@ -72,6 +72,7 @@ public sealed class CliApplicationTests
         Assert.Contains("daemon.restart", output);
         Assert.Contains("pit_of_success", output);
         Assert.Contains("quickstart", output);
+        Assert.Contains("csharp-start", output);
     }
 
     [Fact]
@@ -2314,9 +2315,36 @@ public sealed class CliApplicationTests
         Assert.Contains("edit_target.exact_span_text.text", output);
         Assert.Contains("csharp_fresh_session", output);
         Assert.Contains("workspace.preload MySolution.slnx --alias default --require-solution true", output);
+        Assert.Contains("roscli csharp-start", output);
         Assert.Contains("ctx.file_outline tests/MyTests.cs --member-name-contains Target", output);
         Assert.Contains("edit.replace_in_member tests/MyTests.cs --member-name TargetTest", output);
         Assert.Contains("Do not use git diff, rg, Get-Content, sed, cat, or patch-editor reads for .cs orientation", output);
+    }
+
+    [Fact]
+    public async Task CSharpStart_ReturnsOperationalAgentGuide()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "csharp-start" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("# roscli csharp-start", output);
+        Assert.Contains("workspace.preload MySolution.slnx --alias default --require-solution true", output);
+        Assert.Contains("ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text", output);
+        Assert.Contains("Data.edit_target.exact_span_text.text", output);
+        Assert.Contains("edit.claim list", output);
+        Assert.Contains("edit.replace_in_member tests/MyTests.cs --member-name TargetTest", output);
+        Assert.Contains("Multi-Agent Coordination", output);
+        Assert.Contains("distinct `--owner` values", output);
+        Assert.Contains("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads", output);
     }
 
 
@@ -2336,6 +2364,7 @@ public sealed class CliApplicationTests
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
         Assert.Contains("# roscli llmstxt", output);
+        Assert.Contains("run `roscli csharp-start` before `.cs` text reads", output);
         Assert.Contains("catalog mode: `stable-only`", output);
         Assert.Contains("## Fast Start (Low Round-Trips)", output);
         Assert.Contains("`nav.find_symbol`", output);
@@ -2386,6 +2415,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("version", output);
         Assert.Contains("quickstart", output);
+        Assert.Contains("csharp-start", output);
         Assert.Contains("llmstxt", output);
         Assert.Contains("pit-of-success", output);
     }
