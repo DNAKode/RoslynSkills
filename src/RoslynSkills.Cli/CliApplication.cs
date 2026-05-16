@@ -273,6 +273,8 @@ public sealed class CliApplication
                         "For project-backed files, prefer --require-workspace true to fail closed instead of silently using ad_hoc.",
                         "Check workspace_context.resolved_workspace_path/workspace_kind/project_count to verify solution vs project binding.",
                         "Validate with diagnostics and build/tests before finalizing.",
+                        "For whole-member/body edits, call ctx.member_source with include_edit_target_text=true and use edit_target.exact_span_text.text as the replace_span new_text base.",
+                        "Do not build replace_span new_text from line-oriented source.text unless you intentionally account for edit_target.trivia.preserved_line_prefix_text.",
                     },
                     first_minute_sequence = new[]
                     {
@@ -296,6 +298,17 @@ public sealed class CliApplication
                             {
                                 "roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true",
                                 "roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true",
+                                "roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true",
+                            },
+                        },
+                        new
+                        {
+                            name = "span_member_edit_without_double_indent",
+                            commands = new[]
+                            {
+                                "roscli ctx.member_source src/MyProject/Program.cs 42 17 member --include-edit-target-text true --workspace-path MySolution.slnx --require-workspace true",
+                                "roscli edit.claim claim src/MyProject/Program.cs --reason span-member-edit",
+                                "roscli run edit.batch_exact --input-stdin",
                                 "roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true",
                             },
                         },
@@ -328,7 +341,8 @@ Workflow:
 3) run "roscli quickstart" and follow its recipes.
 4) if argument shape is unclear, run "roscli describe-command <command-id>".
 5) prefer nav.* / ctx.* / diag.* before text-only fallback.
-6) run diagnostics/build/tests before finalizing.
+6) for large member edits, use ctx.member_source include_edit_target_text=true, then edit.batch_exact replace_span from edit_target.exact_span_text.text.
+7) run diagnostics/build/tests before finalizing.
 """,
                     complementary_tools = new[]
                     {
@@ -348,6 +362,7 @@ Workflow:
                         "For project-backed files where ad_hoc is unacceptable, set --require-workspace true.",
                         "For complex JSON payloads, prefer --input-stdin over shell-escaped inline JSON.",
                         "If roscli cannot answer a C# query, state why before fallback.",
+                        "For replace_span, do not duplicate edit_target.trivia.preserved_line_prefix_text in new_text.",
                     },
                     anti_patterns = new[]
                     {
@@ -3743,6 +3758,8 @@ Workflow:
         sb.AppendLine("roscli nav.find_symbol src/MyProject/Program.cs Process --first-declaration true --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 body --brief true");
+        sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 member --include-edit-target-text true --workspace-path MySolution.slnx --require-workspace true");
+        sb.AppendLine("roscli run edit.batch_exact --input-stdin  # use kind=replace_span from edit_target.exact_span_text.text");
         sb.AppendLine("roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("```");

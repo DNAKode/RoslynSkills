@@ -1969,6 +1969,9 @@ public sealed class CliApplicationTests
         Assert.Contains("MySolution.slnx", output);
         Assert.Contains("project_count", output);
         Assert.Contains("src/MyProject/Program.cs", output);
+        Assert.Contains("span_member_edit_without_double_indent", output);
+        Assert.Contains("include_edit_target_text=true", output);
+        Assert.Contains("edit_target.exact_span_text.text", output);
     }
 
 
@@ -1997,6 +2000,8 @@ public sealed class CliApplicationTests
         Assert.Contains("`session.open` supports only `.cs/.csx` files.", output);
         Assert.Contains("MySolution.slnx", output);
         Assert.Contains("project_count", output);
+        Assert.Contains("include-edit-target-text true", output);
+        Assert.Contains("edit_target.exact_span_text.text", output);
         Assert.DoesNotContain("`ctx.call_chain_slice`", output);
     }
 

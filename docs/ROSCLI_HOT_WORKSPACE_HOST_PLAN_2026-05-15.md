@@ -658,3 +658,16 @@ The next FrankenTui.NET `.29` round validated the span path: `edit.batch_exact` 
 - `describe-command ctx.member_source` and `describe-command edit.batch_exact` point agents to this path.
 
 This should steer agents away from using line-oriented snippets for span replacement and reduce formatting churn in repeated whole-member edits.
+
+## 2026-05-16 Follow-Up: Bootstrap Guidance Alignment
+
+After releasing `.30`, the command implementation had the correct span/trivia payload but some high-level bootstrap surfaces still showed `ctx.member_source --brief true` as the primary recipe. That is appropriate for reading but incomplete for edit construction.
+
+The `quickstart` and `llmstxt` guidance now include a span-member edit recipe:
+
+- Read context with `ctx.member_source ... --include-edit-target-text true`.
+- Claim the target file/member.
+- Use `edit.batch_exact` `replace_span` from `edit_target.exact_span_text.text`.
+- Validate with file diagnostics and focused build/tests.
+
+This keeps the pit-of-success guidance aligned with the behavior observed in the FrankenTui.NET span trials.
