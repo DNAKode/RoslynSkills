@@ -80,6 +80,12 @@ roscli --no-daemon nav.find_symbol src/App/Foo.cs Foo
 - Fixed `edit.claim release <claim_id>` direct CLI behavior so claim IDs act as explicit release tokens even when the releasing shell does not pass the original owner. Path-based release remains owner-scoped unless forced.
 - Next supervised prompt should require the agent to read `ctx.member_source.edit_workflow` and select one listed mutation command before any `.cs` patch-editor fallback.
 
+2026-05-16 `.25` supervised result:
+
+- Positive adoption signal: the FrankenTui.NET agent observed `ctx.member_source.edit_workflow`, explicitly selected `edit.replace_text`, claimed the two C# files, and applied both C# changes via `roscli run edit.replace_text --input-stdin`.
+- Remaining product gap: `edit.replace_text` immediate diagnostics are syntax/file-context diagnostics and can look noisy for project-dependent files. The agent correctly used hot `diag.get_file_diagnostics` afterward. Next improvement should let simple edit commands accept/reuse the hot workspace context for post-edit diagnostics.
+- Release cleanup signal: `edit.claim release <claim_id>` should now be re-tested in the live pane because `.24` failed there and `.25` smoke passed locally.
+
 ## Architecture
 
 Add a long-running local host process:
