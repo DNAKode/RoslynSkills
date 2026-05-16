@@ -405,6 +405,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         {
             LinePosition position = sourceText.Lines.GetLinePosition(targetStart + index);
             ChangeLocation change = BuildChangeLocation(oldText, newText);
+            (int changeLine, int changeColumn) = ResolveAbsoluteChangePosition(position, change);
             (string oldPreview, string newPreview) = BuildTextPreviews(oldText, newText, previewChars, change.first_changed_offset);
             (string oldChangePreview, string newChangePreview) = BuildChangePreviews(oldText, newText, change.first_changed_offset, previewChars);
             matches.Add(new MatchLocation(
@@ -415,6 +416,10 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
                 first_changed_offset: change.first_changed_offset,
                 first_changed_line_delta: change.first_changed_line_delta,
                 first_changed_column_delta: change.first_changed_column_delta,
+                old_change_line: changeLine,
+                old_change_column: changeColumn,
+                new_change_line: changeLine,
+                new_change_column: changeColumn,
                 old_change_preview: oldChangePreview,
                 new_change_preview: newChangePreview,
                 text_preview: oldPreview,
@@ -423,6 +428,20 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         }
 
         return matches.ToArray();
+    }
+
+    private static (int line, int column) ResolveAbsoluteChangePosition(LinePosition matchPosition, ChangeLocation change)
+    {
+        if (change.first_changed_offset < 0)
+        {
+            return (-1, -1);
+        }
+
+        int line = matchPosition.Line + 1 + change.first_changed_line_delta;
+        int column = change.first_changed_line_delta == 0
+            ? matchPosition.Character + 1 + change.first_changed_column_delta
+            : change.first_changed_column_delta + 1;
+        return (line, column);
     }
 
     private static (string oldPreview, string newPreview) BuildTextPreviews(string oldText, string newText, int maxLength, int firstDifference)
@@ -571,6 +590,10 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
         int first_changed_offset,
         int first_changed_line_delta,
         int first_changed_column_delta,
+        int old_change_line,
+        int old_change_column,
+        int new_change_line,
+        int new_change_column,
         string old_change_preview,
         string new_change_preview,
         string text_preview,

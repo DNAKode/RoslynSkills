@@ -984,6 +984,10 @@ public sealed class CommandTests
             Assert.True(firstMatch.GetProperty("first_changed_offset").GetInt32() > 0);
             Assert.Equal(12, firstMatch.GetProperty("first_changed_line_delta").GetInt32());
             Assert.True(firstMatch.GetProperty("first_changed_column_delta").GetInt32() > 0);
+            Assert.Equal(firstMatch.GetProperty("line").GetInt32() + 12, firstMatch.GetProperty("old_change_line").GetInt32());
+            Assert.Equal(firstMatch.GetProperty("old_change_line").GetInt32(), firstMatch.GetProperty("new_change_line").GetInt32());
+            Assert.True(firstMatch.GetProperty("old_change_column").GetInt32() > 0);
+            Assert.Equal(firstMatch.GetProperty("old_change_column").GetInt32(), firstMatch.GetProperty("new_change_column").GetInt32());
             Assert.Contains("old", oldChangePreview);
             Assert.Contains("new", newChangePreview);
             Assert.True(oldChangePreview.Length <= 160);
