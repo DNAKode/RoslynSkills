@@ -410,14 +410,20 @@ public sealed class BatchExactEditCommand : IAgentCommand
         if (string.Equals(error.Code, "old_text_not_found", StringComparison.Ordinal) ||
             string.Equals(error.Code, "anchor_text_not_found", StringComparison.Ordinal))
         {
+            bool isInsertAnchor = string.Equals(error.Code, "anchor_text_not_found", StringComparison.Ordinal) &&
+                                  string.Equals(kind, "insert_text", StringComparison.Ordinal);
             return new
             {
                 problem = "text did not match current file content",
                 match_count = matchCount,
-                preferred_next_step = "Re-read the target with ctx.member_source or ctx.search_text before retrying; the file may have drifted.",
+                preferred_next_step = isInsertAnchor
+                    ? "Retry with a short unique anchor line from ctx.member_source or ctx.search_text; avoid copied multiline block anchors for insertions."
+                    : "Re-read the target with ctx.member_source or ctx.search_text before retrying; the file may have drifted.",
                 alternatives = new[]
                 {
-                    "Use replace_span with expected_text from an untruncated ctx.member_source edit_target.",
+                    isInsertAnchor
+                        ? "For adding a sibling test/member, anchor on a final unique assertion or closing line from a small ctx.member_source focus window."
+                        : "Use replace_span with expected_text from an untruncated ctx.member_source edit_target.",
                     "Refresh the hot workspace if a prior edit succeeded in this file.",
                 },
             };

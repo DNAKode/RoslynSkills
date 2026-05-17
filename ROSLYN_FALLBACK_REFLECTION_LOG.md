@@ -991,3 +991,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: neutral-to-positive; closeout line evidence remains Roslyn-derived.
   - latency: lower because closeout does not require repeated verbose member snippets.
   - token_count: lower by replacing full source windows with focus/line metadata for post-test evidence.
+
+## 2026-05-17 - Insert-text recovery hint edit after member-source hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.87+ce3a595ec9b8b97510fb85c81eab16a7c457fbf3`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET round used roscli correctly but failed an `edit.insert_text` attempt because the agent supplied a fragile copied multiline `anchor_text`. While improving direct insert recovery hints, `ctx.member_source` on `src/RoslynSkills.Core/Commands/InsertTextCommand.cs` hung, so bounded source reads were used for the self-hosted command and test edit.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Core/Commands/InsertTextCommand.cs --member-name ExecuteAsync --focus-text "anchor_text" --context-lines-before 10 --context-lines-after 40 --max-chars 12000`
+- Proposed Roslyn command/option improvement:
+  - Add timeout/partial-result telemetry for `ctx.member_source` on command implementation files.
+  - Consider a semantic sibling-member/test insertion command so agents can insert after a member anchor without exact multiline text matching.
+- Expected impact:
+  - correctness: higher; failed exact-anchor insertions return actionable recovery hints instead of bare errors.
+  - latency: lower because agents retry with short unique anchors or member-scoped edits faster.
+  - token_count: lower by avoiding copied multiline anchors and repeated failed insert attempts.

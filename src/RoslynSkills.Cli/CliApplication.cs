@@ -3637,6 +3637,7 @@ Workflow:
                     "When a solution/project is preloaded, diagnostics_after_insert uses the hot workspace by default. Pass workspace_path/workspace_handle explicitly when needed.",
                     "When apply=true writes a tracked source file, hot_workspace_refresh reports whether preloaded workspaces were incrementally updated.",
                     "Fails if anchor_text is missing or ambiguous; make anchor_text more specific instead of falling back to patching.",
+                    "For adding a sibling test/member, avoid copied multiline block anchors. Use a short unique anchor line from ctx.member_source or ctx.search_text, or switch to edit.replace_in_member when changing an existing member.",
                     "For multiline insert_text, prefer --input-stdin JSON to avoid shell quoting issues.",
                     "This command exists because agents often need to add one evidence field or assertion after a known line.",
                 },

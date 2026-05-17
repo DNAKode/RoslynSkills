@@ -2523,6 +2523,50 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_InsertText_FailedMultilineAnchorReturnsRecoveryHint()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-insert-fail-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(filePath, "public class Demo\n{\n    public int A => 1;\n}\n");
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.insert_text",
+                    filePath,
+                    "--anchor-text", "    public int A => 1;\r\n    public int Missing => 0;",
+                    "--insert-text", "\n    public int B => 2;",
+                    "--position", "after",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("anchor_text_not_found", output);
+            Assert.Contains("anchor_was_multiline", output);
+            Assert.Contains("short unique anchor line", output);
+            Assert.Contains("edit.replace_in_member", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DescribeCommand_InsertText_IncludesAnchorGuidance()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());
@@ -2541,6 +2585,8 @@ public sealed class CliApplicationTests
         Assert.Contains("anchor_text", output);
         Assert.Contains("insert_text", output);
         Assert.Contains("position", output);
+        Assert.Contains("avoid copied multiline block anchors", output);
+        Assert.Contains("short unique anchor line", output);
     }
 
     [Fact]

@@ -63,7 +63,7 @@ public sealed class InsertTextCommand : IAgentCommand
         int matchCount = CountOccurrences(originalContent, anchorText);
         if (matchCount == 0)
         {
-            return new CommandExecutionResult(null, new[]
+            return new CommandExecutionResult(BuildInsertFailureData(filePath, position, matchCount, anchorText, insertText, "anchor_text_not_found"), new[]
             {
                 new CommandError("anchor_text_not_found", "The supplied anchor_text was not found in the file."),
             });
@@ -71,7 +71,7 @@ public sealed class InsertTextCommand : IAgentCommand
 
         if (matchCount > 1)
         {
-            return new CommandExecutionResult(null, new[]
+            return new CommandExecutionResult(BuildInsertFailureData(filePath, position, matchCount, anchorText, insertText, "anchor_text_ambiguous"), new[]
             {
                 new CommandError("anchor_text_ambiguous", $"The supplied anchor_text matched {matchCount} times. Make anchor_text more specific."),
             });
@@ -150,5 +150,51 @@ public sealed class InsertTextCommand : IAgentCommand
         }
 
         return count;
+    }
+
+    private static object BuildInsertFailureData(
+        string filePath,
+        string position,
+        int matchCount,
+        string anchorText,
+        string insertText,
+        string errorCode)
+        => new
+        {
+            file_path = filePath,
+            apply_changes = false,
+            position = position.ToLowerInvariant(),
+            match_count = matchCount,
+            changed = false,
+            wrote_file = false,
+            anchor_text_character_count = anchorText.Length,
+            insert_text_character_count = insertText.Length,
+            recovery_hint = BuildInsertRecoveryHint(errorCode, matchCount, anchorText),
+        };
+
+    private static object BuildInsertRecoveryHint(string errorCode, int matchCount, string anchorText)
+    {
+        bool multilineAnchor = anchorText.Contains('\n') || anchorText.Contains('\r');
+        string problem = errorCode.Equals("anchor_text_ambiguous", StringComparison.Ordinal)
+            ? "anchor_text matched multiple locations"
+            : "anchor_text did not match current file content";
+
+        string preferredNextStep = multilineAnchor
+            ? "Retry with a short unique anchor line from ctx.member_source or ctx.search_text, not a copied multiline block."
+            : "Re-read the target with ctx.member_source or ctx.search_text before retrying; the file may have drifted or the anchor may need nearby unique context.";
+
+        return new
+        {
+            problem,
+            match_count = matchCount,
+            anchor_was_multiline = multilineAnchor,
+            preferred_next_step = preferredNextStep,
+            alternatives = new[]
+            {
+                "For adding a sibling test/member, anchor on the final unique assertion or closing line from ctx.member_source with a small focus window.",
+                "For edits inside an existing member, prefer edit.replace_in_member with member_name and exact old_text/new_text.",
+                "For whole-member or span-safe edits, use ctx.member_source include_edit_target_text=true plus edit.batch_exact replace_span with expected_text.",
+            },
+        };
     }
 }
