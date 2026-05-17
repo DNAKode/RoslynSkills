@@ -3165,6 +3165,9 @@ public sealed class CliApplicationTests
         Assert.Contains("do not treat prose promises as compliance", output);
         Assert.Contains("roscli agent-begin --solution", output);
         Assert.Contains("First-slice budget", output);
+        Assert.Contains("Startup Hard Gate", output);
+        Assert.Contains("After `agent-start`, the next repo-facing action must be `agent-begin`", output);
+        Assert.Contains("Do not read docs, list files, inspect git, run searches, or start implementation until `agent-begin` succeeds", output);
         Assert.Contains("Final Compliance Checklist", output);
         Assert.Contains("Before docs or C# exploration, transcript must show", output);
     }

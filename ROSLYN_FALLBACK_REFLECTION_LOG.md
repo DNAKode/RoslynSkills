@@ -1365,3 +1365,20 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: neutral; edits remained small and test-gated.
   - latency: lower by avoiding a failed context-read chain.
   - token_count: lower by reducing fallback and retry output.
+
+## 2026-05-17 - Agent-begin hard-gate location fallback
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.111+2119460d7116996a767ade216bb49c78a656f155`
+- Exact reason fallback was required/preferred:
+  - Cycle 8 completed a real Table Theme Gallery slice but reported reading root docs in parallel with `agent-start` before `agent-begin`. A bounded `rg` search was used to locate startup compliance wording before reattaching the Roslyn workspace and applying the C# changes with `edit.replace_in_member`.
+- Roslyn command attempted:
+  - `roscli workspace.use RoslynSkills.slnx`
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildCSharpStartGuide --focus-text "## First Moves" ...`
+  - `roscli edit.replace_in_member` for production and test updates.
+- Proposed Roslyn command/option improvement:
+  - Add a command-surface search/read helper for guidance strings that automatically attaches the only solution in cwd, reducing fallback to `rg` for small docstring/navigation changes.
+- Expected impact:
+  - correctness: higher by making `agent-begin` an explicit hard gate after `agent-start`.
+  - latency: lower by preventing docs orientation before the startup evidence command.
+  - token_count: lower by avoiding root-doc reads before the C# protocol is established.

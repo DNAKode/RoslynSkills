@@ -4605,6 +4605,9 @@ Workflow:
         }
 
         sb.AppendLine();
+        sb.AppendLine("## Startup Hard Gate");
+        sb.AppendLine("After `agent-start`, the next repo-facing action must be `agent-begin`. Do not read docs, list files, inspect git, run searches, or start implementation until `agent-begin` succeeds and its three step summaries are reported.");
+        sb.AppendLine();
         sb.AppendLine("## First Moves");
         sb.AppendLine("```text");
         sb.AppendLine("roscli --version");
