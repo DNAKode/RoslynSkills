@@ -1072,3 +1072,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher because skipped startup evidence becomes easier to catch in collapsed transcripts.
   - latency: lower by reducing corrective supervision turns.
   - token_count: lower by preventing repeated broad orientation and failed multiline-anchor insert attempts.
+
+## 2026-05-17 - Agent-begin command implementation after repeated startup skip
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.92+7ec9819e8c27e4fb581b00470976cb0fab29f210`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET round still skipped the startup evidence sequence even after the tail checklist, then later reported that the sequence had run before C# exploration although transcript observation showed otherwise. This required a self-hosted CLI implementation change to add `agent-begin`, a single command that runs the sequence mechanically. RoslynSkills self-hosted `ctx.member_source` remains unreliable on `CliApplication.cs`, so bounded source reads and text patching were used.
+- Roslyn command attempted:
+  - No new attempt in this patch beyond the earlier repeated `ctx.member_source` hangs in the same file during this session.
+- Proposed Roslyn command/option improvement:
+  - Add first-class command-level workflow primitives for recurring multi-step rituals, starting with `agent-begin`.
+  - Longer term, add transcript/compliance telemetry that can prove ordering instead of relying on final prose reports.
+- Expected impact:
+  - correctness: higher because the evidence sequence is executed by one command before work starts.
+  - latency: lower because supervisors no longer need to correct skipped individual startup commands.
+  - token_count: lower by replacing three command prompts and corrective discussion with one envelope.

@@ -2785,10 +2785,11 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
-        Assert.Contains("First run exactly these three commands sequentially before any docs or C# exploration", output);
-        Assert.Contains("roscli edit.claim list", output);
+        Assert.Contains("First run exactly this one command before any docs or C# exploration", output);
+        Assert.Contains("roscli agent-begin --solution <solution.sln|.slnx>", output);
+        Assert.Contains("runs edit.claim list, ctx.changed_files, and workspace.preload in order", output);
         Assert.Contains("roscli ctx.changed_files", output);
-        Assert.Contains("roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true", output);
+        Assert.Contains("roscli workspace.preload MySolution.slnx --alias default --require-solution true", output);
         Assert.Contains("ctx.member_source with small focus windows", output);
         Assert.Contains("start 3-12 lines, not 80+", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
@@ -2808,6 +2809,7 @@ public sealed class CliApplicationTests
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
         Assert.Contains("Final Compliance Checklist", output);
         Assert.Contains("Before docs or C# exploration, transcript must show", output);
+        Assert.Contains("successful edit.claim list, ctx.changed_files, and workspace.preload step summaries", output);
         Assert.Contains("Before `edit.insert_text`, run `describe-command edit.insert_text`", output);
         Assert.Contains("use a short unique one-line anchor", output);
     }
@@ -2833,6 +2835,7 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now, then stop and report the first two headings it prints: roscli agent-start", output);
         Assert.Contains("Ran roscli agent-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
+        Assert.Contains("roscli agent-begin --solution", output);
         Assert.Contains("Final Compliance Checklist", output);
         Assert.Contains("Before docs or C# exploration, transcript must show", output);
     }
@@ -2853,8 +2856,40 @@ public sealed class CliApplicationTests
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
         Assert.Contains("workspace.preload FrankenTui.Net.slnx --alias default --require-solution true", output);
+        Assert.Contains("roscli agent-begin --solution FrankenTui.Net.slnx", output);
         Assert.Contains("ctx.changed_files", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
+    }
+
+    [Fact]
+    public async Task AgentBegin_WithoutDiscoverableSolution_ReturnsActionableError()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+        string originalDirectory = Environment.CurrentDirectory;
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roscli-agent-begin-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            int exitCode = await app.RunAsync(
+                new[] { "agent-begin" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("\"CommandId\": \"agent-begin\"", output);
+            Assert.Contains("solution_required", output);
+            Assert.Contains("Pass --solution", output);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalDirectory;
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     [Fact]

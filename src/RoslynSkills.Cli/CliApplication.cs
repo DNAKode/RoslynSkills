@@ -57,6 +57,7 @@ public sealed class CliApplication
             "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
             "csharp-start" => await HandleCSharpStartAsync(remainder, stdout).ConfigureAwait(false),
             "agent-start" => await HandleAgentStartAsync(remainder, stdout).ConfigureAwait(false),
+            "agent-begin" => await HandleAgentBeginAsync(remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
             "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
             "daemon.start" => await HandleDaemonStartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
@@ -422,6 +423,12 @@ Workflow:
                 InputSchemaVersion: "1.0",
                 OutputSchemaVersion: "markdown",
                 MutatesState: false),
+            new CommandDescriptor(
+                Id: "agent-begin",
+                Summary: "Run the supervised startup evidence sequence in one command: edit.claim list, ctx.changed_files, and workspace.preload.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: true),
             new CommandDescriptor(
                 Id: "daemon.start",
                 Summary: "Start or reuse the process-hot Roslyn workspace host daemon.",
@@ -4220,6 +4227,75 @@ Workflow:
         return 0;
     }
 
+    private async Task<int> HandleAgentBeginAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken,
+        TextReader stdin,
+        bool noDaemon)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await stdout.WriteLineAsync("Usage: roscli agent-begin [--solution <path.sln|path.slnx>] [--repo-root <path>] [--require-solution true|false]").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Run the supervised startup evidence sequence in one command before docs or C# exploration.").ConfigureAwait(false);
+            return 0;
+        }
+
+        if (!TryParseAgentBeginOptions(args, out string? solutionPath, out string? repoRoot, out bool requireSolution, out CommandEnvelope? optionError))
+        {
+            await WriteEnvelopeAsync(stdout, optionError!).ConfigureAwait(false);
+            return 1;
+        }
+
+        solutionPath = string.IsNullOrWhiteSpace(solutionPath) ? TryDiscoverSingleTopLevelSolution() : solutionPath;
+        if (string.IsNullOrWhiteSpace(solutionPath))
+        {
+            await WriteEnvelopeAsync(stdout, ErrorEnvelope(
+                "agent-begin",
+                "solution_required",
+                "Could not discover exactly one top-level .sln/.slnx. Pass --solution <path.sln|path.slnx>.")).ConfigureAwait(false);
+            return 1;
+        }
+
+        List<object> steps = new(capacity: 3);
+        CommandEnvelope claimList = await RunCliCommandForEnvelopeAsync(
+            "edit.claim",
+            BuildAgentBeginRunArgs("edit.claim", Array.Empty<string>(), repoRoot, new[] { "list" }),
+            cancellationToken,
+            stdin,
+            noDaemon).ConfigureAwait(false);
+        steps.Add(BuildAgentBeginStep("edit.claim list", claimList));
+        if (!claimList.Ok)
+        {
+            return await WriteAgentBeginResultAsync(stdout, solutionPath, steps, requireSolution).ConfigureAwait(false);
+        }
+
+        CommandEnvelope changedFiles = await RunCliCommandForEnvelopeAsync(
+            "ctx.changed_files",
+            BuildAgentBeginRunArgs("ctx.changed_files", Array.Empty<string>(), repoRoot, Array.Empty<string>()),
+            cancellationToken,
+            stdin,
+            noDaemon).ConfigureAwait(false);
+        steps.Add(BuildAgentBeginStep("ctx.changed_files", changedFiles));
+        if (!changedFiles.Ok)
+        {
+            return await WriteAgentBeginResultAsync(stdout, solutionPath, steps, requireSolution).ConfigureAwait(false);
+        }
+
+        string[] preloadArgs = requireSolution
+            ? new[] { solutionPath, "--alias", "default", "--require-solution", "true" }
+            : new[] { solutionPath, "--alias", "default", "--require-solution", "false" };
+        CommandEnvelope preload = await RunCliCommandForEnvelopeAsync(
+            "workspace.preload",
+            BuildAgentBeginRunArgs("workspace.preload", preloadArgs, repoRoot, Array.Empty<string>()),
+            cancellationToken,
+            stdin,
+            noDaemon).ConfigureAwait(false);
+        steps.Add(BuildAgentBeginStep("workspace.preload", preload));
+
+        return await WriteAgentBeginResultAsync(stdout, solutionPath, steps, requireSolution).ConfigureAwait(false);
+    }
+
     private static string? TryDiscoverSingleTopLevelSolution()
     {
         try
@@ -4241,6 +4317,154 @@ Workflow:
         {
             return null;
         }
+    }
+
+    private static bool TryParseAgentBeginOptions(
+        string[] args,
+        out string? solutionPath,
+        out string? repoRoot,
+        out bool requireSolution,
+        out CommandEnvelope? error)
+    {
+        solutionPath = null;
+        repoRoot = null;
+        requireSolution = true;
+        error = null;
+        Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            if (!arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                if (solutionPath is not null)
+                {
+                    error = ErrorEnvelope("agent-begin", "invalid_args", "Usage: agent-begin [--solution <path.sln|path.slnx>] [--repo-root <path>] [--require-solution true|false].");
+                    return false;
+                }
+
+                solutionPath = arg;
+                continue;
+            }
+
+            string? inlineValue = null;
+            int equalsIndex = arg.IndexOf('=', StringComparison.Ordinal);
+            if (equalsIndex >= 0)
+            {
+                inlineValue = arg[(equalsIndex + 1)..];
+                arg = arg[..equalsIndex];
+            }
+
+            if (arg is not ("--solution" or "--repo-root" or "--require-solution"))
+            {
+                error = ErrorEnvelope("agent-begin", "invalid_args", $"Unknown agent-begin option '{arg}'.");
+                return false;
+            }
+
+            if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? value))
+            {
+                error = ErrorEnvelope("agent-begin", "invalid_args", $"Option '{arg}' requires a value.");
+                return false;
+            }
+
+            options[arg] = value!;
+        }
+
+        if (options.TryGetValue("--solution", out string? solutionValue))
+        {
+            solutionPath = solutionValue;
+        }
+
+        options.TryGetValue("--repo-root", out repoRoot);
+        return TryGetBoolOption(options, "--require-solution", defaultValue: true, out requireSolution, out error, "agent-begin");
+    }
+
+    private static string[] BuildAgentBeginRunArgs(
+        string commandId,
+        IReadOnlyList<string> commandArgs,
+        string? repoRoot,
+        IReadOnlyList<string> prefixArgs)
+    {
+        List<string> args = new();
+        args.AddRange(prefixArgs);
+        args.AddRange(commandArgs);
+        if (!string.IsNullOrWhiteSpace(repoRoot) &&
+            string.Equals(commandId, "workspace.preload", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("--repo-root");
+            args.Add(repoRoot);
+        }
+
+        return args.ToArray();
+    }
+
+    private async Task<CommandEnvelope> RunCliCommandForEnvelopeAsync(
+        string commandId,
+        string[] args,
+        CancellationToken cancellationToken,
+        TextReader stdin,
+        bool noDaemon)
+    {
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        int exitCode = commandId is "workspace.preload" && !noDaemon
+            ? await HandleDaemonWorkspaceAsync(commandId, args, output, cancellationToken).ConfigureAwait(false)
+            : await HandleRunDirectAsync(commandId, args, output, cancellationToken, stdin, noDaemon).ConfigureAwait(false);
+
+        string json = output.ToString();
+        try
+        {
+            CommandEnvelope? envelope = JsonSerializer.Deserialize<CommandEnvelope>(json, _jsonOptions);
+            if (envelope is not null)
+            {
+                return envelope;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return ErrorEnvelope(commandId, "invalid_step_output", $"Step exited with {exitCode} but did not return a valid roscli envelope.");
+    }
+
+    private static object BuildAgentBeginStep(string name, CommandEnvelope envelope)
+        => new
+        {
+            name,
+            ok = envelope.Ok,
+            command_id = envelope.CommandId,
+            preview = envelope.Preview,
+            summary = envelope.Summary,
+            errors = envelope.Errors,
+        };
+
+    private async Task<int> WriteAgentBeginResultAsync(
+        TextWriter stdout,
+        string solutionPath,
+        IReadOnlyList<object> steps,
+        bool requireSolution)
+    {
+        bool ok = steps.Count == 3 && steps.All(step =>
+        {
+            JsonElement element = JsonSerializer.SerializeToElement(step, _jsonOptions);
+            return TryGetBool(element, "ok", out bool stepOk) && stepOk;
+        });
+
+        await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+            Ok: ok,
+            CommandId: "agent-begin",
+            Version: EnvelopeVersion,
+            Data: new
+            {
+                solution_path = solutionPath,
+                require_solution = requireSolution,
+                steps,
+                next = ok
+                    ? "Continue one narrow, testable C# slice. Use roscli for .cs context, claim before mutation, validate with focused tests, and release claims."
+                    : "Stop and fix the failed startup step before docs or C# exploration.",
+            },
+            Errors: ok ? Array.Empty<CommandError>() : new[] { new CommandError("agent_begin_failed", "One or more startup evidence steps failed.") },
+            TraceId: null)).ConfigureAwait(false);
+        return ok ? 0 : 1;
     }
 
     private static string BuildCSharpStartGuide(bool supervised, string? solutionPath, string bootstrapCommand = "roscli csharp-start")
@@ -4268,7 +4492,7 @@ Workflow:
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
-            sb.AppendLine($"First run exactly these three commands sequentially before any docs or C# exploration: `roscli edit.claim list`; `roscli ctx.changed_files`; `roscli workspace.preload {preloadTarget} --alias default --require-solution true`. Then continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: compact ctx.file_outline filters, ctx.member_source with small focus windows (start 3-12 lines, not 80+), describe-command before the first Roslyn edit command, then edit.claim claim for every file before mutation and run the edit command if mutation is needed. If subagents are used, assign disjoint claimed files; serialize shared-file/member edits through one owner and guarded expected_text. Run roscli and dotnet commands sequentially per repo; do not launch parallel semantic reads, edits, builds, or tests against the same workspace. If a broad ctx.search_text returns many matches, stop broad searching and narrow with member_name_contains or member_source focus_text. When consulting non-C# upstream/reference files, first locate one likely file with `rg -l -m 20 <literal> <reference-root>`; then inspect only that file with `rg -n -C 2 -m 20 <literal> <file>`. Do not run alternation-heavy rg across whole .external/reference trees. For multiline `edit.replace_in_member` old_text/new_text, use `roscli run edit.replace_in_member --input-stdin` JSON instead of direct shell option values. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; for member closeout anchors prefer `ctx.member_source --focus-text <literal> --context-lines-before 1 --context-lines-after 1 --include-source-text false` so the transcript carries line/focus metadata without replaying source. Do not use rg/git diff/Get-Content on .cs files. Report startup evidence explicitly: whether edit.claim list, ctx.changed_files, and workspace.preload ran. Report any .cs fallback explicitly.");
+            sb.AppendLine($"First run exactly this one command before any docs or C# exploration: `roscli agent-begin --solution {preloadTarget}`. It runs edit.claim list, ctx.changed_files, and workspace.preload in order and returns a single evidence envelope. Then continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: compact ctx.file_outline filters, ctx.member_source with small focus windows (start 3-12 lines, not 80+), describe-command before the first Roslyn edit command, then edit.claim claim for every file before mutation and run the edit command if mutation is needed. If subagents are used, assign disjoint claimed files; serialize shared-file/member edits through one owner and guarded expected_text. Run roscli and dotnet commands sequentially per repo; do not launch parallel semantic reads, edits, builds, or tests against the same workspace. If a broad ctx.search_text returns many matches, stop broad searching and narrow with member_name_contains or member_source focus_text. When consulting non-C# upstream/reference files, first locate one likely file with `rg -l -m 20 <literal> <reference-root>`; then inspect only that file with `rg -n -C 2 -m 20 <literal> <file>`. Do not run alternation-heavy rg across whole .external/reference trees. For multiline `edit.replace_in_member` old_text/new_text, use `roscli run edit.replace_in_member --input-stdin` JSON instead of direct shell option values. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; for member closeout anchors prefer `ctx.member_source --focus-text <literal> --context-lines-before 1 --context-lines-after 1 --include-source-text false` so the transcript carries line/focus metadata without replaying source. Do not use rg/git diff/Get-Content on .cs files. Report startup evidence explicitly from agent-begin step summaries. Report any .cs fallback explicitly.");
             sb.AppendLine("```");
             sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
         }
@@ -4277,6 +4501,7 @@ Workflow:
         sb.AppendLine("## First Moves");
         sb.AppendLine("```text");
         sb.AppendLine("roscli --version");
+        sb.AppendLine($"roscli agent-begin --solution {examplePreloadTarget}");
         sb.AppendLine("roscli ctx.changed_files");
         sb.AppendLine($"roscli workspace.preload {examplePreloadTarget} --alias default --require-solution true");
         sb.AppendLine("roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20");
@@ -4328,7 +4553,7 @@ Workflow:
         sb.AppendLine("For post-edit `.cs` audit anchors and closeout line numbers, use `ctx.search_text` or compact `ctx.member_source --include-source-text false`; do not fall back to `rg` just to find the line you changed.");
         sb.AppendLine();
         sb.AppendLine("## Final Compliance Checklist");
-        sb.AppendLine($"- Before docs or C# exploration, transcript must show: `roscli edit.claim list`; `roscli ctx.changed_files`; `roscli workspace.preload {preloadTarget} --alias default --require-solution true`.");
+        sb.AppendLine($"- Before docs or C# exploration, transcript must show: `roscli agent-begin --solution {preloadTarget}` with successful edit.claim list, ctx.changed_files, and workspace.preload step summaries.");
         sb.AppendLine("- For `.cs` work, use roscli for context, edits, and closeout anchors; report any fallback explicitly.");
         sb.AppendLine("- Before `edit.insert_text`, run `describe-command edit.insert_text`; use a short unique one-line anchor, not copied multiline source.");
         sb.AppendLine("- For non-C# upstream/reference lookup, use `rg -l -m 20 <literal> <reference-root>` first, then `rg -n -C 2 -m 20 <literal> <file>` on one file.");
