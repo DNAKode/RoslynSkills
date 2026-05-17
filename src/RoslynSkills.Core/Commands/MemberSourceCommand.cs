@@ -10,7 +10,7 @@ namespace RoslynSkills.Core.Commands;
 
 public sealed class MemberSourceCommand : IAgentCommand
 {
-    private const int LargeMissingFocusMemberLineThreshold = 200;
+    private const int LargeMissingFocusMemberLineThreshold = 60;
     private const int MissingFocusFallbackLineWindow = 80;
 
     public CommandDescriptor Descriptor { get; } = new(
@@ -387,7 +387,7 @@ public sealed class MemberSourceCommand : IAgentCommand
             focus_not_found = true,
             guard_applied = missingFocusLargeMemberGuardApplied,
             message = missingFocusLargeMemberGuardApplied
-                ? "focus_text was not found in a large member, so source.text was capped. Use search_text or a different focus_text before requesting the full member."
+                ? "focus_text was not found in a large member, so source.text was capped for orientation only. Do not continue from this broad window; use search_text or a different focus_text before requesting source for edit planning."
                 : "focus_text was not found. Verify the term with search_text or rerun with a different focus_text.",
             next_steps = new[]
             {

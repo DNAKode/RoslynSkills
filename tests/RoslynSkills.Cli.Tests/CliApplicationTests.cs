@@ -1,6 +1,7 @@
 using RoslynSkills.Cli;
 using RoslynSkills.Core;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 
 namespace RoslynSkills.Cli.Tests;
@@ -1039,6 +1040,50 @@ public sealed class CliApplicationTests
             Assert.Contains("TargetCase", output);
             Assert.Contains("focus=matched:10", output);
             Assert.Contains("\"member_name\": \"TargetCase\"", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectCommand_MemberSourceCapsLargeMissingFocusWindow()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-member-focus-miss-{Guid.NewGuid():N}.cs");
+        try
+        {
+            StringBuilder builder = new();
+            builder.AppendLine("public class Demo");
+            builder.AppendLine("{");
+            builder.AppendLine("    public void TargetCase()");
+            builder.AppendLine("    {");
+            for (int i = 0; i < 110; i++)
+            {
+                builder.AppendLine($"        Step{i}();");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine("}");
+            await File.WriteAllTextAsync(filePath, builder.ToString());
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.member_source", filePath, "--member-name", "TargetCase", "--focus-text", "MissingMarker", "--context-lines-before", "0", "--context-lines-after", "0" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("focus=not-found:MissingMarker", output);
+            Assert.Contains("\"source_line_count\": 80", output);
+            Assert.Contains("\"guard_applied\": true", output);
+            Assert.Contains("source.text was capped for orientation only", output);
+            Assert.Contains("ctx.search_text", output);
         }
         finally
         {

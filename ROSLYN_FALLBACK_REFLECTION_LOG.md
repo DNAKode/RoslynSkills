@@ -1253,3 +1253,18 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by steering medium-large member edits to guarded spans earlier.
   - latency: lower by reducing repeated large JSON exact-replace calls.
   - token_count: lower by catching transcript-expensive edits before they become habitual.
+
+## 2026-05-17 - Self-hosted member_source hung while tuning focus-miss guidance
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.103+057347e27bad23976b81780bde0fc622771189ff`
+- Exact reason fallback was required/preferred:
+  - `ctx.member_source` hung while reading `src/RoslynSkills.Core/Commands/MemberSourceCommand.cs` to tune the same command's focus-miss guidance. The roscli process was stopped and bounded shell reads were used for this self-hosted implementation edit.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Core/Commands/MemberSourceCommand.cs --member-name BuildPayloadGuidance --include-edit-target-text true --context-lines-before 20 --context-lines-after 30`
+- Proposed Roslyn command/option improvement:
+  - Fix the self-hosted `ctx.member_source` hang on large command files and add a timeout/error envelope so agents get a structured recovery path instead of a silent wait.
+- Expected impact:
+  - correctness: higher by keeping command-surface edits inside Roslyn context.
+  - latency: lower by avoiding manual process inspection and kill steps.
+  - token_count: lower by eliminating fallback logging and duplicate reads for roscli implementation work.
