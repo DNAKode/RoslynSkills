@@ -2760,6 +2760,10 @@ public sealed class CliApplicationTests
         Assert.Contains("same-member multi-edit", output);
         Assert.Contains("Do not run parallel edit commands against the same member", output);
         Assert.Contains("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads", output);
+        Assert.Contains("Final Compliance Checklist", output);
+        Assert.Contains("Before docs or C# exploration, transcript must show", output);
+        Assert.Contains("Before `edit.insert_text`, run `describe-command edit.insert_text`", output);
+        Assert.Contains("not copied multiline source", output);
     }
 
     [Fact]
@@ -2802,6 +2806,10 @@ public sealed class CliApplicationTests
         Assert.Contains("without replaying source", output);
         Assert.Contains("Report startup evidence explicitly", output);
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
+        Assert.Contains("Final Compliance Checklist", output);
+        Assert.Contains("Before docs or C# exploration, transcript must show", output);
+        Assert.Contains("Before `edit.insert_text`, run `describe-command edit.insert_text`", output);
+        Assert.Contains("use a short unique one-line anchor", output);
     }
 
     [Fact]
@@ -2825,6 +2833,8 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now, then stop and report the first two headings it prints: roscli agent-start", output);
         Assert.Contains("Ran roscli agent-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
+        Assert.Contains("Final Compliance Checklist", output);
+        Assert.Contains("Before docs or C# exploration, transcript must show", output);
     }
 
     [Fact]

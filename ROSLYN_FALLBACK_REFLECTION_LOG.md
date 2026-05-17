@@ -1056,3 +1056,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: neutral for C# semantics, positive for supervision quality because agents keep reference evidence focused.
   - latency: lower by avoiding transcript-spilling broad searches.
   - token_count: lower because upstream comparisons no longer dump thousands of irrelevant lines.
+
+## 2026-05-17 - Final compliance checklist guidance edit after supervised drift
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.91+72a6bca9e47dd744dc777394fd2390d9f38e4e56`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET round on preview .91 completed successfully with roscli-only C# work, but skipped the startup evidence block until corrected and initially attempted `edit.insert_text` with a copied multiline anchor. The fix is a guidance/test update in RoslynSkills itself; no additional Roslyn command was attempted because the preceding self-hosted `ctx.member_source` calls had just hung in this same guidance-edit loop.
+- Roslyn command attempted:
+  - None for this incremental guidance edit after the immediately preceding `ctx.member_source` hang.
+- Proposed Roslyn command/option improvement:
+  - Keep a compact, tail-visible `agent-start` final checklist that repeats mandatory startup commands and high-churn edit guardrails.
+  - Longer term, add a command/session mode that can verify startup compliance mechanically instead of relying on prompt text.
+- Expected impact:
+  - correctness: higher because skipped startup evidence becomes easier to catch in collapsed transcripts.
+  - latency: lower by reducing corrective supervision turns.
+  - token_count: lower by preventing repeated broad orientation and failed multiline-anchor insert attempts.

@@ -4326,6 +4326,12 @@ Workflow:
         sb.AppendLine("## Fallback Rule");
         sb.AppendLine("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads. Try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` first. If roscli cannot answer, state the attempted command and the missing capability before fallback.");
         sb.AppendLine("For post-edit `.cs` audit anchors and closeout line numbers, use `ctx.search_text` or compact `ctx.member_source --include-source-text false`; do not fall back to `rg` just to find the line you changed.");
+        sb.AppendLine();
+        sb.AppendLine("## Final Compliance Checklist");
+        sb.AppendLine($"- Before docs or C# exploration, transcript must show: `roscli edit.claim list`; `roscli ctx.changed_files`; `roscli workspace.preload {preloadTarget} --alias default --require-solution true`.");
+        sb.AppendLine("- For `.cs` work, use roscli for context, edits, and closeout anchors; report any fallback explicitly.");
+        sb.AppendLine("- Before `edit.insert_text`, run `describe-command edit.insert_text`; use a short unique one-line anchor, not copied multiline source.");
+        sb.AppendLine("- For non-C# upstream/reference lookup, use `rg -l -m 20 <literal> <reference-root>` first, then `rg -n -C 2 -m 20 <literal> <file>` on one file.");
         return sb.ToString();
     }
 
