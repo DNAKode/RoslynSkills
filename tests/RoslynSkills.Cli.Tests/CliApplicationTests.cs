@@ -3077,6 +3077,8 @@ public sealed class CliApplicationTests
         Assert.Contains("roscli agent-begin --solution <solution.sln|.slnx>", output);
         Assert.Contains("Turn 2B prompt after the agent-begin report", output);
         Assert.Contains("Continue one narrow, testable C# slice using the `next` instruction from agent-begin", output);
+        Assert.Contains("First-slice budget: one behavior, one primary claimed file when feasible, one focused test before wider validation", output);
+        Assert.Contains("if work expands past two C# files or more than one behavior, stop at the smallest validated increment", output);
         Assert.Contains("roscli ctx.changed_files", output);
         Assert.Contains("roscli workspace.preload MySolution.slnx --alias default --require-solution true", output);
         Assert.Contains("ctx.member_source with small focus windows", output);
@@ -3130,6 +3132,7 @@ public sealed class CliApplicationTests
         Assert.Contains("Ran roscli agent-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
         Assert.Contains("roscli agent-begin --solution", output);
+        Assert.Contains("First-slice budget", output);
         Assert.Contains("Final Compliance Checklist", output);
         Assert.Contains("Before docs or C# exploration, transcript must show", output);
     }
