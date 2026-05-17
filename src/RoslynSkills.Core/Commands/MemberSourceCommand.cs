@@ -572,8 +572,25 @@ public sealed class MemberSourceCommand : IAgentCommand
             targetSpan = default;
             symbol = null;
             memberName = string.Empty;
+            string displayFilePath = FormatCommandArgument(analysis.FilePath);
+            string displayRequestedMemberName = FormatCommandArgument(requestedMemberName);
+            object data = new
+            {
+                file_path = analysis.FilePath,
+                requested_member_name = requestedMemberName,
+                recovery_hint = new
+                {
+                    preferred_next_step = "Run a filtered outline on this exact file, choose the exact member name or line/column from the result, then retry ctx.member_source.",
+                    suggested_commands = new[]
+                    {
+                        $"roscli ctx.file_outline {displayFilePath} --member-name-contains {displayRequestedMemberName} --max-members 20",
+                        $"roscli ctx.search_text --file-path {displayFilePath} --pattern {displayRequestedMemberName} --max-results 20 --context-lines 1",
+                    },
+                    retry_rule = "Use the exact member name from ctx.file_outline, or use the line/column anchor when several names are similar.",
+                },
+            };
             return new CommandExecutionResult(
-                null,
+                data,
                 new[] { new CommandError("member_not_found", $"No member named '{requestedMemberName}' was found in the file. Next: run ctx.file_outline on this file with --member-name-contains {requestedMemberName} --max-members 20, then retry ctx.member_source with an exact member name or line/column anchor.") });
         }
 
@@ -963,6 +980,9 @@ public sealed class MemberSourceCommand : IAgentCommand
 
         return builder.ToString();
     }
+
+    private static string FormatCommandArgument(string value)
+        => value.Contains(' ', StringComparison.Ordinal) ? $"\"{value}\"" : value;
 
     private static string GetCSharpMemberName(CSharpSyntax.MemberDeclarationSyntax member)
     {

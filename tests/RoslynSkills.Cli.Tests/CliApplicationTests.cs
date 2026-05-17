@@ -1076,8 +1076,11 @@ public sealed class CliApplicationTests
             string output = stdout.ToString();
             Assert.Equal(1, exitCode);
             Assert.Contains("\"Code\": \"member_not_found\"", output);
+            Assert.Contains("\"recovery_hint\": {", output);
             Assert.Contains("ctx.file_outline", output);
+            Assert.Contains(filePath.Replace("\\", "\\\\"), output);
             Assert.Contains("--member-name-contains MissingTarget --max-members 20", output);
+            Assert.Contains("ctx.search_text", output);
             Assert.Contains("line/column anchor", output);
         }
         finally

@@ -1205,3 +1205,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by steering large rewrites to span+expected_text anchoring.
   - latency: lower by reducing large JSON construction and stale-context retries.
   - token_count: lower by avoiding duplicated multiline old/new payloads in transcripts.
+
+## 2026-05-17 - Member-source missing-member recovery was prose-only
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.100+ef08007294f9993810c0a166dd0717ba2b4cd19c`
+- Exact reason fallback was required/preferred:
+  - The fresh FrankenTui.NET cycle stayed on roscli and completed with passing tests, but a `ctx.member_source --member-name` miss in a large test file forced the agent to infer a recovery path through `ctx.file_outline`. This was a narrow self-hosted command/test edit; bounded source reads plus `apply_patch` were used after recent `ctx.member_source` hangs on self-hosted command files.
+- Roslyn command attempted:
+  - `roscli ctx.search_text --file-path src\RoslynSkills.Core\Commands\MemberSourceCommand.cs --pattern "member_not_found" --max-results 20 --context-lines 4`
+  - `roscli ctx.search_text --solution C:\Work\RoslynSkills\RoslynSkills.slnx --pattern "member_not_found" --file-glob "*.cs" --max-results 40 --context-lines 1`
+- Proposed Roslyn command/option improvement:
+  - Return structured failure data for `ctx.member_source` `member_not_found`, including `recovery_hint.suggested_commands` with exact file-specific `ctx.file_outline` and `ctx.search_text` commands.
+- Expected impact:
+  - correctness: higher because agents recover using exact file-local symbols before retrying.
+  - latency: lower by reducing exploratory search after member-name typos or drift.
+  - token_count: lower by avoiding broad recovery scans in large test files.
