@@ -56,6 +56,7 @@ public sealed class CliApplication
             "describe-command" => await HandleDescribeCommandAsync(remainder, stdout).ConfigureAwait(false),
             "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
             "csharp-start" => await HandleCSharpStartAsync(remainder, stdout).ConfigureAwait(false),
+            "agent-start" => await HandleAgentStartAsync(remainder, stdout).ConfigureAwait(false),
             "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
             "daemon.start" => await HandleDaemonStartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
@@ -262,6 +263,7 @@ public sealed class CliApplication
                     core_principle = "semantic-first, brief-first, verify-before-finalize",
                     pit_of_success = new[]
                     {
+                        "For supervised fresh panes, make the first command: roscli agent-start",
                         "For fresh C# sessions, run the csharp_fresh_session sequence below before reading or editing .cs files.",
                         "For a smaller copyable C# workflow, run: roscli csharp-start",
                         "Start with: roscli list-commands --ids-only",
@@ -283,6 +285,7 @@ public sealed class CliApplication
                     first_minute_sequence = new[]
                     {
                         "roscli --version",
+                        "roscli agent-start",
                         "roscli csharp-start --supervised",
                         "roscli csharp-start",
                         "roscli workspace.preload MySolution.slnx --alias default --require-solution true",
@@ -1187,7 +1190,7 @@ Workflow:
         await WriteEnvelopeAsync(stdout, ErrorEnvelope(
             commandId: "cli",
             code: "unknown_verb",
-            message: $"Unknown command '{verb}'. Use '--help', 'csharp-start', 'llmstxt', 'quickstart', or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
+            message: $"Unknown command '{verb}'. Use '--help', 'agent-start', 'csharp-start', 'llmstxt', 'quickstart', or 'list-commands --ids-only' to view available commands.")).ConfigureAwait(false);
         await stderr.WriteLineAsync($"Unknown command '{verb}'.").ConfigureAwait(false);
         return 1;
     }
@@ -4117,6 +4120,21 @@ Workflow:
         return sb.ToString();
     }
 
+    private async Task<int> HandleAgentStartAsync(string[] args, TextWriter stdout)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await stdout.WriteLineAsync("Usage: roscli agent-start [--solution <path.sln|path.slnx>]").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Emit the supervised first-command bootstrap for C# coding agents.").ConfigureAwait(false);
+            await stdout.WriteLineAsync("Use this as the first command in a fresh agent pane before assigning C# work.").ConfigureAwait(false);
+            return 0;
+        }
+
+        TryGetOption(args, "--solution", out string? solutionPath);
+        await stdout.WriteAsync(BuildCSharpStartGuide(supervised: true, solutionPath)).ConfigureAwait(false);
+        return 0;
+    }
+
     private static string BuildCSharpStartGuide(bool supervised, string? solutionPath)
     {
         string preloadTarget = string.IsNullOrWhiteSpace(solutionPath)
@@ -4302,7 +4320,8 @@ Workflow:
             roscli CLI
 
             C# agent first minute:
-              If you are working in a C#/.NET repo, run `roscli csharp-start` before any `.cs` git diff, rg, Get-Content, sed, cat, or patch-editor read.
+              Fresh pane/operator bootstrap: ask the agent to run `roscli agent-start` as its first command, then verify that transcript before assigning C# work.
+              If you are already doing C#/.NET repo work, run `roscli csharp-start` before any `.cs` git diff, rg, Get-Content, sed, cat, or patch-editor read.
               In an already-dirty repo, the first C# orientation command after csharp-start is `roscli ctx.changed_files`; follow its suggested_next_steps.
 
             Commands:
@@ -4311,6 +4330,7 @@ Workflow:
               describe-command <command-id>
               quickstart
               csharp-start
+              agent-start [--solution <path.sln|path.slnx>]
               llmstxt [--full]
               daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
               daemon.status [--repo-root <path>]
@@ -4337,6 +4357,7 @@ Workflow:
               - Daemon-capable semantic commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
               - Set ROSCLI_DAEMON=required and ROSCLI_WORKSPACE_ALIAS=default to fail closed when a hot workspace is required.
               - Recommended first minute:
+                roscli agent-start
                 roscli csharp-start
                 roscli llmstxt
                 roscli list-commands --ids-only

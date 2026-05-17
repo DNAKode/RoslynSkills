@@ -2520,6 +2520,27 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task AgentStart_ReturnsSupervisedFirstCommandProtocol()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "agent-start" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Supervised Two-Turn Protocol", output);
+        Assert.Contains("Run exactly this command now", output);
+        Assert.Contains("Ran roscli csharp-start", output);
+        Assert.Contains("do not treat prose promises as compliance", output);
+    }
+
+    [Fact]
     public async Task CSharpStartSupervised_WithSolution_ReturnsConcretePreload()
     {
         CliApplication app = new(DefaultRegistryFactory.Create());
@@ -2609,6 +2630,8 @@ public sealed class CliApplicationTests
         Assert.Contains("version", output);
         Assert.Contains("quickstart", output);
         Assert.Contains("csharp-start", output);
+        Assert.Contains("agent-start", output);
+        Assert.Contains("first command", output);
         Assert.Contains("before any `.cs` git diff", output);
         Assert.Contains("ctx.changed_files", output);
         Assert.Contains("llmstxt", output);
