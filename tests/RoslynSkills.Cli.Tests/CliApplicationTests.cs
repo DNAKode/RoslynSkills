@@ -2619,6 +2619,8 @@ public sealed class CliApplicationTests
         Assert.Contains("If subagents are used, assign disjoint claimed files", output);
         Assert.Contains("Run roscli and dotnet commands sequentially per repo", output);
         Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);
+        Assert.Contains("When consulting non-C# upstream/reference files", output);
+        Assert.Contains("rg -n -C 2 -m 40", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
         Assert.Contains("Report startup evidence explicitly", output);
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
