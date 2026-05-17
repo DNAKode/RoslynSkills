@@ -1857,6 +1857,73 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_ReplaceText_SummaryReportsMatchingClaim()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-claimed-{Guid.NewGuid():N}");
+        string srcDir = Path.Combine(tempDir, "src");
+        string filePath = Path.Combine(srcDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, ".git"));
+            Directory.CreateDirectory(srcDir);
+            await File.WriteAllTextAsync(filePath, "public class Demo { string Title => \"Help\"; }");
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter claimOut = new();
+            StringWriter claimErr = new();
+
+            int claimExit = await app.RunAsync(
+                new[]
+                {
+                    "edit.claim",
+                    "claim",
+                    "src/Demo.cs",
+                    "--repo-root",
+                    tempDir,
+                    "--owner",
+                    "agent-a",
+                    "--reason",
+                    "claim summary test",
+                },
+                claimOut,
+                claimErr,
+                CancellationToken.None);
+
+            Assert.Equal(0, claimExit);
+            using JsonDocument claimJson = JsonDocument.Parse(claimOut.ToString());
+            string claimId = claimJson.RootElement.GetProperty("Data").GetProperty("claimed").GetProperty("claim_id").GetString()!;
+
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.replace_text",
+                    filePath,
+                    "--old-text", "\"Help\"",
+                    "--new-text", "\"About\"",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"claimed\": true", output);
+            Assert.Contains($"claimed={claimId[..8]}", output);
+            Assert.DoesNotContain("unclaimed", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_ReplaceText_UsesWorkspaceDiagnosticsWhenWorkspacePathProvided()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-workspace-{Guid.NewGuid():N}");

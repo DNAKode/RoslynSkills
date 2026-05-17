@@ -1120,3 +1120,20 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher because startup evidence is audited before implementation begins.
   - latency: slightly higher by one short supervision turn, but lower than correcting skipped startup later.
   - token_count: lower overall when it prevents long non-compliant trajectories.
+
+## 2026-05-17 - Mutation-time claim evidence made visible
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.95+1ec0852f70619397671380531533644954ab9ac9`
+- Exact reason fallback was required/preferred:
+  - The supervised FrankenTui.NET round released claims cleanly, but the capture window did not always show the claim command immediately before the first C# edit. The improvement is in the large self-hosted CLI formatter/test file; `ctx.member_source` hung on both `CliApplication.cs` and `ReplaceInMemberCommand.cs`, so bounded source reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildClaimStatusSuffix --context-lines-before 8 --context-lines-after 8`
+  - `roscli ctx.member_source src/RoslynSkills.Core/Commands/ReplaceInMemberCommand.cs --member-name ExecuteAsync --focus-text "claim_status" --context-lines-before 12 --context-lines-after 18`
+- Proposed Roslyn command/option improvement:
+  - Keep `claimed=<id>` or `unclaimed` directly in write-command summaries so mutation-time claim state remains visible even when earlier transcript lines scroll away.
+  - Investigate large-file `ctx.member_source` hangs as a self-hosting reliability defect.
+- Expected impact:
+  - correctness: higher because claim-before-edit compliance is auditable at the mutation result.
+  - latency: neutral; it reuses existing claim_status payload.
+  - token_count: lower by reducing follow-up claim-status verification prompts.
