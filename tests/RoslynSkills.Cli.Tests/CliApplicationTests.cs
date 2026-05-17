@@ -2513,7 +2513,8 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
-        Assert.Contains("edit.claim list, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows", output);
+        Assert.Contains("edit.claim list, ctx.changed_files, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows", output);
+        Assert.Contains("edit.claim claim for every file before mutation", output);
         Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
@@ -2538,6 +2539,26 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
+    }
+
+    [Fact]
+    public async Task AgentStart_WithSolution_ReturnsConcretePreload()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "agent-start", "--solution", "FrankenTui.Net.slnx" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("workspace.preload FrankenTui.Net.slnx --alias default --require-solution true", output);
+        Assert.Contains("ctx.changed_files", output);
+        Assert.Contains("edit.claim claim for every file before mutation", output);
     }
 
     [Fact]

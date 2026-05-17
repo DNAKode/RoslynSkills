@@ -4131,8 +4131,32 @@ Workflow:
         }
 
         TryGetOption(args, "--solution", out string? solutionPath);
+        solutionPath = string.IsNullOrWhiteSpace(solutionPath) ? TryDiscoverSingleTopLevelSolution() : solutionPath;
         await stdout.WriteAsync(BuildCSharpStartGuide(supervised: true, solutionPath)).ConfigureAwait(false);
         return 0;
+    }
+
+    private static string? TryDiscoverSingleTopLevelSolution()
+    {
+        try
+        {
+            string currentDirectory = Directory.GetCurrentDirectory();
+            string[] solutionPaths = Directory
+                .EnumerateFiles(currentDirectory, "*.sln*", SearchOption.TopDirectoryOnly)
+                .Where(path => path.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            return solutionPaths.Length == 1 ? Path.GetFileName(solutionPaths[0]) : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private static string BuildCSharpStartGuide(bool supervised, string? solutionPath)
@@ -4160,7 +4184,7 @@ Workflow:
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
-            sb.AppendLine($"Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, workspace.preload {preloadTarget} --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows, describe-command before the first Roslyn edit command, then the edit command if mutation is needed. If a broad ctx.search_text returns many matches, stop broad searching and narrow with member_name_contains or member_source focus_text. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report any .cs fallback explicitly.");
+            sb.AppendLine($"Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, ctx.changed_files, workspace.preload {preloadTarget} --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows, describe-command before the first Roslyn edit command, then edit.claim claim for every file before mutation and run the edit command if mutation is needed. If a broad ctx.search_text returns many matches, stop broad searching and narrow with member_name_contains or member_source focus_text. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report any .cs fallback explicitly.");
             sb.AppendLine("```");
             sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
         }
