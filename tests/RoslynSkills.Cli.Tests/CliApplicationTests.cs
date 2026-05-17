@@ -3094,6 +3094,8 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("Supervised Two-Turn Protocol", output);
         Assert.Contains("Run exactly this command now", output);
+        Assert.Contains("Do not read docs, list files, inspect git, or start repo exploration in this response", output);
+        Assert.Contains("Do not accept a batched response that starts docs, git, file listing, or C# work", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
         Assert.Contains("Turn 2A prompt after the heading report", output);
@@ -3153,7 +3155,8 @@ public sealed class CliApplicationTests
         Assert.Contains("# roscli agent-start", output);
         Assert.DoesNotContain("# roscli csharp-start", output);
         Assert.Contains("Supervised Two-Turn Protocol", output);
-        Assert.Contains("Run exactly this command now, then stop and report the first two headings it prints: roscli agent-start", output);
+        Assert.Contains("Run exactly this command now, then stop and report the first two headings it prints: roscli agent-start. Do not read docs, list files, inspect git, or start repo exploration in this response.", output);
+        Assert.Contains("Do not accept a batched response that starts docs, git, file listing, or C# work", output);
         Assert.Contains("Ran roscli agent-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
         Assert.Contains("roscli agent-begin --solution", output);

@@ -4589,9 +4589,9 @@ Workflow:
             sb.AppendLine("## Supervised Two-Turn Protocol");
             sb.AppendLine("Turn 1 prompt:");
             sb.AppendLine("```text");
-            sb.AppendLine($"Run exactly this command now, then stop and report the first two headings it prints: {bootstrapCommand}");
+            sb.AppendLine($"Run exactly this command now, then stop and report the first two headings it prints: {bootstrapCommand}. Do not read docs, list files, inspect git, or start repo exploration in this response.");
             sb.AppendLine("```");
-            sb.AppendLine($"Accept only evidence that the transcript contains `Ran {bootstrapCommand}` before any `.cs` `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor read.");
+            sb.AppendLine($"Accept only evidence that the first response contains `Ran {bootstrapCommand}` plus the heading report, and no docs/repo exploration before that report. Do not accept a batched response that starts docs, git, file listing, or C# work beside `{bootstrapCommand}`.");
             sb.AppendLine();
             sb.AppendLine("Turn 2A prompt after the heading report:");
             sb.AppendLine("```text");

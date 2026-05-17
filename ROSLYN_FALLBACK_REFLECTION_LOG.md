@@ -1316,3 +1316,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by preventing no-op validation from being counted as implementation progress.
   - latency: lower by steering fresh agents away from already-complete dirty slices.
   - token_count: lower by reducing exploratory loops that end without a mutation.
+
+## 2026-05-17 - Agent-start batched with docs orientation
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.108+e205f8c91fcd667792e6b3d31d6c157f99cdda28`
+- Exact reason fallback was required/preferred:
+  - Fresh-start FrankenTui.NET cycle 5 acquired roscli and completed a real Ctrl+T slice, but its final caveat said it read root/docs orientation in the same initial batch as `agent-start`, before `agent-begin`. This is a startup acquisition issue; the roscli guidance edit touched `CliApplication.cs`, so bounded shell reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `rg -n "Turn 1 prompt|agent-start|before any docs|before docs" src/RoslynSkills.Cli/CliApplication.cs tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs docs/PIT_OF_SUCCESS.md`
+  - Bounded `Get-Content` reads of `src/RoslynSkills.Cli/CliApplication.cs` and `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`.
+- Proposed Roslyn command/option improvement:
+  - Make the Turn 1 `agent-start` prompt explicitly forbid docs, git, file listing, or repo exploration in the same response, and reject batched startup/exploration transcripts.
+- Expected impact:
+  - correctness: higher by making startup evidence uncontaminated.
+  - latency: lower by preventing early off-protocol exploration that may need interruption.
+  - token_count: lower by separating bootstrap from repo orientation.
