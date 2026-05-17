@@ -2537,8 +2537,8 @@ public sealed class CliApplicationTests
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
         Assert.Contains("Supervised Two-Turn Protocol", output);
-        Assert.Contains("Run exactly this command now", output);
-        Assert.Contains("Ran roscli csharp-start", output);
+        Assert.Contains("Run exactly this command now, then stop and report the first two headings it prints: roscli agent-start", output);
+        Assert.Contains("Ran roscli agent-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
     }
 

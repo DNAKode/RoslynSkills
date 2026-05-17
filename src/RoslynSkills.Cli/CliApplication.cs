@@ -4132,7 +4132,7 @@ Workflow:
 
         TryGetOption(args, "--solution", out string? solutionPath);
         solutionPath = string.IsNullOrWhiteSpace(solutionPath) ? TryDiscoverSingleTopLevelSolution() : solutionPath;
-        await stdout.WriteAsync(BuildCSharpStartGuide(supervised: true, solutionPath)).ConfigureAwait(false);
+        await stdout.WriteAsync(BuildCSharpStartGuide(supervised: true, solutionPath, bootstrapCommand: "roscli agent-start")).ConfigureAwait(false);
         return 0;
     }
 
@@ -4159,7 +4159,7 @@ Workflow:
         }
     }
 
-    private static string BuildCSharpStartGuide(bool supervised, string? solutionPath)
+    private static string BuildCSharpStartGuide(bool supervised, string? solutionPath, string bootstrapCommand = "roscli csharp-start")
     {
         string preloadTarget = string.IsNullOrWhiteSpace(solutionPath)
             ? "<solution.sln|.slnx>"
@@ -4178,9 +4178,9 @@ Workflow:
             sb.AppendLine("## Supervised Two-Turn Protocol");
             sb.AppendLine("Turn 1 prompt:");
             sb.AppendLine("```text");
-            sb.AppendLine("Run exactly this command now, then stop and report the first two headings it prints: roscli csharp-start");
+            sb.AppendLine($"Run exactly this command now, then stop and report the first two headings it prints: {bootstrapCommand}");
             sb.AppendLine("```");
-            sb.AppendLine("Accept only evidence that the transcript contains `Ran roscli csharp-start` before any `.cs` `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor read.");
+            sb.AppendLine($"Accept only evidence that the transcript contains `Ran {bootstrapCommand}` before any `.cs` `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor read.");
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
