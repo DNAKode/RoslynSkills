@@ -911,3 +911,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: medium; agents avoid silent hangs and recover with command-specific next steps.
   - latency: lower because failed semantic reads return bounded guidance instead of consuming minutes.
   - token_count: lower because recovery happens from structured error messages instead of external inspection.
+
+## 2026-05-17 - Replace-in-member guidance edit after member-source hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.77+35cd272994a76574a3b0df6e96624719cc09ff7a`
+- Exact reason fallback was required/preferred:
+  - While improving `describe-command edit.replace_in_member`, `ctx.member_source` on `src/RoslynSkills.Cli/CliApplication.cs` hung again. Bounded `Get-Content` was used to inspect the usage-hint and test locations.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name GenerateUsageHints --focus-text "Successful responses include matches" --context-lines-before 10 --context-lines-after 12 --brief true --max-chars 12000`
+- Proposed Roslyn command/option improvement:
+  - Prioritize timeout/cancellation reporting for `ctx.member_source`.
+  - Add safer multiline payload examples for edit commands so agents choose `--input @payload.json` or `--input-stdin` instead of direct here-string shorthand.
+- Expected impact:
+  - correctness: medium; fewer shell-quoting failures in multi-line C# edits.
+  - latency: lower; fewer invalid direct edit retries.
+  - token_count: lower by replacing failed here-string trajectories with one structured payload.

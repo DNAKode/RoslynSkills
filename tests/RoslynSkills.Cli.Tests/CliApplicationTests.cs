@@ -2300,6 +2300,9 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("edit.replace_in_member <file-path>", output);
         Assert.Contains("same member", output);
+        Assert.Contains("Direct shorthand is intended for short one-line old_text/new_text", output);
+        Assert.Contains("--input @payload.json", output);
+        Assert.Contains("--input-stdin", output);
         Assert.Contains("do not run parallel edit commands", output);
     }
 
