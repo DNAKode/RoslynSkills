@@ -1928,7 +1928,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...] OR ctx.member_source <file-path> --member-name <name> [--option value ...]"));
                     return false;
                 }
 
@@ -4169,7 +4169,7 @@ Workflow:
             : solutionPath.Trim();
 
         StringBuilder sb = new();
-        sb.AppendLine("# roscli csharp-start");
+        sb.AppendLine($"# {bootstrapCommand}");
         sb.AppendLine();
         sb.AppendLine("Use this before reading or editing `.cs` files in a C#/.NET repo.");
         if (supervised)
@@ -4184,7 +4184,7 @@ Workflow:
             sb.AppendLine();
             sb.AppendLine("Turn 2 prompt after the heading report:");
             sb.AppendLine("```text");
-            sb.AppendLine($"Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, ctx.changed_files, workspace.preload {preloadTarget} --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows, describe-command before the first Roslyn edit command, then edit.claim claim for every file before mutation and run the edit command if mutation is needed. If a broad ctx.search_text returns many matches, stop broad searching and narrow with member_name_contains or member_source focus_text. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report startup evidence explicitly: whether edit.claim list, ctx.changed_files, and workspace.preload ran. Report any .cs fallback explicitly.");
+            sb.AppendLine($"Continue one narrow, testable C# slice. Use roscli for .cs context, edits, and post-edit anchors: edit.claim list, ctx.changed_files, workspace.preload {preloadTarget} --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows, describe-command before the first Roslyn edit command, then edit.claim claim for every file before mutation and run the edit command if mutation is needed. If subagents are used, assign disjoint claimed files; serialize shared-file/member edits through one owner and guarded expected_text. If a broad ctx.search_text returns many matches, stop broad searching and narrow with member_name_contains or member_source focus_text. Use ctx.search_text or ctx.member_source for .cs closeout line anchors; do not use rg/git diff/Get-Content on .cs files. Report startup evidence explicitly: whether edit.claim list, ctx.changed_files, and workspace.preload ran. Report any .cs fallback explicitly.");
             sb.AppendLine("```");
             sb.AppendLine("If the agent starts C# work before the command transcript appears, interrupt and rerun Turn 1; do not treat prose promises as compliance.");
         }
@@ -4197,6 +4197,7 @@ Workflow:
         sb.AppendLine($"roscli workspace.preload {examplePreloadTarget} --alias default --require-solution true");
         sb.AppendLine("roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20");
         sb.AppendLine("roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8");
+        sb.AppendLine("roscli ctx.search_text --pattern \"class Target\" --file-glob \"*.cs\" --max-results 20 --context-lines 0");
         sb.AppendLine("roscli describe-command edit.replace_in_member");
         sb.AppendLine("```");
         sb.AppendLine();
@@ -4208,6 +4209,7 @@ Workflow:
         sb.AppendLine("- In dirty repos, start with `ctx.changed_files` for changed C# paths and suggested next steps instead of `git diff --stat`.");
         sb.AppendLine("- Use `ctx.file_outline --member-name-contains <term> --max-members 20` to find compact member anchors in large files.");
         sb.AppendLine("- Use `ctx.member_source --member-name <name>` when a member name is unique; this avoids stale line/column anchors.");
+        sb.AppendLine("- If you only know a type/member name but not the file, locate candidates with `ctx.search_text --pattern \"class TypeName\" --file-glob \"*.cs\" --max-results 20 --context-lines 0`, then use `ctx.file_outline` and `ctx.member_source`.");
         sb.AppendLine("- Add `--focus-text <literal>` plus small context windows, usually 3-8 lines, for huge members instead of repeated broad search.");
         sb.AppendLine("- Keep `ctx.search_text` scoped and capped (`--max-results 20 --context-lines 0` first); if it returns many matches, switch to outline/member_source rather than searching again.");
         sb.AppendLine("- Add `--include-edit-target-text true` only when constructing a whole-member/body span replacement.");

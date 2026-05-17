@@ -2482,6 +2482,8 @@ public sealed class CliApplicationTests
         Assert.Contains("# roscli csharp-start", output);
         Assert.Contains("workspace.preload MySolution.slnx --alias default --require-solution true", output);
         Assert.Contains("ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text", output);
+        Assert.Contains("ctx.search_text --pattern \"class Target\"", output);
+        Assert.Contains("If you only know a type/member name but not the file", output);
         Assert.Contains("Data.edit_target.exact_span_text.text", output);
         Assert.Contains("--max-results 20 --context-lines 0", output);
         Assert.Contains("edit.claim list", output);
@@ -2515,6 +2517,7 @@ public sealed class CliApplicationTests
         Assert.Contains("do not treat prose promises as compliance", output);
         Assert.Contains("edit.claim list, ctx.changed_files, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
+        Assert.Contains("If subagents are used, assign disjoint claimed files", output);
         Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
         Assert.Contains("Report startup evidence explicitly", output);
@@ -2536,6 +2539,8 @@ public sealed class CliApplicationTests
 
         string output = stdout.ToString();
         Assert.Equal(0, exitCode);
+        Assert.Contains("# roscli agent-start", output);
+        Assert.DoesNotContain("# roscli csharp-start", output);
         Assert.Contains("Supervised Two-Turn Protocol", output);
         Assert.Contains("Run exactly this command now, then stop and report the first two headings it prints: roscli agent-start", output);
         Assert.Contains("Ran roscli agent-start", output);

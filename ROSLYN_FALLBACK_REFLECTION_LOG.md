@@ -876,3 +876,21 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: low; mostly formatting and readability.
   - latency: lower for test scaffolding edits.
   - token_count: lower because agents would not need a second exact whitespace repair.
+
+## 2026-05-17 - Member-source startup friction while improving supervised bootstrap
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.73+3cf904bda17f6e7101ec3a2277569f937a435a0e`
+- Exact reason fallback was required/preferred:
+  - Repeated `ctx.member_source` calls on `CliApplication.cs` hung in the host after an earlier parallel source-backed invocation, and initial attempts using only type/member names failed because `ctx.member_source` requires a file path first.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildCSharpStartGuide --brief true --include-edit-target-text true`
+  - `roscli ctx.member_source tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs --member-name AgentStart_ReturnsSupervisedFirstCommandProtocol --brief true --include-edit-target-text true`
+- Proposed Roslyn command/option improvement:
+  - Make `ctx.member_source` usage errors show the `--member-name` file-path form.
+  - Document the type/member-name-to-file path: `ctx.search_text` -> `ctx.file_outline` -> `ctx.member_source`.
+  - Investigate bounded timeout/cancellation behavior for member-source calls that hang after source-backed parallel launches.
+- Expected impact:
+  - correctness: medium; agents are less likely to fall back to raw source reads when they know a symbol name but not the file.
+  - latency: lower; fewer invalid command retries and fewer supervision cycles consumed by hung reads.
+  - token_count: lower because startup guidance points to capped search and focused member windows.
