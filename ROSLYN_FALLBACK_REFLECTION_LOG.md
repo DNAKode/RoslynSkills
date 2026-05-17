@@ -1039,3 +1039,20 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher; startup evidence is collected before C# exploration.
   - latency: lower by avoiding corrective supervision and failed direct multiline edit attempts.
   - token_count: lower through fewer retry/correction turns.
+
+## 2026-05-17 - Upstream reference guidance edit after member-source hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.90+3f6fd356313460f115d0c8566552a037868310f2`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET round used roscli correctly for C# work but dumped a huge non-C# upstream `.external` `rg` result because startup guidance allowed `rg -n -C 2 -m 40 <pattern> <path>` over broad reference roots. While patching the startup guidance, two self-hosted `ctx.member_source` calls on `CliApplication.cs`/`CliApplicationTests.cs` hung and had to be killed, so bounded source reads were used for the guidance/test edit.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildCSharpStartGuide --include-source-text true --brief false`
+  - `roscli ctx.member_source tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs --member-name CSharpStart_ReturnsOperationalAgentGuide --include-source-text true --brief false`
+- Proposed Roslyn command/option improvement:
+  - Add timeout/partial-result telemetry for self-hosted `ctx.member_source` calls.
+  - Add an upstream/reference lookup helper or startup guidance primitive that encodes the two-step bounded pattern: locate one file with `rg -l`, then inspect only that file with contextual `rg`.
+- Expected impact:
+  - correctness: neutral for C# semantics, positive for supervision quality because agents keep reference evidence focused.
+  - latency: lower by avoiding transcript-spilling broad searches.
+  - token_count: lower because upstream comparisons no longer dump thousands of irrelevant lines.

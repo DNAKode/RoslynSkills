@@ -2794,7 +2794,9 @@ public sealed class CliApplicationTests
         Assert.Contains("Run roscli and dotnet commands sequentially per repo", output);
         Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);
         Assert.Contains("When consulting non-C# upstream/reference files", output);
-        Assert.Contains("rg -n -C 2 -m 40", output);
+        Assert.Contains("first locate one likely file with `rg -l -m 20", output);
+        Assert.Contains("then inspect only that file with `rg -n -C 2 -m 20", output);
+        Assert.Contains("Do not run alternation-heavy rg across whole .external/reference trees", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
         Assert.Contains("--include-source-text false", output);
         Assert.Contains("without replaying source", output);
