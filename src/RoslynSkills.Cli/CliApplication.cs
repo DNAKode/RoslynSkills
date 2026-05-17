@@ -3858,6 +3858,7 @@ Workflow:
                 {
                     "For huge test files, pass member_name_contains to return only matching member outlines and their containing type.",
                     "Use ctx.member_source --member-name when the returned member name is unique; use returned line/column anchors only when names are ambiguous.",
+                    "If a filtered outline returns no members, do not immediately raise max_members; try ctx.search_text or a different member_name_contains term first.",
                     "Keep max_members low during orientation; if the outline is still large, narrow member_name_contains before reading source.",
                 },
             };

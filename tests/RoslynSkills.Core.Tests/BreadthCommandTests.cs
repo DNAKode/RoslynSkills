@@ -1206,6 +1206,80 @@ public sealed class BreadthCommandTests
     }
 
     [Fact]
+    public async Task FileOutlineCommand_GuidesZeroMatchFilteredOutlines()
+    {
+        string filePath = WriteTempFile(
+            """
+            public class ShowcaseFrameHitRegistry
+            {
+                public void Resolve()
+                {
+                }
+            }
+            """);
+
+        try
+        {
+            FileOutlineCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name_contains = "Terminal",
+                max_members = 20,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"member_count\":0", json);
+            Assert.Contains("\"result_guidance\":", json);
+            Assert.Contains("filtered outline returned no members", json);
+            Assert.Contains("Do not immediately raise max_members", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task FileOutlineCommand_GuidesLargeOutlines()
+    {
+        string members = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(0, 45).Select(index => $"    public void Test{index}() {{ }}"));
+        string filePath = WriteTempFile(
+            $$"""
+            public class ShowcaseShellTests
+            {
+            {{members}}
+            }
+            """);
+
+        try
+        {
+            FileOutlineCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                max_members = 80,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"member_count\":45", json);
+            Assert.Contains("\"result_guidance\":", json);
+            Assert.Contains("large outline payload", json);
+            Assert.Contains("Narrow before reading more outline data", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task ChangeSignatureAndAddMemberCommands_ApplyUpdates()
     {
         string filePath = WriteTempFile(

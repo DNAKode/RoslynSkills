@@ -195,6 +195,7 @@ public sealed class FileOutlineCommand : IAgentCommand
         }
 
         int globalStatementCount = root.Members.OfType<CSharpSyntax.GlobalStatementSyntax>().Count();
+        int memberCount = typeOutlines.Sum(t => t.members.Count);
         object data = new
         {
             file_path = Path.GetFullPath(filePath),
@@ -202,7 +203,7 @@ public sealed class FileOutlineCommand : IAgentCommand
             {
                 using_count = usings.Length,
                 type_count = typeOutlines.Count,
-                member_count = typeOutlines.Sum(t => t.members.Count),
+                member_count = memberCount,
                 global_statement_count = globalStatementCount,
                 include_usings = includeUsings,
                 include_members = includeMembers,
@@ -211,6 +212,13 @@ public sealed class FileOutlineCommand : IAgentCommand
                 type_name_contains = typeNameContains,
                 member_name_contains = memberNameContains,
             },
+            result_guidance = BuildResultGuidance(
+                filePath,
+                memberCount,
+                maxMembers,
+                typeNameContains,
+                memberNameContains,
+                includeMembers),
             usings,
             types = typeOutlines,
         };
@@ -303,6 +311,7 @@ public sealed class FileOutlineCommand : IAgentCommand
             }
         }
 
+        int memberCount = typeOutlines.Sum(t => t.members.Count);
         object data = new
         {
             file_path = Path.GetFullPath(filePath),
@@ -310,7 +319,7 @@ public sealed class FileOutlineCommand : IAgentCommand
             {
                 using_count = imports.Length,
                 type_count = typeOutlines.Count,
-                member_count = typeOutlines.Sum(t => t.members.Count),
+                member_count = memberCount,
                 global_statement_count = 0,
                 include_usings = includeUsings,
                 include_members = includeMembers,
@@ -319,6 +328,13 @@ public sealed class FileOutlineCommand : IAgentCommand
                 type_name_contains = typeNameContains,
                 member_name_contains = memberNameContains,
             },
+            result_guidance = BuildResultGuidance(
+                filePath,
+                memberCount,
+                maxMembers,
+                typeNameContains,
+                memberNameContains,
+                includeMembers),
             usings = imports,
             types = typeOutlines,
         };
@@ -356,6 +372,56 @@ public sealed class FileOutlineCommand : IAgentCommand
         => string.IsNullOrWhiteSpace(memberNameContains) ||
            outline.member_name.Contains(memberNameContains, StringComparison.OrdinalIgnoreCase) ||
            outline.signature.Contains(memberNameContains, StringComparison.OrdinalIgnoreCase);
+
+    private static object? BuildResultGuidance(
+        string filePath,
+        int memberCount,
+        int maxMembers,
+        string? typeNameContains,
+        string? memberNameContains,
+        bool includeMembers)
+    {
+        if (!includeMembers)
+        {
+            return null;
+        }
+
+        string fileName = Path.GetFileName(filePath);
+        bool hasTypeFilter = !string.IsNullOrWhiteSpace(typeNameContains);
+        bool hasMemberFilter = !string.IsNullOrWhiteSpace(memberNameContains);
+        if (memberCount == 0 && (hasTypeFilter || hasMemberFilter))
+        {
+            return new
+            {
+                severity = "info",
+                reason = "filtered outline returned no members",
+                recommended_next_step = "Do not immediately raise max_members. Try a different member_name_contains term, search for a literal with ctx.search_text, or inspect a known member with ctx.member_source.",
+                suggested_commands = new[]
+                {
+                    $"roscli ctx.search_text --pattern \"<literal>\" --file-glob \"*.cs\" --max-results 20 --context-lines 0",
+                    $"roscli ctx.file_outline {fileName} --member-name-contains <narrow-term> --max-members 20",
+                    $"roscli ctx.member_source {fileName} --member-name <exact-member-name> --focus-text \"<literal>\" --context-lines-before 3 --context-lines-after 8",
+                },
+            };
+        }
+
+        if (memberCount >= maxMembers || memberCount > 40)
+        {
+            return new
+            {
+                severity = memberCount >= maxMembers ? "warning" : "info",
+                reason = memberCount >= maxMembers ? "member result limit reached" : "large outline payload",
+                recommended_next_step = "Narrow before reading more outline data: use member_name_contains/type_name_contains, or switch to ctx.member_source for a known member.",
+                suggested_commands = new[]
+                {
+                    $"roscli ctx.file_outline {fileName} --member-name-contains <narrow-term> --max-members 20",
+                    $"roscli ctx.member_source {fileName} --member-name <exact-member-name> --focus-text \"<literal>\" --context-lines-before 3 --context-lines-after 8",
+                },
+            };
+        }
+
+        return null;
+    }
 
     private static string? GetOptionalTrimmedString(JsonElement input, string propertyName)
     {
