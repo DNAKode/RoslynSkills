@@ -1045,6 +1045,46 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_MemberSourceMissingMemberSuggestsOutlineRecovery()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-member-missing-{Guid.NewGuid():N}.cs");
+        try
+        {
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public sealed class Demo
+                {
+                    public void ActualTarget()
+                    {
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.member_source", filePath, "--member-name", "MissingTarget" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("\"Code\": \"member_not_found\"", output);
+            Assert.Contains("ctx.file_outline", output);
+            Assert.Contains("--member-name-contains MissingTarget --max-members 20", output);
+            Assert.Contains("line/column anchor", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_SearchText_AcceptsPositionalShorthand()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-{Guid.NewGuid():N}");

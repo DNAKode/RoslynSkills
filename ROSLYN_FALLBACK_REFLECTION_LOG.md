@@ -894,3 +894,20 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: medium; agents are less likely to fall back to raw source reads when they know a symbol name but not the file.
   - latency: lower; fewer invalid command retries and fewer supervision cycles consumed by hung reads.
   - token_count: lower because startup guidance points to capped search and focused member windows.
+
+## 2026-05-17 - Self-hosted member-source command edit after roscli hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.76+6462de2bbdcfd0c90d4e7e75ac4f1b9d3ab0d0d5`
+- Exact reason fallback was required/preferred:
+  - `ctx.member_source` on `src/RoslynSkills.Core/Commands/MemberSourceCommand.cs` and then `edit.replace_text` against the same file hung in the host. The change was a small self-hosted command-surface improvement required before the next release.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Core/Commands/MemberSourceCommand.cs --member-name ExecuteAsync --focus-text "member_not_found" --context-lines-before 12 --context-lines-after 16 --brief true --max-chars 12000`
+  - `roscli edit.replace_text --input @<temp-json>`
+- Proposed Roslyn command/option improvement:
+  - Add explicit timeout/cancellation handling and clearer failure telemetry for long-running daemon-backed `ctx.member_source`/edit calls.
+  - Add a safer multiline edit payload path that reduces PowerShell quoting failures and stale tool-process locks.
+- Expected impact:
+  - correctness: medium; agents avoid silent hangs and recover with command-specific next steps.
+  - latency: lower because failed semantic reads return bounded guidance instead of consuming minutes.
+  - token_count: lower because recovery happens from structured error messages instead of external inspection.

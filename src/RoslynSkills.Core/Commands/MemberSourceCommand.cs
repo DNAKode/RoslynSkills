@@ -574,7 +574,7 @@ public sealed class MemberSourceCommand : IAgentCommand
             memberName = string.Empty;
             return new CommandExecutionResult(
                 null,
-                new[] { new CommandError("member_not_found", $"No member named '{requestedMemberName}' was found in the file.") });
+                new[] { new CommandError("member_not_found", $"No member named '{requestedMemberName}' was found in the file. Next: run ctx.file_outline on this file with --member-name-contains {requestedMemberName} --max-members 20, then retry ctx.member_source with an exact member name or line/column anchor.") });
         }
 
         if (matches.Count > 1)
