@@ -96,6 +96,8 @@ public sealed class CliApplicationTests
         Assert.Contains("--member-name", output);
         Assert.Contains("member_name", output);
         Assert.Contains("focus_text", output);
+        Assert.Contains("include_source_text=false", output);
+        Assert.Contains("without replaying source text", output);
         Assert.Contains("workspace_cache_mode", output);
     }
 
@@ -2737,6 +2739,8 @@ public sealed class CliApplicationTests
         Assert.Contains("When consulting non-C# upstream/reference files", output);
         Assert.Contains("rg -n -C 2 -m 40", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
+        Assert.Contains("--include-source-text false", output);
+        Assert.Contains("without replaying source", output);
         Assert.Contains("Report startup evidence explicitly", output);
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
     }

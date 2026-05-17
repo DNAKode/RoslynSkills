@@ -975,3 +975,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: medium; broad-result truth is preserved through total/omitted counts while reducing preview overload.
   - latency: lower because agents spend fewer cycles scrolling large JSON envelopes.
   - token_count: lower because broad-search results return a capped match payload by default.
+
+## 2026-05-17 - Compact closeout guidance after member-source hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.86+b424d6efecda67474a9a595c3dd052f9258aef29`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET round showed agents using `ctx.member_source` successfully for closeout anchors, but with verbose source payloads. `ctx.member_source` on `src/RoslynSkills.Cli/CliApplication.cs` hung while inspecting the guidance method, so bounded `rg`/`Get-Content` reads were used for this self-hosted guidance/test edit.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildCSharpStartGuide --focus-text "closeout" --context-lines-before 4 --context-lines-after 8 --include-source-text true`
+- Proposed Roslyn command/option improvement:
+  - Add timeout/partial-result telemetry for `ctx.member_source` on large tool-source files.
+  - Promote compact closeout-anchor examples using `--include-source-text false` so agents capture line/focus metadata without replaying source code.
+- Expected impact:
+  - correctness: neutral-to-positive; closeout line evidence remains Roslyn-derived.
+  - latency: lower because closeout does not require repeated verbose member snippets.
+  - token_count: lower by replacing full source windows with focus/line metadata for post-test evidence.
