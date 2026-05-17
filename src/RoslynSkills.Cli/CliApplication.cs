@@ -1863,6 +1863,8 @@ Workflow:
             TryPromoteOptionToPositional(options, "root", ref positionalArgs, 1);
             TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 1);
             TryPromoteOptionToPositional(options, "path", ref positionalArgs, 1);
+            TryMoveOptionAlias(options, "file_glob", "include_globs");
+            TryMoveOptionAlias(options, "glob", "include_globs");
         }
 
         if (string.Equals(commandId, "ctx.changed_files", StringComparison.OrdinalIgnoreCase))
@@ -2386,6 +2388,21 @@ Workflow:
                 continue;
             }
 
+            if (string.Equals(key, "include_globs", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "exclude_globs", StringComparison.OrdinalIgnoreCase))
+            {
+                if (TryConvertOptionToStringArray(value, out string[] globs))
+                {
+                    input[key] = globs;
+                }
+                else
+                {
+                    input[key] = value;
+                }
+
+                continue;
+            }
+
             if (value is string pathValue && IsPathLikeOptionName(key))
             {
                 input[key] = NormalizeCliPathValue(pathValue);
@@ -2681,6 +2698,26 @@ Workflow:
         }
 
         positionalArgs[targetIndex] = optionValue;
+    }
+
+    private static void TryMoveOptionAlias(Dictionary<string, object?> options, string aliasName, string targetName)
+    {
+        string normalizedAliasName = NormalizeOptionName(aliasName);
+        if (!options.TryGetValue(normalizedAliasName, out object? aliasValue))
+        {
+            return;
+        }
+
+        options.Remove(normalizedAliasName);
+
+        string normalizedTargetName = NormalizeOptionName(targetName);
+        if (options.TryGetValue(normalizedTargetName, out object? existingValue))
+        {
+            options[normalizedTargetName] = AppendOptionValue(existingValue, aliasValue);
+            return;
+        }
+
+        options[normalizedTargetName] = aliasValue;
     }
 
     private static bool TryConvertOptionToSingleString(object? optionValue, out string value)
@@ -3871,11 +3908,12 @@ Workflow:
                 direct = "ctx.search_text <pattern> [root-or-file] [--option value ...] OR ctx.search_text --file-path <file> --text <pattern>",
                 run = "run ctx.search_text --input '{\"patterns\":[\"RemoteUserAction\",\"ReplicationUpdate\"],\"mode\":\"literal\",\"roots\":[\"src\"],\"max_results\":200}'",
                 required_properties = new[] { "pattern|patterns", "file_path|roots|workspace_path" },
-                optional_properties = new[] { "text", "query", "root", "path", "mode", "case_sensitive", "include_globs", "exclude_globs", "max_results", "max_files", "context_lines", "brief" },
+                optional_properties = new[] { "text", "query", "root", "path", "file_glob", "glob", "mode", "case_sensitive", "include_globs", "exclude_globs", "max_results", "max_files", "context_lines", "brief" },
                 notes = new[]
                 {
                     "Scope is mandatory: set file_path, roots, or workspace_path.",
-                    "Direct CLI aliases: --text/--query map to pattern; --file-path/--path map to file scope; --root maps to root scope.",
+                    "Direct CLI aliases: --text/--query map to pattern; --file-path/--path map to file scope; --root maps to root scope; --file-glob/--glob map to include_globs.",
+                    "Bare file-glob values like Target.cs match by file name under the resolved scope; use path globs like tests/*.cs when directory shape matters.",
                     "Use mode=regex for advanced matching; invalid regex patterns fail fast.",
                     "For orientation, start with --max-results 20 --context-lines 0. If matches are numerous, switch to ctx.file_outline or ctx.member_source focus_text instead of repeating broad searches.",
                 },

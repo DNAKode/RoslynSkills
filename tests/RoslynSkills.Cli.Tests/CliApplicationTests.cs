@@ -1172,6 +1172,46 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_SearchText_MapsFileGlobAliasToIncludeGlobs()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-fileglob-{Guid.NewGuid():N}");
+        string targetPath = Path.Combine(tempDir, "Target.cs");
+        string otherPath = Path.Combine(tempDir, "Other.cs");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            await File.WriteAllTextAsync(targetPath, "public class Target { public string Value => \"AliasMarker\"; }");
+            await File.WriteAllTextAsync(otherPath, "public class Other { public string Value => \"AliasMarker\"; }");
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.search_text", "AliasMarker", tempDir, "--file-glob", "Target.cs", "--max-results", "10", "--context-lines", "0" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"include_globs\":", output);
+            Assert.Contains("\"Target.cs\"", output);
+            Assert.Contains("\"total_matches\": 1", output);
+            Assert.Contains("Target.cs", output);
+            Assert.DoesNotContain("Other.cs", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_SearchText_InfersSingleTopLevelSolutionWhenScopeOmitted()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-solution-{Guid.NewGuid():N}");

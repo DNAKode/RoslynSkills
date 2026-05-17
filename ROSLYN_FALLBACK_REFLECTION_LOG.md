@@ -943,3 +943,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: high for direct edit commands using C# invocations or constructor calls.
   - latency: lower because agents can use one direct edit command instead of retrying with JSON after invalid input.
   - token_count: lower by avoiding failed direct-edit trajectories.
+
+## 2026-05-17 - Search-text file-glob alias fix after member-source hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.83+2752003cb3cb64ae5600d76c47b172e937b53ba1`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET run showed `ctx.search_text --file-glob ShowcaseInteractiveProgram.cs` silently searched default C# globs. While fixing the direct shorthand alias, `ctx.member_source` on `src/RoslynSkills.Cli/CliApplication.cs` hung again, so bounded source reads were used for the self-hosted CLI parser/help/test edit.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildDirectCommandInput --focus-text "ctx.search_text" --context-lines-before 20 --context-lines-after 60`
+- Proposed Roslyn command/option improvement:
+  - Add timeout/partial-result telemetry for `ctx.member_source` on large tool-source files.
+  - Add command-surface self-checks that verify every option printed by `agent-start` and `describe-command` maps to the actual direct shorthand input schema.
+- Expected impact:
+  - correctness: high; advertised narrowing options should not silently broaden searches.
+  - latency: lower because agents avoid broad search retries and do not wait indefinitely on self-hosted source reads.
+  - token_count: lower because file-glob narrowing works on the first try.
