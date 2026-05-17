@@ -386,7 +386,7 @@ public sealed class FileOutlineCommand : IAgentCommand
             return null;
         }
 
-        string fileName = Path.GetFileName(filePath);
+        string displayFilePath = FormatCommandPath(filePath);
         bool hasTypeFilter = !string.IsNullOrWhiteSpace(typeNameContains);
         bool hasMemberFilter = !string.IsNullOrWhiteSpace(memberNameContains);
         if (memberCount == 0 && (hasTypeFilter || hasMemberFilter))
@@ -399,8 +399,8 @@ public sealed class FileOutlineCommand : IAgentCommand
                 suggested_commands = new[]
                 {
                     $"roscli ctx.search_text --pattern \"<literal>\" --file-glob \"*.cs\" --max-results 20 --context-lines 0",
-                    $"roscli ctx.file_outline {fileName} --member-name-contains <narrow-term> --max-members 20",
-                    $"roscli ctx.member_source {fileName} --member-name <exact-member-name> --focus-text \"<literal>\" --context-lines-before 3 --context-lines-after 8",
+                    $"roscli ctx.file_outline {displayFilePath} --member-name-contains <narrow-term> --max-members 20",
+                    $"roscli ctx.member_source {displayFilePath} --member-name <exact-member-name> --focus-text \"<literal>\" --context-lines-before 3 --context-lines-after 8",
                 },
             };
         }
@@ -414,13 +414,23 @@ public sealed class FileOutlineCommand : IAgentCommand
                 recommended_next_step = "Narrow before reading more outline data: use member_name_contains/type_name_contains, or switch to ctx.member_source for a known member.",
                 suggested_commands = new[]
                 {
-                    $"roscli ctx.file_outline {fileName} --member-name-contains <narrow-term> --max-members 20",
-                    $"roscli ctx.member_source {fileName} --member-name <exact-member-name> --focus-text \"<literal>\" --context-lines-before 3 --context-lines-after 8",
+                    $"roscli ctx.file_outline {displayFilePath} --member-name-contains <narrow-term> --max-members 20",
+                    $"roscli ctx.member_source {displayFilePath} --member-name <exact-member-name> --focus-text \"<literal>\" --context-lines-before 3 --context-lines-after 8",
                 },
             };
         }
 
         return null;
+    }
+
+    private static string FormatCommandPath(string filePath)
+    {
+        string path = string.IsNullOrWhiteSpace(filePath)
+            ? "<file-path>"
+            : filePath;
+        return path.Contains(' ', StringComparison.Ordinal)
+            ? $"\"{path}\""
+            : path;
     }
 
     private static string? GetOptionalTrimmedString(JsonElement input, string propertyName)

@@ -1235,6 +1235,7 @@ public sealed class BreadthCommandTests
             Assert.Contains("\"result_guidance\":", json);
             Assert.Contains("filtered outline returned no members", json);
             Assert.Contains("Do not immediately raise max_members", json);
+            Assert.Contains(filePath.Replace("\\", "\\\\"), json);
         }
         finally
         {
@@ -1272,6 +1273,7 @@ public sealed class BreadthCommandTests
             Assert.Contains("\"result_guidance\":", json);
             Assert.Contains("large outline payload", json);
             Assert.Contains("Narrow before reading more outline data", json);
+            Assert.Contains(filePath.Replace("\\", "\\\\"), json);
         }
         finally
         {
