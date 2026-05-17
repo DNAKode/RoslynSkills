@@ -3110,6 +3110,8 @@ public sealed class CliApplicationTests
         Assert.Contains("roscli workspace.preload MySolution.slnx --alias default --require-solution true", output);
         Assert.Contains("ctx.member_source with small focus windows", output);
         Assert.Contains("start 3-12 lines, not 80+", output);
+        Assert.Contains("If ctx.member_source returns focus=not-found", output);
+        Assert.Contains("rerun with a better literal", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
         Assert.Contains("a final response with active claims is non-compliant", output);
         Assert.Contains("report active claim count 0", output);

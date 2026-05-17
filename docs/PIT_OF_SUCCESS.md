@@ -160,7 +160,7 @@ Workflow:
 4a) keep broad search capped; if "ctx.search_text" returns many matches, narrow with "ctx.file_outline --member-name-contains" or "ctx.member_source --focus-text" instead of repeating broad searches.
 5) if argument shape is unclear, run "roscli describe-command <command-id>".
 6) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
-7) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
+7) for small member-local edits, prefer "roscli edit.replace_in_member"; if ctx.member_source returns focus=not-found, rerun with a better literal, smaller context window, or include_source_text=false before reading larger source; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
 8) if an edit command reports claim_status.claimed=false or summary "unclaimed", claim before further C# mutation.
 9) if multiple edits touch the same member, re-read ctx.member_source once and combine them into one guarded edit; do not issue parallel same-member edit commands.
 10) run diagnostics/build/tests and release claims before finalizing; final responses with active claims are non-compliant, so run `edit.claim list` after release and report active claim count 0.

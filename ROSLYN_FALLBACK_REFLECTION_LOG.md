@@ -1348,3 +1348,20 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: neutral; fallback was read-only location discovery.
   - latency: lower by avoiding a failed first Roslyn context read.
   - token_count: lower by reducing shell search plus retry chatter.
+
+## 2026-05-17 - Focus-not-found guidance fallback
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.110+8afef38b90942669c2a16c490d0c2c4a95ad968e`
+- Exact reason fallback was required/preferred:
+  - Cycle 7 completed successfully but showed an 80-line `ctx.member_source` read with `focus=not-found`, indicating the startup guide should tell agents to rerun tighter before consuming large source. While implementing that wording in RoslynSkills, repeated `ctx.member_source` attempts failed with `daemon_unavailable` after the global tool reinstall; bounded `Get-Content` and `rg` reads were used to locate and verify the exact guidance strings.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildCSharpStartGuide --focus-text "ctx.member_source with small focus windows" ...`
+  - `roscli ctx.member_source tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs --member-name CSharpStartSupervised_ReturnsTwoTurnProtocol --focus-text "start 3-12 lines, not 80+" ...`
+  - Both returned `daemon_unavailable` and recommended `roscli workspace.use <solution>`.
+- Proposed Roslyn command/option improvement:
+  - Make `ctx.member_source` recover automatically when the cwd has a single solution, or include a ready-to-run `workspace.use <detected-solution>` hint in `daemon_unavailable`.
+- Expected impact:
+  - correctness: neutral; edits remained small and test-gated.
+  - latency: lower by avoiding a failed context-read chain.
+  - token_count: lower by reducing fallback and retry output.
