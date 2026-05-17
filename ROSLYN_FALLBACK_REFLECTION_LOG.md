@@ -1268,3 +1268,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by keeping command-surface edits inside Roslyn context.
   - latency: lower by avoiding manual process inspection and kill steps.
   - token_count: lower by eliminating fallback logging and duplicate reads for roscli implementation work.
+
+## 2026-05-17 - Large matched member windows needed acquisition guidance
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.104+59fb211d3b7999de0b75eac662bf30709dfe603a`
+- Exact reason fallback was required/preferred:
+  - Fresh-start FrankenTui.NET cycle 1 acquired roscli successfully and used no C# fallback, but it requested matched `ctx.member_source` windows with high context counts. The required roscli implementation edit touched `ctx.member_source` itself, which is still known to hang on self-hosted reads, so bounded shell reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `roscli ctx.search_text --root src --pattern "BuildPayloadGuidance" --max-results 20 --context-lines 2`
+  - Prior failed self-hosted command remains: `roscli ctx.member_source src/RoslynSkills.Core/Commands/MemberSourceCommand.cs --member-name BuildPayloadGuidance --include-edit-target-text true --context-lines-before 20 --context-lines-after 30`
+- Proposed Roslyn command/option improvement:
+  - Add `ctx.member_source` payload guidance for matched focus windows over 50 lines, recommending a tighter rerun or metadata-only source suppression.
+- Expected impact:
+  - correctness: neutral to higher by preserving focus evidence while discouraging broad-window edit planning.
+  - latency: lower by reducing repeated large semantic reads.
+  - token_count: lower by steering fresh agents toward smaller context windows after successful focus acquisition.

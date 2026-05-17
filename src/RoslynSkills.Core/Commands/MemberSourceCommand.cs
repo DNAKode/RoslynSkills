@@ -12,6 +12,7 @@ public sealed class MemberSourceCommand : IAgentCommand
 {
     private const int LargeMissingFocusMemberLineThreshold = 60;
     private const int MissingFocusFallbackLineWindow = 80;
+    private const int LargeMatchedFocusWindowLineThreshold = 50;
 
     public CommandDescriptor Descriptor { get; } = new(
         Id: "ctx.member_source",
@@ -361,7 +362,10 @@ public sealed class MemberSourceCommand : IAgentCommand
                 missingFocusLargeMemberGuardApplied,
                 focusText,
                 analysis.FilePath,
-                memberName),
+                memberName,
+                Math.Max(0, snippetEndLine - snippetStartLine + 1),
+                contextBefore,
+                contextAfter),
             ["edit_workflow"] = BuildEditWorkflow(analysis.FilePath, memberName, mode, targetStartLine, targetEndLine),
         };
 
@@ -374,11 +378,35 @@ public sealed class MemberSourceCommand : IAgentCommand
         bool missingFocusLargeMemberGuardApplied,
         string? focusText,
         string filePath,
-        string memberName)
+        string memberName,
+        int sourceLineCount,
+        int contextBefore,
+        int contextAfter)
     {
-        if (!focusRequested || focusMatched)
+        if (!focusRequested)
         {
             return null;
+        }
+
+        if (focusMatched)
+        {
+            if (sourceLineCount <= LargeMatchedFocusWindowLineThreshold)
+            {
+                return null;
+            }
+
+            return new
+            {
+                focus_matched = true,
+                large_window = true,
+                source_line_count = sourceLineCount,
+                message = "focus_text matched, but the returned source window is large. For acquisition and edit planning, prefer a tighter rerun unless this whole window is intentionally needed.",
+                next_steps = new[]
+                {
+                    $"roscli ctx.member_source {QuoteForSuggestion(filePath)} --member-name {QuoteForSuggestion(memberName)} --focus-text {QuoteForSuggestion(focusText ?? string.Empty)} --context-lines-before {Math.Min(contextBefore, 3)} --context-lines-after {Math.Min(contextAfter, 12)}",
+                    $"roscli ctx.member_source {QuoteForSuggestion(filePath)} --member-name {QuoteForSuggestion(memberName)} --focus-text {QuoteForSuggestion(focusText ?? string.Empty)} --context-lines-before 1 --context-lines-after 1 --include-source-text false",
+                },
+            };
         }
 
         string nextStep = $"roscli ctx.search_text {QuoteForSuggestion(focusText ?? string.Empty)} --file-path {QuoteForSuggestion(filePath)} --max-results 20 --context-lines 0";

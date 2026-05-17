@@ -1092,6 +1092,51 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_MemberSourceGuidesLargeMatchedFocusWindow()
+    {
+        string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-member-large-focus-{Guid.NewGuid():N}.cs");
+        try
+        {
+            StringBuilder builder = new();
+            builder.AppendLine("public class Demo");
+            builder.AppendLine("{");
+            builder.AppendLine("    public void TargetCase()");
+            builder.AppendLine("    {");
+            builder.AppendLine("        ImportantMarker();");
+            for (int i = 0; i < 70; i++)
+            {
+                builder.AppendLine($"        Step{i}();");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine("}");
+            await File.WriteAllTextAsync(filePath, builder.ToString());
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.member_source", filePath, "--member-name", "TargetCase", "--focus-text", "ImportantMarker", "--context-lines-before", "3", "--context-lines-after", "80" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("focus=matched:5", output);
+            Assert.Contains("\"large_window\": true", output);
+            Assert.Contains("prefer a tighter rerun", output);
+            Assert.Contains("--context-lines-before 3 --context-lines-after 12", output);
+            Assert.Contains("--include-source-text false", output);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_MemberSourceMissingMemberSuggestsOutlineRecovery()
     {
         string filePath = Path.Combine(Path.GetTempPath(), $"roslynskills-member-missing-{Guid.NewGuid():N}.cs");
