@@ -10,7 +10,7 @@ namespace RoslynSkills.Core.Commands;
 public sealed class ReplaceInMemberCommand : IAgentCommand
 {
     private const int LargeTextCharacterThreshold = 2_000;
-    private const int LargeTextLineThreshold = 20;
+    private const int LargeTextLineThreshold = 10;
 
     public CommandDescriptor Descriptor { get; } = new(
         Id: "edit.replace_in_member",

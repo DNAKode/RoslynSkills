@@ -1002,7 +1002,7 @@ public sealed class CommandTests
     [Fact]
     public async Task ReplaceInMemberCommand_GuidesLargePayloadsToSpanEdits()
     {
-        string oldText = string.Join("\n", Enumerable.Range(1, 22).Select(i => $"        Assert.True(flag{i});"));
+        string oldText = string.Join("\n", Enumerable.Range(1, 12).Select(i => $"        Assert.True(flag{i});"));
         string newText = oldText + "\n        Assert.Equal(42, answer);";
         string filePath = WriteTempFile(
             $$"""

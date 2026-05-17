@@ -1237,3 +1237,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by catching syntax/formatting hazards immediately after edit.
   - latency: lower by reducing repair loops after insertion-style replacements.
   - token_count: lower by avoiding an extra read/edit cycle for common test-method insertion mistakes.
+
+## 2026-05-17 - Large scoped replace threshold was too permissive
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.102+77d7c2a8986d8f1c774ae58c04e1aa7c0cfdd471`
+- Exact reason fallback was required/preferred:
+  - The fresh FrankenTui.NET cycle stayed roscli-only and passed focused/wider Kanban tests, but it sent a bulky `edit.replace_in_member` JSON payload with around a dozen changed lines and did not trip the existing large-payload guidance. This was a tiny threshold/test edit, so bounded source reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `Get-Content src\RoslynSkills.Core\Commands\ReplaceInMemberCommand.cs | Select-Object -First 20`
+  - `Get-Content tests\RoslynSkills.Core.Tests\CommandTests.cs | Select-Object -Skip 999 -First 45`
+- Proposed Roslyn command/option improvement:
+  - Lower `edit.replace_in_member` large text line threshold from 20 to 10 and update the regression to prove 12-line payloads now receive span-edit guidance.
+- Expected impact:
+  - correctness: higher by steering medium-large member edits to guarded spans earlier.
+  - latency: lower by reducing repeated large JSON exact-replace calls.
+  - token_count: lower by catching transcript-expensive edits before they become habitual.
