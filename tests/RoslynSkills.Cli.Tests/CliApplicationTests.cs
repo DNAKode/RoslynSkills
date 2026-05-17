@@ -2786,9 +2786,11 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
-        Assert.Contains("First run exactly this one command before any docs or C# exploration", output);
+        Assert.Contains("Turn 2A prompt after the heading report", output);
+        Assert.Contains("Run exactly this one command before any docs or C# exploration, then stop and report its Summary plus the three step summaries", output);
         Assert.Contains("roscli agent-begin --solution <solution.sln|.slnx>", output);
-        Assert.Contains("runs edit.claim list, ctx.changed_files, and workspace.preload in order", output);
+        Assert.Contains("Turn 2B prompt after the agent-begin report", output);
+        Assert.Contains("Continue one narrow, testable C# slice using the `next` instruction from agent-begin", output);
         Assert.Contains("roscli ctx.changed_files", output);
         Assert.Contains("roscli workspace.preload MySolution.slnx --alias default --require-solution true", output);
         Assert.Contains("ctx.member_source with small focus windows", output);

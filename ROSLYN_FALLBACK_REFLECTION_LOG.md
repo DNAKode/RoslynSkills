@@ -1104,3 +1104,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by reducing stale hot-workspace reads and lock/concurrency hazards.
   - latency: lower by avoiding accidental parallel calls and their corrective narration.
   - token_count: lower because agents should not need to self-correct after parallel semantic reads.
+
+## 2026-05-17 - Supervised startup split after agent-begin evidence scrolled out
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.94+8f522c743c47af30a55af1cca2454d938332b614`
+- Exact reason fallback was required/preferred:
+  - A fresh FrankenTui.NET round reported successful `agent-begin`, but the decisive startup output could scroll out before closeout, making ordering hard to audit. The change is startup guidance text in the RoslynSkills CLI itself, so direct source patching was used because self-hosted `ctx.member_source` remains unreliable on this large CLI file.
+- Roslyn command attempted:
+  - None for this narrow guidance edit after repeated self-hosted `ctx.member_source` hangs already logged.
+- Proposed Roslyn command/option improvement:
+  - Split supervised Turn 2 into Turn 2A (`agent-begin`, stop and report step summaries) and Turn 2B (continue the C# slice from the `next` instruction).
+  - Consider a persistent startup trace command later if transcript-only auditing remains weak.
+- Expected impact:
+  - correctness: higher because startup evidence is audited before implementation begins.
+  - latency: slightly higher by one short supervision turn, but lower than correcting skipped startup later.
+  - token_count: lower overall when it prevents long non-compliant trajectories.
