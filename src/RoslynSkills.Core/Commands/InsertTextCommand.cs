@@ -107,6 +107,8 @@ public sealed class InsertTextCommand : IAgentCommand
                 cancellationToken)
             .ConfigureAwait(false);
 
+        object claimStatus = EditClaimAwareness.BuildForFile(filePath, apply && changed);
+
         object data = new
         {
             file_path = filePath,
@@ -120,6 +122,7 @@ public sealed class InsertTextCommand : IAgentCommand
             anchor_text_character_count = anchorText.Length,
             insert_text_character_count = insertText.Length,
             character_delta = updatedContent.Length - originalContent.Length,
+            claim_status = claimStatus,
             hot_workspace_refresh = hotWorkspaceRefresh,
             diagnostics_after_insert = diagnosticsData,
         };

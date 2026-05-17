@@ -1137,3 +1137,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher because claim-before-edit compliance is auditable at the mutation result.
   - latency: neutral; it reuses existing claim_status payload.
   - token_count: lower by reducing follow-up claim-status verification prompts.
+
+## 2026-05-17 - Insert edits lacked mutation-time claim summary
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.96+c8b5ec1af1c1d82f3dcdec3db05a675114cdfa98`
+- Exact reason fallback was required/preferred:
+  - The next fresh FrankenTui.NET cycle validated `claimed=<id>` on `edit.replace_text`, but `edit.insert_text` wrote a claimed test file and its summary still lacked claim evidence. This was a narrow self-hosted command-surface edit after recent `ctx.member_source` hangs on large CLI/core command files, so bounded source reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `rg -n "claim_status|insert_text|wrote_file" src/RoslynSkills.Core/Commands/InsertTextCommand.cs src/RoslynSkills.Cli/CliApplication.cs tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+- Proposed Roslyn command/option improvement:
+  - Add `claim_status` to `edit.insert_text` and reuse the CLI claim suffix helper so all direct exact write primitives expose mutation-time claim state.
+  - Next consider common summary behavior for future edit commands to avoid command-by-command drift.
+- Expected impact:
+  - correctness: higher because insert-based edits become auditable like replace-based edits.
+  - latency: neutral.
+  - token_count: lower by avoiding separate claim list checks after insert writes.

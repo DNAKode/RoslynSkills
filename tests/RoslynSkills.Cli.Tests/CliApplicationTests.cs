@@ -2590,6 +2590,75 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_InsertText_SummaryReportsMatchingClaim()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-insert-claimed-{Guid.NewGuid():N}");
+        string srcDir = Path.Combine(tempDir, "src");
+        string filePath = Path.Combine(srcDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, ".git"));
+            Directory.CreateDirectory(srcDir);
+            await File.WriteAllTextAsync(filePath, "public class Demo\n{\n    public int A => 1;\n}\n");
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter claimOut = new();
+            StringWriter claimErr = new();
+
+            int claimExit = await app.RunAsync(
+                new[]
+                {
+                    "edit.claim",
+                    "claim",
+                    "src/Demo.cs",
+                    "--repo-root",
+                    tempDir,
+                    "--owner",
+                    "agent-a",
+                    "--reason",
+                    "insert claim summary test",
+                },
+                claimOut,
+                claimErr,
+                CancellationToken.None);
+
+            Assert.Equal(0, claimExit);
+            using JsonDocument claimJson = JsonDocument.Parse(claimOut.ToString());
+            string claimId = claimJson.RootElement.GetProperty("Data").GetProperty("claimed").GetProperty("claim_id").GetString()!;
+
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.insert_text",
+                    filePath,
+                    "--anchor-text", "    public int A => 1;",
+                    "--insert-text", "\n    public int B => 2;",
+                    "--position", "after",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"claim_status\"", output);
+            Assert.Contains("\"claimed\": true", output);
+            Assert.Contains($"claimed={claimId[..8]}", output);
+            Assert.DoesNotContain("unclaimed", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_InsertText_FailedMultilineAnchorReturnsRecoveryHint()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-insert-fail-{Guid.NewGuid():N}");

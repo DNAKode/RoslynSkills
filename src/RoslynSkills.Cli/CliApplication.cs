@@ -3295,9 +3295,10 @@ Workflow:
             int matchCount = TryGetInt(element, "match_count", out int matches) ? matches : -1;
             bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
             string action = wrote ? "written" : "dry-run";
+            string claimSuffix = BuildClaimStatusSuffix(element, wrote);
             return matchCount >= 0
-                ? $"{file}, {position}, matches={matchCount}, {action}"
-                : $"{file}, {position}, {action}";
+                ? $"{file}, {position}, matches={matchCount}, {action}{claimSuffix}"
+                : $"{file}, {position}, {action}{claimSuffix}";
         }
 
         if (string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
