@@ -2515,7 +2515,8 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
-        Assert.Contains("edit.claim list, ctx.changed_files, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows", output);
+        Assert.Contains("edit.claim list, ctx.changed_files, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with small focus windows", output);
+        Assert.Contains("start 3-12 lines, not 80+", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
         Assert.Contains("If subagents are used, assign disjoint claimed files", output);
         Assert.Contains("Run roscli and dotnet commands sequentially per repo", output);
