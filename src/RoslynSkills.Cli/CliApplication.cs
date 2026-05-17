@@ -2508,7 +2508,7 @@ Workflow:
             {
                 optionName = token[..equalsIndex];
                 string rawValue = token[(equalsIndex + 1)..];
-                optionValue = ParseOptionValue(rawValue);
+                optionValue = ParseOptionValue(optionName, rawValue);
             }
             else if (token.StartsWith("no-", StringComparison.OrdinalIgnoreCase))
             {
@@ -2518,7 +2518,7 @@ Workflow:
             else if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 optionName = token;
-                optionValue = ParseOptionValue(args[++i]);
+                optionValue = ParseOptionValue(optionName, args[++i]);
             }
             else
             {
@@ -2551,7 +2551,7 @@ Workflow:
         return true;
     }
 
-    private static object? ParseOptionValue(string rawValue)
+    private static object? ParseOptionValue(string optionName, string rawValue)
     {
         string value = rawValue.Trim();
         if (value.Length == 0)
@@ -2565,12 +2565,22 @@ Workflow:
         }
 
         string[] parts = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 1 && IsCompactCommaList(value, parts))
+        if (parts.Length > 1 && IsCommaListOption(optionName) && IsCompactCommaList(value, parts))
         {
             return parts.Select(ParseScalarOptionValue).ToArray();
         }
 
         return ParseScalarOptionValue(value);
+    }
+
+    private static bool IsCommaListOption(string optionName)
+    {
+        string normalized = NormalizeOptionName(optionName);
+        return string.Equals(normalized, "include_globs", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "exclude_globs", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "file_glob", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "glob", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "severity_filter", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsCompactCommaList(string value, string[] parts)
