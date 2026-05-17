@@ -3102,6 +3102,7 @@ public sealed class CliApplicationTests
         Assert.Contains("Turn 2B prompt after the agent-begin report", output);
         Assert.Contains("Continue one narrow, testable C# slice using the `next` instruction from agent-begin", output);
         Assert.Contains("First-slice budget: one behavior, one primary claimed file when feasible, one focused test before wider validation", output);
+        Assert.Contains("if focused tests already pass on existing dirty work and no new mutation is needed, report validation-only", output);
         Assert.Contains("if work expands past two C# files or more than one behavior, stop at the smallest validated increment", output);
         Assert.Contains("roscli ctx.changed_files", output);
         Assert.Contains("roscli workspace.preload MySolution.slnx --alias default --require-solution true", output);

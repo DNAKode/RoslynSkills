@@ -1300,3 +1300,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher for terminal UI edits by making label length evidence explicit.
   - latency: lower by replacing trial shell snippets with a stable helper.
   - token_count: lower by avoiding multiple ad hoc command variants during width repair.
+
+## 2026-05-17 - Validation-only slice counted as implementation
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.107+a162ed3b64506782eaa70966574b661bb7f8f69a`
+- Exact reason fallback was required/preferred:
+  - Fresh-start FrankenTui.NET cycle 4 acquired roscli correctly and used no C# fallback, but it validated an already-present dirty slice without implementing a new increment. The roscli guidance update touched `CliApplication.cs`, so bounded shell reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `rg -n "Continue one narrow|First-slice budget|next = ok|WriteAgentBeginResultAsync" src/RoslynSkills.Cli/CliApplication.cs tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs docs/PIT_OF_SUCCESS.md`
+  - Bounded `Get-Content` reads of `src/RoslynSkills.Cli/CliApplication.cs`, `docs/PIT_OF_SUCCESS.md`, and `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`.
+- Proposed Roslyn command/option improvement:
+  - Tighten fresh-slice guidance so passing tests on existing dirty work must be reported as validation-only unless the user explicitly asked only to validate; otherwise choose a different smallest unimplemented increment.
+- Expected impact:
+  - correctness: higher by preventing no-op validation from being counted as implementation progress.
+  - latency: lower by steering fresh agents away from already-complete dirty slices.
+  - token_count: lower by reducing exploratory loops that end without a mutation.

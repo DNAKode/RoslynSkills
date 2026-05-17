@@ -56,7 +56,7 @@ Default policy:
 
 ### 1) Fresh C# slice
 
-First-slice budget for fresh agents: target one behavior, one primary claimed file when feasible, and one focused test before wider validation. If the work expands past two C# files or more than one behavior, stop at the smallest validated increment and report the remaining work instead of turning the first slice into a broad feature.
+First-slice budget for fresh agents: target one behavior, one primary claimed file when feasible, and one focused test before wider validation. If focused tests already pass on existing dirty work and no new mutation is needed, report validation-only and choose a different smallest unimplemented increment unless the user asked only to validate. If the work expands past two C# files or more than one behavior, stop at the smallest validated increment and report the remaining work instead of turning the first slice into a broad feature.
 
 ```text
 roscli csharp-start --supervised
