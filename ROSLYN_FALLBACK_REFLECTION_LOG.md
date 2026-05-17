@@ -1172,3 +1172,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher because callers/routing are resolved semantically.
   - latency: lower by avoiding multiple focus-miss retries.
   - token_count: lower by replacing large outline/member payloads with targeted nav results.
+
+## 2026-05-17 - Large block edits replayed through multiline old_text/new_text
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.98+efa2f7132aca58ffa934803b5065ba2202c047a7`
+- Exact reason fallback was required/preferred:
+  - The fresh FrankenTui.NET cycle used roscli correctly and claimed files before mutation, but the large registry rewrite was sent as huge multiline `old_text`/`new_text` JSON to `edit.replace_in_member`, inflating transcript size and increasing stale-context risk. This is a startup guidance change, so bounded source reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `rg -n "replace_span|include-edit-target|include_edit_target|large|old_text/new_text|edit.batch_exact" src/RoslynSkills.Cli/CliApplication.cs tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+- Proposed Roslyn command/option improvement:
+  - Clarify that `edit.replace_in_member` multiline JSON is for small snippets; large block/member/body rewrites should use `ctx.member_source --include-edit-target-text true` plus `edit.batch_exact` `replace_span` with `expected_text`.
+  - Longer term, consider warning when `edit.replace_in_member` receives very large `old_text`/`new_text`.
+- Expected impact:
+  - correctness: higher by using span+expected_text for large rewrites.
+  - latency: lower by reducing giant argument serialization and retry risk.
+  - token_count: lower by avoiding large duplicated code blocks in transcripts.
