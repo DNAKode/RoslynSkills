@@ -2004,6 +2004,58 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_ReplaceText_GuidesAttributeMemberJoin()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-join-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "DemoTests.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public sealed class DemoTests
+                {
+                    [Fact]    public void Existing()
+                    {
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.replace_text",
+                    filePath,
+                    "--old-text", "[Fact]    public",
+                    "--new-text", "[Fact]    public",
+                    "--apply", "false",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"result_guidance\": {", output);
+            Assert.Contains("possible C# attribute/member newline join", output);
+            Assert.Contains("ctx.search_text", output);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_ReplaceInMember_ReportsMatchLineInPreview()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-member-{Guid.NewGuid():N}");

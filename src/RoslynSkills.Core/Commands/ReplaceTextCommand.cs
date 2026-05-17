@@ -98,6 +98,7 @@ public sealed class ReplaceTextCommand : IAgentCommand
                 cancellationToken)
             .ConfigureAwait(false);
         object claimStatus = EditClaimAwareness.BuildForFile(filePath, apply && changed);
+        object? resultGuidance = BuildResultGuidance(filePath, updatedContent);
 
         object data = new
         {
@@ -115,6 +116,7 @@ public sealed class ReplaceTextCommand : IAgentCommand
             claim_status = claimStatus,
             hot_workspace_refresh = hotWorkspaceRefresh,
             diagnostics_after_replace = diagnosticsData,
+            result_guidance = resultGuidance,
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
@@ -140,4 +142,51 @@ public sealed class ReplaceTextCommand : IAgentCommand
             ? text
             : string.Concat(text.AsSpan(0, index), newText, text.AsSpan(index + oldText.Length));
     }
+
+    private static object? BuildResultGuidance(string filePath, string updatedContent)
+    {
+        if (!IsCSharpFile(filePath))
+        {
+            return null;
+        }
+
+        string[] lines = updatedContent.Split('\n');
+        for (int index = 0; index < lines.Length; index++)
+        {
+            string line = lines[index].TrimEnd('\r');
+            int closeBracket = line.IndexOf(']', StringComparison.Ordinal);
+            if (closeBracket < 0 || closeBracket == line.Length - 1)
+            {
+                continue;
+            }
+
+            string afterAttribute = line[(closeBracket + 1)..].TrimStart();
+            if (afterAttribute.StartsWith("public ", StringComparison.Ordinal) ||
+                afterAttribute.StartsWith("private ", StringComparison.Ordinal) ||
+                afterAttribute.StartsWith("protected ", StringComparison.Ordinal) ||
+                afterAttribute.StartsWith("internal ", StringComparison.Ordinal))
+            {
+                return new
+                {
+                    severity = "warning",
+                    reason = "possible C# attribute/member newline join",
+                    recommended_next_step = "Inspect this line with ctx.member_source or ctx.search_text and split the attribute and member declaration onto separate lines before relying on tests alone.",
+                    line = index + 1,
+                    suggested_commands = new[]
+                    {
+                        $"roscli ctx.search_text --file-path {FormatCommandArgument(filePath)} --pattern {FormatCommandArgument(line.Trim())} --max-results 5 --context-lines 1",
+                    },
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsCSharpFile(string filePath)
+        => filePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+           filePath.EndsWith(".csx", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatCommandArgument(string value)
+        => value.Contains(' ', StringComparison.Ordinal) ? $"\"{value}\"" : value;
 }

@@ -1221,3 +1221,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher because agents recover using exact file-local symbols before retrying.
   - latency: lower by reducing exploratory search after member-name typos or drift.
   - token_count: lower by avoiding broad recovery scans in large test files.
+
+## 2026-05-17 - Exact replace allowed attribute/member newline join
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.101+7992cc3437e0b3411afe2200c1b22749fd61a658`
+- Exact reason fallback was required/preferred:
+  - The fresh FrankenTui.NET cycle stayed roscli-only and completed quickly, but an `edit.replace_text` insertion produced `[Fact]    public void...` on one line and required a second formatting repair edit. This was a narrow command/test edit; bounded source reads plus `apply_patch` were used because self-hosted member-source reliability on command files remains suspect.
+- Roslyn command attempted:
+  - `roscli ctx.search_text --solution C:\Work\RoslynSkills\RoslynSkills.slnx --pattern "class ReplaceTextCommand" --file-glob "*.cs" --max-results 20 --context-lines 0`
+  - `roscli ctx.search_text --solution C:\Work\RoslynSkills\RoslynSkills.slnx --pattern "replace_text" --file-glob "CliApplicationTests.cs" --max-results 30 --context-lines 1`
+- Proposed Roslyn command/option improvement:
+  - Add `edit.replace_text.result_guidance` when updated C# content contains an attribute and member declaration joined on the same line, with a copy-ready `ctx.search_text` inspection command.
+- Expected impact:
+  - correctness: higher by catching syntax/formatting hazards immediately after edit.
+  - latency: lower by reducing repair loops after insertion-style replacements.
+  - token_count: lower by avoiding an extra read/edit cycle for common test-method insertion mistakes.
