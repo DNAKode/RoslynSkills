@@ -1088,3 +1088,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher because the evidence sequence is executed by one command before work starts.
   - latency: lower because supervisors no longer need to correct skipped individual startup commands.
   - token_count: lower by replacing three command prompts and corrective discussion with one envelope.
+
+## 2026-05-17 - Agent-begin protocol hint edit after parallel semantic reads
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.93+f24600c7ac128d55e6d100b6cc9389c3aa8df73a`
+- Exact reason fallback was required/preferred:
+  - A fresh FrankenTui.NET round successfully acquired and used `agent-begin`, but then launched three `ctx.file_outline` semantic reads in parallel before self-correcting. The fix is a self-hosted CLI guidance/envelope update; current RoslynSkills source editing still relied on direct patching because `ctx.member_source` on this large CLI file has repeatedly hung in this session.
+- Roslyn command attempted:
+  - No new self-hosted command attempt for this narrow edit after the repeated `ctx.member_source` hangs already logged.
+- Proposed Roslyn command/option improvement:
+  - Surface sequential-only semantic-read protocol directly in the `agent-begin` result envelope, where agents look immediately after startup.
+  - Consider a future safe batched semantic read command if multiple independent outlines are a common need.
+- Expected impact:
+  - correctness: higher by reducing stale hot-workspace reads and lock/concurrency hazards.
+  - latency: lower by avoiding accidental parallel calls and their corrective narration.
+  - token_count: lower because agents should not need to self-correct after parallel semantic reads.

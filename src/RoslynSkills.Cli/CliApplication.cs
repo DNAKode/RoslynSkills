@@ -4459,8 +4459,14 @@ Workflow:
                 require_solution = requireSolution,
                 steps,
                 next = ok
-                    ? "Continue one narrow, testable C# slice. Use roscli for .cs context, claim before mutation, validate with focused tests, and release claims."
+                    ? "Continue one narrow, testable C# slice. Run roscli semantic reads sequentially; do not launch parallel ctx.*, nav.*, edit.*, build, or test commands against the same workspace. Use roscli for .cs context, claim before mutation, validate with focused tests, and release claims."
                     : "Stop and fix the failed startup step before docs or C# exploration.",
+                protocol = new
+                {
+                    semantic_reads = "sequential_only",
+                    parallel_roscli = "disallowed_for_same_workspace",
+                    claims = "claim_before_mutation_release_at_closeout",
+                },
             },
             Errors: ok ? Array.Empty<CommandError>() : new[] { new CommandError("agent_begin_failed", "One or more startup evidence steps failed.") },
             TraceId: null)).ConfigureAwait(false);
@@ -4554,6 +4560,7 @@ Workflow:
         sb.AppendLine();
         sb.AppendLine("## Final Compliance Checklist");
         sb.AppendLine($"- Before docs or C# exploration, transcript must show: `roscli agent-begin --solution {preloadTarget}` with successful edit.claim list, ctx.changed_files, and workspace.preload step summaries.");
+        sb.AppendLine("- After `agent-begin`, run roscli semantic reads sequentially; parallel `ctx.*`, `nav.*`, edit, build, or test commands against the same workspace are a protocol violation.");
         sb.AppendLine("- For `.cs` work, use roscli for context, edits, and closeout anchors; report any fallback explicitly.");
         sb.AppendLine("- Before `edit.insert_text`, run `describe-command edit.insert_text`; use a short unique one-line anchor, not copied multiline source.");
         sb.AppendLine("- For non-C# upstream/reference lookup, use `rg -l -m 20 <literal> <reference-root>` first, then `rg -n -C 2 -m 20 <literal> <file>` on one file.");

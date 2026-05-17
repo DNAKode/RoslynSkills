@@ -2762,6 +2762,7 @@ public sealed class CliApplicationTests
         Assert.Contains("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads", output);
         Assert.Contains("Final Compliance Checklist", output);
         Assert.Contains("Before docs or C# exploration, transcript must show", output);
+        Assert.Contains("parallel `ctx.*`, `nav.*`, edit, build, or test commands against the same workspace are a protocol violation", output);
         Assert.Contains("Before `edit.insert_text`, run `describe-command edit.insert_text`", output);
         Assert.Contains("not copied multiline source", output);
     }
@@ -2810,6 +2811,8 @@ public sealed class CliApplicationTests
         Assert.Contains("Final Compliance Checklist", output);
         Assert.Contains("Before docs or C# exploration, transcript must show", output);
         Assert.Contains("successful edit.claim list, ctx.changed_files, and workspace.preload step summaries", output);
+        Assert.Contains("run roscli semantic reads sequentially", output);
+        Assert.Contains("parallel `ctx.*`, `nav.*`, edit, build, or test commands against the same workspace are a protocol violation", output);
         Assert.Contains("Before `edit.insert_text`, run `describe-command edit.insert_text`", output);
         Assert.Contains("use a short unique one-line anchor", output);
     }
