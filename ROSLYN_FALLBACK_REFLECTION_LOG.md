@@ -1332,3 +1332,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by making startup evidence uncontaminated.
   - latency: lower by preventing early off-protocol exploration that may need interruption.
   - token_count: lower by separating bootstrap from repo orientation.
+
+## 2026-05-17 - Claim closeout guidance location fallback
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.109+da83f53c6294d63c2fc345dca0f6c37a950bad7d`
+- Exact reason fallback was required/preferred:
+  - Cycle 6 completed a real FrankenTui.NET Kanban slice but left active edit claims until a second closeout prompt. While tightening RoslynSkills startup guidance, the first `ctx.member_source` attempt failed with `daemon_unavailable` before `workspace.use`; a bounded `rg` search was used to locate claim-closeout wording across CLI/tests/docs before retrying Roslyn context reads.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildCSharpStartGuide --focus-text "release claims" ...`
+  - Result: `daemon_unavailable`; then `roscli workspace.use RoslynSkills.slnx` and the same `ctx.member_source` succeeded.
+- Proposed Roslyn command/option improvement:
+  - Allow `ctx.member_source` to auto-suggest or invoke `workspace.use` when exactly one solution file is present, or make the daemon-unavailable error include the detected solution path.
+- Expected impact:
+  - correctness: neutral; fallback was read-only location discovery.
+  - latency: lower by avoiding a failed first Roslyn context read.
+  - token_count: lower by reducing shell search plus retry chatter.

@@ -4657,7 +4657,7 @@ Workflow:
         sb.AppendLine("- Do not force through another active claim unless a human/operator decided ownership changed.");
         sb.AppendLine("- Prefer disjoint file ownership for parallel agents; for shared files, serialize edits through one owner.");
         sb.AppendLine("- Use guarded edits (`edit.replace_in_member`, `edit.batch_exact expected_text`, or `session.commit --require-disk-unchanged true`) so stale context fails closed.");
-        sb.AppendLine("- Release claims after focused tests or when abandoning the slice.");
+        sb.AppendLine("- Release claims after focused tests or when abandoning the slice; a final response with active claims is non-compliant. Run `edit.claim list` after release and report active claim count 0.");
         sb.AppendLine();
         sb.AppendLine("## Fallback Rule");
         sb.AppendLine("Do not start `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads. Try `ctx.file_outline`, `ctx.member_source`, `ctx.search_text`, or `nav.*` first. If roscli cannot answer, state the attempted command and the missing capability before fallback.");

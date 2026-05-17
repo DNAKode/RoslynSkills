@@ -163,7 +163,7 @@ Workflow:
 7) for small member-local edits, prefer "roscli edit.replace_in_member"; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
 8) if an edit command reports claim_status.claimed=false or summary "unclaimed", claim before further C# mutation.
 9) if multiple edits touch the same member, re-read ctx.member_source once and combine them into one guarded edit; do not issue parallel same-member edit commands.
-10) run diagnostics/build/tests and release claims before finalizing.
+10) run diagnostics/build/tests and release claims before finalizing; final responses with active claims are non-compliant, so run `edit.claim list` after release and report active claim count 0.
 ```
 
 ## Anti-Patterns

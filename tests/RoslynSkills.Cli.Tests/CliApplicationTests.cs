@@ -3111,6 +3111,8 @@ public sealed class CliApplicationTests
         Assert.Contains("ctx.member_source with small focus windows", output);
         Assert.Contains("start 3-12 lines, not 80+", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
+        Assert.Contains("a final response with active claims is non-compliant", output);
+        Assert.Contains("report active claim count 0", output);
         Assert.Contains("For small multiline `edit.replace_in_member` old_text/new_text", output);
         Assert.Contains("for large block/member/body rewrites", output);
         Assert.Contains("edit.batch_exact` replace_span with expected_text", output);
