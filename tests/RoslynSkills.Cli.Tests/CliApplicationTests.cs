@@ -2517,6 +2517,7 @@ public sealed class CliApplicationTests
         Assert.Contains("edit.claim claim for every file before mutation", output);
         Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
+        Assert.Contains("Report startup evidence explicitly", output);
         Assert.Contains("do not fall back to `rg` just to find the line you changed", output);
     }
 
