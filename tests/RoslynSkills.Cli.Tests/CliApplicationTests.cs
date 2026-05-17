@@ -2752,6 +2752,8 @@ public sealed class CliApplicationTests
         Assert.Contains("describe-command edit.insert_text", output);
         Assert.Contains("avoid copied multiline block anchors", output);
         Assert.Contains("short unique anchor line", output);
+        Assert.Contains("Direct old-text/new-text options are for one-line snippets only", output);
+        Assert.Contains("roscli run edit.replace_in_member --input-stdin", output);
         Assert.Contains("Multi-Agent Coordination", output);
         Assert.Contains("distinct stable `--owner` values", output);
         Assert.Contains("each subagent claims before its first edit", output);
@@ -2779,9 +2781,15 @@ public sealed class CliApplicationTests
         Assert.Contains("Run exactly this command now", output);
         Assert.Contains("Ran roscli csharp-start", output);
         Assert.Contains("do not treat prose promises as compliance", output);
-        Assert.Contains("edit.claim list, ctx.changed_files, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with small focus windows", output);
+        Assert.Contains("First run exactly these three commands sequentially before any docs or C# exploration", output);
+        Assert.Contains("roscli edit.claim list", output);
+        Assert.Contains("roscli ctx.changed_files", output);
+        Assert.Contains("roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true", output);
+        Assert.Contains("ctx.member_source with small focus windows", output);
         Assert.Contains("start 3-12 lines, not 80+", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
+        Assert.Contains("For multiline `edit.replace_in_member` old_text/new_text", output);
+        Assert.Contains("--input-stdin", output);
         Assert.Contains("If subagents are used, assign disjoint claimed files", output);
         Assert.Contains("Run roscli and dotnet commands sequentially per repo", output);
         Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);

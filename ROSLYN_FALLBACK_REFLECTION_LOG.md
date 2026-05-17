@@ -1023,3 +1023,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher; agents see insertion guardrails before choosing the command.
   - latency: lower by reducing failed multiline-anchor insert attempts.
   - token_count: lower because fewer retries are needed after exact-anchor failures.
+
+## 2026-05-17 - Startup evidence and multiline replacement guidance after roscli search failure
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.89+a2a46e4971f96d3b58dfae42b3ce4f748432a48c`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET round showed the agent began docs/C# exploration before the required `edit.claim list`, `ctx.changed_files`, and `workspace.preload` evidence commands, then later hit a direct `edit.replace_in_member` quoting failure for multiline replacement text. A roscli `ctx.search_text` lookup for the startup guidance failed without useful output, so bounded source reads were used for the self-hosted guidance/test edit.
+- Roslyn command attempted:
+  - `roscli ctx.search_text --pattern "Use `edit.replace_in_member`" --root C:\Work\RoslynSkills --file-glob "*.cs" --max-results 20 --context-lines 2`
+- Proposed Roslyn command/option improvement:
+  - Return explicit failure data for CLI search/parser failures involving backtick-heavy patterns.
+  - Make `agent-start` Turn 2 start with a literal startup command block and surface multiline replacement JSON guidance by default.
+- Expected impact:
+  - correctness: higher; startup evidence is collected before C# exploration.
+  - latency: lower by avoiding corrective supervision and failed direct multiline edit attempts.
+  - token_count: lower through fewer retry/correction turns.
