@@ -2543,12 +2543,30 @@ Workflow:
         }
 
         string[] parts = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 1)
+        if (parts.Length > 1 && IsCompactCommaList(value, parts))
         {
             return parts.Select(ParseScalarOptionValue).ToArray();
         }
 
         return ParseScalarOptionValue(value);
+    }
+
+    private static bool IsCompactCommaList(string value, string[] parts)
+    {
+        if (parts.Length <= 1)
+        {
+            return false;
+        }
+
+        if (value.Contains(", ", StringComparison.Ordinal) ||
+            value.Contains(",\t", StringComparison.Ordinal) ||
+            value.Contains(",\r", StringComparison.Ordinal) ||
+            value.Contains(",\n", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return parts.All(part => part.Length > 0 && !part.Any(char.IsWhiteSpace));
     }
 
     private static object? ParseScalarOptionValue(string value)
@@ -3535,7 +3553,7 @@ Workflow:
                     "Prefer member_name after ctx.file_outline/ctx.member_source identifies a unique member; use line+column only when names are ambiguous.",
                     "Defaults: mode=member, apply=true, replace_all=false, include_diagnostics=true, preview_chars=96.",
                     "Matching is confined to the selected member/body and tolerates LF snippets against CRLF files.",
-                    "Direct shorthand is intended for short one-line old_text/new_text. For multi-line snippets or here-strings, write JSON and call `roscli run edit.replace_in_member --input @payload.json` or use `--input-stdin`; do not pass PowerShell here-strings as direct CLI option values.",
+                    "Direct shorthand is intended for short one-line old_text/new_text and preserves comma-bearing C# snippets such as method calls. For multi-line snippets or here-strings, write JSON and call `roscli run edit.replace_in_member --input @payload.json` or use `--input-stdin`; do not pass PowerShell here-strings as direct CLI option values.",
                     "Successful responses include matches[] with line/column/offset/length/first_changed_offset/first_changed_line_delta/first_changed_column_delta/old_change_line/old_change_column/new_change_line/new_change_column/old_change_preview/new_change_preview/text_preview/new_text_preview; increase preview_chars when auditing long assertion insertions. If truncation is still required, previews bias toward the first changed character.",
                     "If old_text is missing or ambiguous inside the member, re-read with ctx.member_source --member-name <name> --focus-text <nearby text> before retrying.",
                     "If several edits target the same member, combine them into one edit.replace_in_member old/new block or one edit.batch_exact replace_span operation after a fresh ctx.member_source read; do not run parallel edit commands against stale member context.",
@@ -4102,7 +4120,7 @@ Workflow:
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 body --brief true");
         sb.AppendLine("roscli ctx.member_source src/MyProject/Program.cs 42 17 member --include-edit-target-text true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli ctx.member_source tests/MyTests.cs 1200 17 member --focus-text TargetCase --context-lines-before 3 --context-lines-after 8 --max-chars 12000");
-        sb.AppendLine("roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text \"Assert.Equal(1, value);\" --new-text \"Assert.Equal(2, value);\" --preview-chars 256");
+        sb.AppendLine("roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text \"Assert.Equal(1, value);\" --new-text \"Assert.Equal(2, value);\" --preview-chars 256  # one-line snippets only; use --input-stdin JSON for multiline");
         sb.AppendLine("roscli run edit.batch_exact --input-stdin  # use kind=replace_span from edit_target.exact_span_text.text");
         sb.AppendLine("roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true");
         sb.AppendLine("roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true");

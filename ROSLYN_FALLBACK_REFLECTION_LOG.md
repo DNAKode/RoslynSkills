@@ -927,3 +927,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: medium; fewer shell-quoting failures in multi-line C# edits.
   - latency: lower; fewer invalid direct edit retries.
   - token_count: lower by replacing failed here-string trajectories with one structured payload.
+
+## 2026-05-17 - Direct shorthand comma parser fix after member-source hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.78+22c3418e717eac9022d281ba325133e004641872`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET run showed direct `edit.replace_in_member` treating one-line C# snippets containing comma-separated method arguments as invalid input. `ctx.member_source` on `src/RoslynSkills.Cli/CliApplication.cs` hung while inspecting the CLI shorthand parser, so bounded source reads were used for the self-hosted fix.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs 2234 18 member --context-lines-before 10 --context-lines-after 80 --include-edit-target-text true`
+- Proposed Roslyn command/option improvement:
+  - Fix the `ctx.member_source` hang on large CLI source files and add timeout/partial-result telemetry.
+  - Keep direct shorthand comma splitting conservative so source snippets remain strings unless the value is clearly a compact list.
+- Expected impact:
+  - correctness: high for direct edit commands using C# invocations or constructor calls.
+  - latency: lower because agents can use one direct edit command instead of retrying with JSON after invalid input.
+  - token_count: lower by avoiding failed direct-edit trajectories.

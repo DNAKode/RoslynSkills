@@ -1880,6 +1880,60 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_ReplaceInMember_KeepsCommaBearingTextAsString()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-member-commas-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(tempDir, "Demo.cs");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            await File.WriteAllTextAsync(
+                filePath,
+                """
+                public class Demo
+                {
+                    public void Target()
+                    {
+                        var controls = ShowcaseFrameHitRegistry.HitTest(state, 75, 20);
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[]
+                {
+                    "edit.replace_in_member",
+                    filePath,
+                    "--member-name", "Target",
+                    "--old-text", "var controls = ShowcaseFrameHitRegistry.HitTest(state, 75, 20);",
+                    "--new-text", "var controls = ShowcaseFrameHitRegistry.HitTest(state, 75, 22);",
+                    "--include-diagnostics", "false",
+                },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"CommandId\": \"edit.replace_in_member\"", output);
+            Assert.Contains("line=", output);
+            Assert.Contains("HitTest(state, 75, 22);", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_ReplaceText_RefreshesHotWorkspaceAfterWrite()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-replace-refresh-{Guid.NewGuid():N}");
@@ -2301,6 +2355,7 @@ public sealed class CliApplicationTests
         Assert.Contains("edit.replace_in_member <file-path>", output);
         Assert.Contains("same member", output);
         Assert.Contains("Direct shorthand is intended for short one-line old_text/new_text", output);
+        Assert.Contains("preserves comma-bearing C# snippets", output);
         Assert.Contains("--input @payload.json", output);
         Assert.Contains("--input-stdin", output);
         Assert.Contains("do not run parallel edit commands", output);
