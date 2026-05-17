@@ -1000,6 +1000,50 @@ public sealed class CommandTests
     }
 
     [Fact]
+    public async Task ReplaceInMemberCommand_GuidesLargePayloadsToSpanEdits()
+    {
+        string oldText = string.Join("\n", Enumerable.Range(1, 22).Select(i => $"        Assert.True(flag{i});"));
+        string newText = oldText + "\n        Assert.Equal(42, answer);";
+        string filePath = WriteTempFile(
+            $$"""
+            public class Demo
+            {
+                public void Target()
+                {
+            {{oldText}}
+                }
+            }
+            """);
+
+        try
+        {
+            ReplaceInMemberCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                member_name = "Target",
+                old_text = oldText,
+                new_text = newText,
+                apply = false,
+                include_diagnostics = false,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"result_guidance\":", json);
+            Assert.Contains("large replace_in_member payload", json);
+            Assert.Contains("edit.batch_exact replace_span", json);
+            Assert.Contains("include-edit-target-text true", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task ReplaceInMemberCommand_ReportsAmbiguousMemberName()
     {
         string filePath = WriteTempFile(

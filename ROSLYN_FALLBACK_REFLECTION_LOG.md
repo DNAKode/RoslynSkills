@@ -1188,3 +1188,20 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by using span+expected_text for large rewrites.
   - latency: lower by reducing giant argument serialization and retry risk.
   - token_count: lower by avoiding large duplicated code blocks in transcripts.
+
+## 2026-05-17 - Large replace_in_member guidance needed at mutation time
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.99+0af707ec501f2b5b52c2e723f8ab4f475870de9b`
+- Exact reason fallback was required/preferred:
+  - The `.99` fresh FrankenTui.NET cycle was clean and roscli-only, but the prior large-payload pattern showed startup guidance alone can be missed when the agent is already constructing an edit. A self-hosted `ctx.member_source` call hung on `CliApplication.cs`, and a second call hung on `ReplaceInMemberCommand.cs`; both were stopped to avoid host process pressure. Bounded source reads plus `apply_patch` were used for the narrow command/test edit.
+- Roslyn command attempted:
+  - `roscli ctx.member_source C:\Work\RoslynSkills\src\RoslynSkills.Cli\CliApplication.cs --member-name HandleDirectCommandAsync --focus-text "edit.replace_in_member" --context-lines-before 20 --context-lines-after 70 --include-source-text true`
+  - `roscli ctx.member_source src\RoslynSkills.Core\Commands\ReplaceInMemberCommand.cs --member-name ExecuteAsync --focus-text "diagnostics_after_replace" --context-lines-before 35 --context-lines-after 25 --include-source-text true`
+- Proposed Roslyn command/option improvement:
+  - Add `edit.replace_in_member.result_guidance` when `old_text` or `new_text` exceeds a line/character threshold, suggesting `ctx.member_source --include-edit-target-text true` and `edit.batch_exact replace_span`.
+  - Continue investigating `ctx.member_source` hangs on self-hosted command files as a reliability defect.
+- Expected impact:
+  - correctness: higher by steering large rewrites to span+expected_text anchoring.
+  - latency: lower by reducing large JSON construction and stale-context retries.
+  - token_count: lower by avoiding duplicated multiline old/new payloads in transcripts.

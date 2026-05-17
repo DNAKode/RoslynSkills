@@ -9,6 +9,9 @@ namespace RoslynSkills.Core.Commands;
 
 public sealed class ReplaceInMemberCommand : IAgentCommand
 {
+    private const int LargeTextCharacterThreshold = 2_000;
+    private const int LargeTextLineThreshold = 20;
+
     public CommandDescriptor Descriptor { get; } = new(
         Id: "edit.replace_in_member",
         Summary: "Replace exact text scoped to one member anchored by member name or line/column.",
@@ -146,6 +149,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
                 cancellationToken)
             .ConfigureAwait(false);
         object claimStatus = EditClaimAwareness.BuildForFile(filePath, apply && changed);
+        object? resultGuidance = BuildResultGuidance(filePath, memberName, mode, oldText, newText);
 
         LinePositionSpan targetLineSpan = analysis.SourceText.Lines.GetLinePositionSpan(targetSpan);
         object data = new
@@ -178,6 +182,7 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
             claim_status = claimStatus,
             hot_workspace_refresh = hotWorkspaceRefresh,
             diagnostics_after_replace = diagnosticsData,
+            result_guidance = resultGuidance,
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
@@ -371,6 +376,57 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
                 multi_agent_rule = "Keep or reacquire an edit.claim for the file/member before retrying the write.",
             },
         };
+    }
+
+    private static object? BuildResultGuidance(string filePath, string memberName, string mode, string oldText, string newText)
+    {
+        int oldTextLineCount = CountLines(oldText);
+        int newTextLineCount = CountLines(newText);
+        bool largeOldText = oldText.Length > LargeTextCharacterThreshold || oldTextLineCount > LargeTextLineThreshold;
+        bool largeNewText = newText.Length > LargeTextCharacterThreshold || newTextLineCount > LargeTextLineThreshold;
+        if (!largeOldText && !largeNewText)
+        {
+            return null;
+        }
+
+        string displayFilePath = FormatCommandPath(filePath);
+        return new
+        {
+            severity = "info",
+            reason = "large replace_in_member payload",
+            recommended_next_step = "For future large block/member/body rewrites, prefer ctx.member_source --include-edit-target-text true followed by edit.batch_exact replace_span with expected_text. Keep edit.replace_in_member for small exact snippets.",
+            observed_payload = new
+            {
+                old_text_character_count = oldText.Length,
+                old_text_line_count = oldTextLineCount,
+                new_text_character_count = newText.Length,
+                new_text_line_count = newTextLineCount,
+            },
+            suggested_commands = new[]
+            {
+                $"roscli ctx.member_source {displayFilePath} --member-name {FormatCommandArgument(memberName)} --mode {mode} --include-edit-target-text true --include-source-text false",
+                "roscli describe-command edit.batch_exact",
+            },
+        };
+    }
+
+    private static int CountLines(string text)
+    {
+        if (text.Length == 0)
+        {
+            return 0;
+        }
+
+        int count = 1;
+        foreach (char ch in text)
+        {
+            if (ch == '\n')
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private static (int MatchCount, string EffectiveOldText, string MatchMode) ResolveOldText(string targetText, string oldText)
@@ -581,6 +637,12 @@ public sealed class ReplaceInMemberCommand : IAgentCommand
     private static bool IsValidMode(string? mode)
         => string.Equals(mode, "member", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(mode, "body", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatCommandPath(string filePath)
+        => FormatCommandArgument(filePath);
+
+    private static string FormatCommandArgument(string value)
+        => value.Contains(' ', StringComparison.Ordinal) ? $"\"{value}\"" : value;
 
     private sealed record ChangeLocation(int first_changed_offset, int first_changed_line_delta, int first_changed_column_delta);
 
