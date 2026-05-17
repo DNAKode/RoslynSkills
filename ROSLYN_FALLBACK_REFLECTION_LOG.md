@@ -1153,3 +1153,22 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher because insert-based edits become auditable like replace-based edits.
   - latency: neutral.
   - token_count: lower by avoiding separate claim list checks after insert writes.
+
+## 2026-05-17 - Startup guidance missed semantic caller navigation
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.97+a2562699e1f9033132331b1421d7a20fae4bf146`
+- Exact reason fallback was required/preferred:
+  - The fresh FrankenTui.NET cycle stayed on roscli for C# work, but it tried to infer routing paths through repeated `ctx.search_text`, broad-ish `ctx.file_outline`, and missed-focus `ctx.member_source` calls. Existing `nav.find_invocations` and `nav.call_hierarchy` would have been a better acquisition path, but startup guidance did not point to them after a method-reference hit. This was a CLI guidance/test edit, so bounded source reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `roscli list-commands --compact | Select-String -Pattern 'nav|reference|call|ctx.search|member'`
+  - `roscli describe-command nav.find_invocations`
+  - `roscli describe-command nav.call_hierarchy`
+  - `roscli describe-command ctx.call_chain_slice`
+- Proposed Roslyn command/option improvement:
+  - Put `nav.find_invocations`/`nav.call_hierarchy` examples in `agent-start`/`csharp-start` immediately after `ctx.search_text` discovery examples.
+  - Longer term, consider `ctx.search_text` result guidance that detects method-looking hits and suggests semantic caller navigation with exact line/column anchors.
+- Expected impact:
+  - correctness: higher because callers/routing are resolved semantically.
+  - latency: lower by avoiding multiple focus-miss retries.
+  - token_count: lower by replacing large outline/member payloads with targeted nav results.
