@@ -4311,7 +4311,7 @@ Workflow:
         sb.AppendLine("roscli edit.claim release <claim_id>");
         sb.AppendLine("```");
         sb.AppendLine();
-        sb.AppendLine("Use `edit.replace_in_member` for small exact changes inside one member. Use `edit.batch_exact` with `replace_span` and `expected_text` for coordinated whole-member, same-member multi-edit, or multi-file edits. Do not run parallel edit commands against the same member from an older `ctx.member_source` read. Use `edit.insert_text` for exact-anchor insertions.");
+        sb.AppendLine("Use `edit.replace_in_member` for small exact changes inside one member. Use `edit.batch_exact` with `replace_span` and `expected_text` for coordinated whole-member, same-member multi-edit, or multi-file edits. Do not run parallel edit commands against the same member from an older `ctx.member_source` read. Use `edit.insert_text` for exact-anchor insertions, but first run `describe-command edit.insert_text` and avoid copied multiline block anchors; prefer a short unique anchor line from `ctx.member_source` or `ctx.search_text`.");
         sb.AppendLine();
         sb.AppendLine("## Multi-Agent Coordination");
         sb.AppendLine("- Each agent/subagent checks `edit.claim list` before `.cs` mutation.");

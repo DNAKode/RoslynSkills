@@ -1007,3 +1007,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher; failed exact-anchor insertions return actionable recovery hints instead of bare errors.
   - latency: lower because agents retry with short unique anchors or member-scoped edits faster.
   - token_count: lower by avoiding copied multiline anchors and repeated failed insert attempts.
+
+## 2026-05-17 - Startup insert guidance edit after member-source failure
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.88+af751642a5eebc3c5ffd6d1bc702bc2c5a744b70`
+- Exact reason fallback was required/preferred:
+  - A supervised FrankenTui.NET round showed the new `edit.insert_text` short-anchor guidance was only present when explicitly prompted via `describe-command`, not in the default `agent-start`/`csharp-start` workflow. A targeted `ctx.member_source` probe on `src/RoslynSkills.Cli/CliApplication.cs` failed without usable output, so bounded source reads were used for this guidance/test edit.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildCSharpStartGuide --focus-text "Use `edit.replace_in_member`" --context-lines-before 6 --context-lines-after 14 --max-chars 8000`
+- Proposed Roslyn command/option improvement:
+  - Return explicit failure data and timeout/partial-result telemetry when `ctx.member_source` cannot service large CLI source files.
+  - Promote high-churn edit-command caveats directly in startup guidance, not only in `describe-command`.
+- Expected impact:
+  - correctness: higher; agents see insertion guardrails before choosing the command.
+  - latency: lower by reducing failed multiline-anchor insert attempts.
+  - token_count: lower because fewer retries are needed after exact-anchor failures.

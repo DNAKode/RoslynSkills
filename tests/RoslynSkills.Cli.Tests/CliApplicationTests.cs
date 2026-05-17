@@ -2749,6 +2749,9 @@ public sealed class CliApplicationTests
         Assert.Contains("--max-results 20 --context-lines 0", output);
         Assert.Contains("edit.claim list", output);
         Assert.Contains("edit.replace_in_member tests/MyTests.cs --member-name TargetTest", output);
+        Assert.Contains("describe-command edit.insert_text", output);
+        Assert.Contains("avoid copied multiline block anchors", output);
+        Assert.Contains("short unique anchor line", output);
         Assert.Contains("Multi-Agent Coordination", output);
         Assert.Contains("distinct stable `--owner` values", output);
         Assert.Contains("each subagent claims before its first edit", output);
