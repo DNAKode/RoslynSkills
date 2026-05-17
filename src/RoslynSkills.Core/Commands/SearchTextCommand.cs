@@ -129,6 +129,7 @@ public sealed class SearchTextCommand : IAgentCommand
         int maxFiles = InputParsing.GetOptionalInt(input, "max_files", defaultValue: 1_000, minValue: 1, maxValue: 100_000);
         int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: brief ? 0 : 1, minValue: 0, maxValue: 10);
         int previewMaxChars = InputParsing.GetOptionalInt(input, "preview_max_chars", defaultValue: 180, minValue: 40, maxValue: 4_000);
+        int maxReturnedMatches = InputParsing.GetOptionalInt(input, "max_returned_matches", defaultValue: 8, minValue: 1, maxValue: 1_000);
 
         string[] includeGlobs = GetOptionalTrimmedStringArray(input, "include_globs");
         if (includeGlobs.Length == 0)
@@ -319,17 +320,6 @@ public sealed class SearchTextCommand : IAgentCommand
             }
         }
 
-        object matchPayload = brief
-            ? matches.Select(match => new
-            {
-                match.file_path,
-                match.line,
-                match.column,
-                match.pattern,
-                match.preview,
-            }).ToArray()
-            : matches;
-
         object? resultGuidance = BuildResultGuidance(
             matches.Count,
             truncated,
@@ -339,6 +329,22 @@ public sealed class SearchTextCommand : IAgentCommand
             previewMaxChars,
             filePath,
             roots);
+
+        bool compactBroadMatches = brief && resultGuidance is not null && matches.Count > maxReturnedMatches;
+        SearchMatch[] returnedMatches = compactBroadMatches
+            ? matches.Take(maxReturnedMatches).ToArray()
+            : matches.ToArray();
+
+        object matchPayload = brief
+            ? returnedMatches.Select(match => new
+            {
+                match.file_path,
+                match.line,
+                match.column,
+                match.pattern,
+                match.preview,
+            }).ToArray()
+            : returnedMatches;
 
         object data = new
         {
@@ -368,11 +374,14 @@ public sealed class SearchTextCommand : IAgentCommand
                 max_files = maxFiles,
                 context_lines = contextLines,
                 preview_max_chars = previewMaxChars,
+                max_returned_matches = maxReturnedMatches,
                 brief,
             },
             files_scanned = filesScanned,
             files_with_matches = filesWithMatches,
             total_matches = matches.Count,
+            returned_matches = returnedMatches.Length,
+            omitted_matches = Math.Max(0, matches.Count - returnedMatches.Length),
             truncated,
             file_limit_reached = fileLimitReached,
             result_guidance = resultGuidance,
@@ -433,6 +442,7 @@ public sealed class SearchTextCommand : IAgentCommand
                 "roscli ctx.file_outline <file-path> --member-name-contains <term> --max-members 20",
                 "roscli ctx.member_source <file-path> --member-name <name> --focus-text <literal> --context-lines-before 8 --context-lines-after 16",
             },
+            payload_policy = "Brief broad results return a capped matches payload; total_matches remains authoritative. Add --max-returned-matches <n> only when you deliberately need more preview rows.",
         };
     }
 

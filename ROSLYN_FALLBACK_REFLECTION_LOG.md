@@ -959,3 +959,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: high; advertised narrowing options should not silently broaden searches.
   - latency: lower because agents avoid broad search retries and do not wait indefinitely on self-hosted source reads.
   - token_count: lower because file-glob narrowing works on the first try.
+
+## 2026-05-17 - Broad search payload cap edit after member-source hang
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.85+29d7ea5eb93b705e3fba15b0cf0a931a0932deaf`
+- Exact reason fallback was required/preferred:
+  - A fresh FrankenTui.NET round used roscli successfully but spent large transcripts on repeated broad `ctx.search_text`/`ctx.file_outline` calls. While adding broad-search payload caps, `ctx.member_source` on `src/RoslynSkills.Core/Commands/SearchTextCommand.cs` hung, so bounded source reads were used for the self-hosted command edit and tests.
+- Roslyn command attempted:
+  - `roscli ctx.member_source src/RoslynSkills.Core/Commands/SearchTextCommand.cs --member-name ExecuteAsync --focus-text "result_guidance" --context-lines-before 12 --context-lines-after 40 --max-chars 12000`
+- Proposed Roslyn command/option improvement:
+  - Add timeout/partial-result telemetry for `ctx.member_source` on command implementation files.
+  - Add a maintainer-oriented self-hosted edit path for command payload-policy updates, including tests and CLI guidance surfaces.
+- Expected impact:
+  - correctness: medium; broad-result truth is preserved through total/omitted counts while reducing preview overload.
+  - latency: lower because agents spend fewer cycles scrolling large JSON envelopes.
+  - token_count: lower because broad-search results return a capped match payload by default.

@@ -123,8 +123,11 @@ public sealed class BreadthCommandTests
             Assert.True(result.Ok);
             string json = JsonSerializer.Serialize(result.Data);
             Assert.Contains("\"total_matches\":25", json);
+            Assert.Contains("\"returned_matches\":8", json);
+            Assert.Contains("\"omitted_matches\":17", json);
             Assert.Contains("\"result_guidance\":{", json);
             Assert.Contains("\"broad search returned many preview-bearing matches\"", json);
+            Assert.Contains("\"payload_policy\"", json);
             Assert.Contains("\"recommended_next_step\"", json);
             Assert.Contains("ctx.file_outline", json);
             Assert.Contains("ctx.member_source", json);

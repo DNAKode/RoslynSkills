@@ -1310,6 +1310,8 @@ public sealed class CliApplicationTests
             string output = stdout.ToString();
             Assert.Equal(0, exitCode);
             Assert.Contains("\"result_guidance\": {", output);
+            Assert.Contains("\"returned_matches\": 8", output);
+            Assert.Contains("\"omitted_matches\": 17", output);
             Assert.Contains("\"Summary\": \"ctx.search_text ok: matches=25, files=1, guidance=narrow\"", output);
         }
         finally
