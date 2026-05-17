@@ -2518,6 +2518,7 @@ public sealed class CliApplicationTests
         Assert.Contains("edit.claim list, ctx.changed_files, workspace.preload <solution.sln|.slnx> --alias default --require-solution true, compact ctx.file_outline filters, ctx.member_source with focus windows", output);
         Assert.Contains("edit.claim claim for every file before mutation", output);
         Assert.Contains("If subagents are used, assign disjoint claimed files", output);
+        Assert.Contains("Run roscli and dotnet commands sequentially per repo", output);
         Assert.Contains("If a broad ctx.search_text returns many matches, stop broad searching", output);
         Assert.Contains("Use ctx.search_text or ctx.member_source for .cs closeout line anchors", output);
         Assert.Contains("Report startup evidence explicitly", output);
