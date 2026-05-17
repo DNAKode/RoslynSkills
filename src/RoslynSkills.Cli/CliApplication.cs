@@ -2158,6 +2158,11 @@ Workflow:
                         input["roots"] = new[] { normalizedPath };
                     }
                 }
+                else if (!HasExplicitSearchScope(options) &&
+                         TryDiscoverSingleTopLevelSolution() is { Length: > 0 } discoveredSolution)
+                {
+                    input["workspace_path"] = NormalizeCliPathValue(discoveredSolution);
+                }
                 break;
 
             case "ctx.changed_files":
@@ -2616,6 +2621,14 @@ Workflow:
     private static bool IsPathLikeOptionName(string optionName)
         => optionName.EndsWith("_path", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(optionName, "directory_path", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasExplicitSearchScope(Dictionary<string, object?> options)
+        => options.ContainsKey("workspace_path") ||
+           options.ContainsKey("workspace_handle") ||
+           options.ContainsKey("file_path") ||
+           options.ContainsKey("path") ||
+           options.ContainsKey("root") ||
+           options.ContainsKey("roots");
 
     private static string NormalizeCliPathValue(string value)
     {

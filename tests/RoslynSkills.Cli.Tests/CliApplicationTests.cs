@@ -1172,6 +1172,44 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task DirectCommand_SearchText_InfersSingleTopLevelSolutionWhenScopeOmitted()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-solution-{Guid.NewGuid():N}");
+        string originalDirectory = Directory.GetCurrentDirectory();
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            string solutionPath = Path.Combine(tempDir, "Demo.slnx");
+            await File.WriteAllTextAsync(solutionPath, "<Solution></Solution>");
+            Directory.SetCurrentDirectory(tempDir);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+            StringWriter stdout = new();
+            StringWriter stderr = new();
+
+            int exitCode = await app.RunAsync(
+                new[] { "ctx.search_text", "--pattern", "AccessibilityTelemetryScroll", "--file-glob", "*.cs", "--max-results", "20", "--context-lines", "0" },
+                stdout,
+                stderr,
+                CancellationToken.None);
+
+            string output = stdout.ToString();
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"workspace_path\":", output);
+            Assert.Contains("Demo.slnx", output);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectCommand_SearchText_SummarizesNarrowingGuidance()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-search-guidance-{Guid.NewGuid():N}");
