@@ -1284,3 +1284,19 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: neutral to higher by preserving focus evidence while discouraging broad-window edit planning.
   - latency: lower by reducing repeated large semantic reads.
   - token_count: lower by steering fresh agents toward smaller context windows after successful focus acquisition.
+
+## 2026-05-17 - Fixed-width UI repair used ad hoc shell text measurement
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.106+2aaceb449009bfd1823fe29726c0d92abe2c387b`
+- Exact reason fallback was required/preferred:
+  - Fresh-start FrankenTui.NET cycle 3 stayed roscli-only for C# reads/edits, but after a fixed-width render assertion failed it used ad hoc PowerShell string length checks to pick a shorter UI footer. This did not read or edit `.cs`, but the roscli implementation pass touched `CliApplication.cs`, so bounded shell reads plus `apply_patch` were used.
+- Roslyn command attempted:
+  - `rg -n "HandleVersionAsync|TryGetOption\\(|HasOption\\(" src/RoslynSkills.Cli/CliApplication.cs tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`
+  - Bounded `Get-Content` reads of `src/RoslynSkills.Cli/CliApplication.cs` and `tests/RoslynSkills.Cli.Tests/CliApplicationTests.cs`.
+- Proposed Roslyn command/option improvement:
+  - Add a small `roscli text.measure` helper for candidate UI strings so fresh agents can keep fixed-width repair loops inside roscli instead of shell snippets.
+- Expected impact:
+  - correctness: higher for terminal UI edits by making label length evidence explicit.
+  - latency: lower by replacing trial shell snippets with a stable helper.
+  - token_count: lower by avoiding multiple ad hoc command variants during width repair.

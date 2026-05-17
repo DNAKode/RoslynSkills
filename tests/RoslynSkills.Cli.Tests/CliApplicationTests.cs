@@ -76,6 +76,30 @@ public sealed class CliApplicationTests
         Assert.Contains("pit_of_success", output);
         Assert.Contains("quickstart", output);
         Assert.Contains("csharp-start", output);
+        Assert.Contains("text.measure", output);
+    }
+
+    [Fact]
+    public async Task TextMeasure_ReturnsLineLengths()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        int exitCode = await app.RunAsync(
+            new[] { "text.measure", "--text", "abc\ndef" },
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        string output = stdout.ToString();
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\"CommandId\": \"text.measure\"", output);
+        Assert.Contains("\"character_count\": 7", output);
+        Assert.Contains("\"line_count\": 2", output);
+        Assert.Contains("\"max_line_character_count\": 3", output);
+        Assert.Contains("\"line_number\": 2", output);
+        Assert.Contains("\"text\": \"def\"", output);
     }
 
     [Fact]

@@ -58,6 +58,7 @@ public sealed class CliApplication
             "csharp-start" => await HandleCSharpStartAsync(remainder, stdout).ConfigureAwait(false),
             "agent-start" => await HandleAgentStartAsync(remainder, stdout).ConfigureAwait(false),
             "agent-begin" => await HandleAgentBeginAsync(remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            "text.measure" => await HandleTextMeasureAsync(remainder, stdout, stdin).ConfigureAwait(false),
             "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
             "daemon.start" => await HandleDaemonStartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
@@ -187,6 +188,62 @@ public sealed class CliApplication
                     cli_version = version,
                     informational_version = informationalVersion,
                     tool_command = "roscli",
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+        return 0;
+    }
+
+    private async Task<int> HandleTextMeasureAsync(string[] args, TextWriter stdout, TextReader stdin)
+    {
+        string? text = null;
+        bool fromStdin = HasOption(args, "--input-stdin");
+        if (TryGetOption(args, "--text", out string? textOption))
+        {
+            text = textOption;
+        }
+        else if (fromStdin)
+        {
+            text = await stdin.ReadToEndAsync().ConfigureAwait(false);
+        }
+        else if (args.Length > 0)
+        {
+            text = string.Join(" ", args.Where(arg => !string.Equals(arg, "--input-stdin", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (text is null)
+        {
+            await WriteEnvelopeAsync(stdout, ErrorEnvelope(
+                commandId: "text.measure",
+                code: "invalid_args",
+                message: "Usage: text.measure --text <value> | text.measure <value> | text.measure --input-stdin")).ConfigureAwait(false);
+            return 1;
+        }
+
+        string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        string[] lines = normalized.Split('\n');
+        var lineMetrics = lines
+            .Select((line, index) => new
+            {
+                line_number = index + 1,
+                character_count = line.Length,
+                text = line,
+            })
+            .ToArray();
+
+        await WriteEnvelopeAsync(
+            stdout,
+            new CommandEnvelope(
+                Ok: true,
+                CommandId: "text.measure",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    character_count = text.Length,
+                    line_count = lineMetrics.Length,
+                    max_line_character_count = lineMetrics.Length == 0 ? 0 : lineMetrics.Max(line => line.character_count),
+                    lines = lineMetrics,
+                    usage_hint = "Use this for fixed-width UI labels or expected strings before C# edits; for source anchors still use ctx.member_source/search_text.",
                 },
                 Errors: Array.Empty<CommandError>(),
                 TraceId: null)).ConfigureAwait(false);
@@ -429,6 +486,12 @@ Workflow:
                 InputSchemaVersion: "1.0",
                 OutputSchemaVersion: "1.0",
                 MutatesState: true),
+            new CommandDescriptor(
+                Id: "text.measure",
+                Summary: "Measure candidate text and per-line character counts for fixed-width UI strings.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: false),
             new CommandDescriptor(
                 Id: "daemon.start",
                 Summary: "Start or reuse the process-hot Roslyn workspace host daemon.",
@@ -3569,6 +3632,22 @@ Workflow:
 
     private static object BuildCommandUsageHints(string commandId)
     {
+        if (string.Equals(commandId, "text.measure", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "text.measure --text <value>",
+                stdin = "text.measure --input-stdin",
+                required_properties = new[] { "text or stdin" },
+                optional_properties = Array.Empty<string>(),
+                notes = new[]
+                {
+                    "Use for fixed-width terminal UI labels, expected strings, or candidate footer text before editing C#.",
+                    "This command does not inspect source. Use ctx.member_source/search_text for .cs anchors and closeout line evidence.",
+                },
+            };
+        }
+
         if (string.Equals(commandId, "session.open", StringComparison.OrdinalIgnoreCase))
         {
             return new
@@ -4536,6 +4615,7 @@ Workflow:
         sb.AppendLine("roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 3 --context-lines-after 8");
         sb.AppendLine("roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text \"ExpectedLiteral\" --context-lines-before 1 --context-lines-after 1 --include-source-text false");
         sb.AppendLine("roscli ctx.search_text --pattern \"class Target\" --file-glob \"*.cs\" --max-results 20 --context-lines 0");
+        sb.AppendLine("roscli text.measure --text \"fixed-width UI label\"");
         sb.AppendLine("roscli nav.find_invocations src/MyFile.cs 42 17 --brief true --max-results 20");
         sb.AppendLine("roscli nav.call_hierarchy src/MyFile.cs 42 17 --direction incoming --max-depth 1 --brief true");
         sb.AppendLine("roscli describe-command edit.replace_in_member");
@@ -4708,6 +4788,7 @@ Workflow:
               quickstart
               csharp-start
               agent-start [--solution <path.sln|path.slnx>]
+              text.measure --text <value>
               llmstxt [--full]
               daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
               daemon.status [--repo-root <path>]
@@ -4737,6 +4818,7 @@ Workflow:
                 roscli agent-start
                 roscli csharp-start
                 roscli llmstxt
+                roscli text.measure --text "fixed-width UI label"
                 roscli list-commands --ids-only
                 roscli quickstart
                 roscli describe-command session.open

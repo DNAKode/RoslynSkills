@@ -66,6 +66,7 @@ roscli ctx.changed_files
 roscli workspace.preload MySolution.slnx --alias default --require-solution true
 roscli ctx.file_outline tests/MyTests.cs --member-name-contains Target --max-members 20
 roscli ctx.member_source tests/MyTests.cs --member-name TargetTest --focus-text "ExpectedLiteral" --context-lines-before 3 --context-lines-after 8
+roscli text.measure --text "fixed-width UI label"
 roscli edit.claim claim tests/MyTests.cs --reason narrow-csharp-slice
 roscli edit.replace_in_member tests/MyTests.cs --member-name TargetTest --old-text "Assert.Equal(1, value);" --new-text "Assert.Equal(2, value);" --preview-chars 256
 dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~TargetTest
