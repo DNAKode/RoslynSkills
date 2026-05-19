@@ -277,7 +277,7 @@ public sealed class SessionAndExplorationCommandTests
             Assert.True(result.Ok);
             using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
             JsonElement member = doc.RootElement.GetProperty("member");
-            Assert.True(member.GetProperty("source_line_count").GetInt32() <= 80);
+            Assert.True(member.GetProperty("source_line_count").GetInt32() <= 32);
             JsonElement source = doc.RootElement.GetProperty("source");
             Assert.DoesNotContain("Step240", source.GetProperty("text").GetString()!);
             JsonElement focus = source.GetProperty("focus");

@@ -1103,8 +1103,8 @@ public sealed class CliApplicationTests
 
             string output = stdout.ToString();
             Assert.Equal(0, exitCode);
-            Assert.Contains("focus=not-found:MissingMarker", output);
-            Assert.Contains("\"source_line_count\": 80", output);
+            Assert.Contains("focus=not-found:MissingMarker, guidance=narrow", output);
+            Assert.Contains("\"source_line_count\": 32", output);
             Assert.Contains("\"guard_applied\": true", output);
             Assert.Contains("source.text was capped for orientation only", output);
             Assert.Contains("ctx.search_text", output);

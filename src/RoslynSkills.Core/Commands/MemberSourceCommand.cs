@@ -10,8 +10,8 @@ namespace RoslynSkills.Core.Commands;
 
 public sealed class MemberSourceCommand : IAgentCommand
 {
-    private const int LargeMissingFocusMemberLineThreshold = 60;
-    private const int MissingFocusFallbackLineWindow = 80;
+    private const int LargeMissingFocusMemberLineThreshold = 40;
+    private const int MissingFocusFallbackLineWindow = 32;
     private const int LargeMatchedFocusWindowLineThreshold = 50;
 
     public CommandDescriptor Descriptor { get; } = new(

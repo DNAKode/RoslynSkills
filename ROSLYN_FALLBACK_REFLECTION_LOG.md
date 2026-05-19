@@ -29,6 +29,24 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
 
 ## Entries
 
+## 2026-05-19 - Member-source missing-focus overread
+
+- RoslynSkills version:
+  - `roscli 0.1.6-preview.111+2119460d7116996a767ade216bb49c78a656f155`
+- Exact reason fallback was required/preferred:
+  - A monitored Claude FrankenTui.NET run completed a valid slice with roscli, but it consumed a 56-line `ctx.member_source` result whose preview said `focus=not-found:tier`. The existing missing-focus guard only capped members over 60 lines, so the command still made the broad window look usable. A bounded `rg` search over `.cs` files was used first to locate the threshold and CLI preview hooks before switching back to Roslyn `workspace.use`, `ctx.member_source`, and `edit.replace_in_member`.
+- Roslyn command attempted:
+  - `roscli workspace.use RoslynSkills.slnx`
+  - `roscli ctx.member_source src/RoslynSkills.Core/Commands/MemberSourceCommand.cs --member-name ExecuteAsync --focus-text "MissingFocusFallbackLineWindow" ...`
+  - `roscli ctx.member_source src/RoslynSkills.Cli/CliApplication.cs --member-name BuildMemberSourceFocusPreview ...`
+  - `roscli edit.replace_in_member` for focused test assertion updates.
+- Proposed Roslyn command/option improvement:
+  - Lower the missing-focus guard threshold/window and surface `guidance=narrow` in the CLI preview when `ctx.member_source` caps a missing-focus result.
+- Expected impact:
+  - correctness: higher by preventing agents from treating broad fallback source windows as edit-planning evidence.
+  - latency: lower by steering agents immediately to `ctx.search_text` or a corrected `focus_text`.
+  - token_count: lower by reducing over-broad member payload consumption and retry churn.
+
 - `2026-02-09`: Bootstrap policy entry -> Added mandatory fallback reflection rule to `AGENTS.md` and skill workflow -> Use this log as source for exploratory command backlog.
 - `2026-02-09`: Added new transport server source (`src/RoslynAgent.TransportServer/Program.cs`) via text patch before Roslyn session edits
   - Task/Context: implement persistent stdio transport server to benchmark MCP-style warm transport vs process-per-call CLI.

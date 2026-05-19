@@ -3472,7 +3472,10 @@ Workflow:
                 : ", focus=matched";
         }
 
-        return $", focus=not-found:{shortText}";
+        string guidanceSuffix = TryGetBool(focus, "guard_applied", out bool guardApplied) && guardApplied
+            ? ", guidance=narrow"
+            : string.Empty;
+        return $", focus=not-found:{shortText}{guidanceSuffix}";
     }
 
     private static string ResolveWorkspaceMode(JsonElement element)
