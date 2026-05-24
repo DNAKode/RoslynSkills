@@ -1400,3 +1400,18 @@ This is a temporary working log. It is safe to delete after feedback is forwarde
   - correctness: higher by making `agent-begin` an explicit hard gate after `agent-start`.
   - latency: lower by preventing docs orientation before the startup evidence command.
   - token_count: lower by avoiding root-doc reads before the C# protocol is established.
+
+## 2026-05-24 - CI-only path separator test fallback
+
+- RoslynSkills version:
+  - `roscli 1.0.0+d263128a5749b0f45cc98437af94a8d782df2e92`
+- Exact reason fallback was required/preferred:
+  - The NuGet preview workflow failed on Linux because `BuildDataSummary_UsesNestedHostEnvelopeDataForDaemonRoutedExactEdit` expected `Demo.cs`, while the summarizer preserved a Windows-style `C:\Temp\Demo.cs` path on non-Windows hosts. A Roslyn `ctx.member_source` lookup was attempted first but did not return in a useful time for this test method, so bounded `rg`/`Get-Content` reads and a narrow patch were used to fix the cross-platform display helper.
+- Roslyn command attempted:
+  - `scripts\roscli.cmd ctx.member_source tests\RoslynSkills.Cli.Tests\CliApplicationTests.cs --member-name BuildDataSummary_UsesNestedHostEnvelopeDataForDaemonRoutedExactEdit --workspace-path RoslynSkills.slnx --require-workspace true --mode member`
+- Proposed Roslyn command/option improvement:
+  - Make `ctx.member_source --member-name` return quickly for large test classes or provide progress/error output when workspace-backed member lookup stalls, especially in release-publish repair loops.
+- Expected impact:
+  - correctness: higher by keeping CLI summaries stable across Windows and Linux payload paths.
+  - latency: lower by avoiding manual fallback during CI-only release failures.
+  - token_count: lower by reducing failed command output and repeated text searches.

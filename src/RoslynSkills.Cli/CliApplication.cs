@@ -3108,7 +3108,7 @@ Workflow:
         if (string.Equals(commandId, "ctx.file_outline", StringComparison.OrdinalIgnoreCase))
         {
             string file = TryGetString(element, "file_path", out string filePath)
-                ? Path.GetFileName(filePath)
+                ? GetDisplayFileName(filePath)
                 : "<unknown>";
             if (TryGetObject(element, "summary", out JsonElement summaryElement))
             {
@@ -3304,7 +3304,7 @@ Workflow:
         if (string.Equals(commandId, "edit.create_file", StringComparison.OrdinalIgnoreCase))
         {
             string file = TryGetString(element, "file_path", out string filePath)
-                ? Path.GetFileName(filePath)
+                ? GetDisplayFileName(filePath)
                 : "<unknown>";
             bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
             bool created = TryGetBool(element, "created", out bool createdFile) && createdFile;
@@ -3315,7 +3315,7 @@ Workflow:
         if (string.Equals(commandId, "edit.replace_text", StringComparison.OrdinalIgnoreCase))
         {
             string file = TryGetString(element, "file_path", out string filePath)
-                ? Path.GetFileName(filePath)
+                ? GetDisplayFileName(filePath)
                 : "<unknown>";
             int matchCount = TryGetInt(element, "match_count", out int matches) ? matches : -1;
             bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
@@ -3329,7 +3329,7 @@ Workflow:
         if (string.Equals(commandId, "edit.replace_in_member", StringComparison.OrdinalIgnoreCase))
         {
             string file = TryGetString(element, "file_path", out string filePath)
-                ? Path.GetFileName(filePath)
+                ? GetDisplayFileName(filePath)
                 : "<unknown>";
             string member = TryGetObject(element, "member", out JsonElement memberObject) &&
                             TryGetString(memberObject, "member_name", out string memberName)
@@ -3350,7 +3350,7 @@ Workflow:
         if (string.Equals(commandId, "edit.insert_text", StringComparison.OrdinalIgnoreCase))
         {
             string file = TryGetString(element, "file_path", out string filePath)
-                ? Path.GetFileName(filePath)
+                ? GetDisplayFileName(filePath)
                 : "<unknown>";
             string position = TryGetString(element, "position", out string insertPosition)
                 ? insertPosition
@@ -3452,6 +3452,25 @@ Workflow:
         }
 
         return null;
+    }
+
+    private static string GetDisplayFileName(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        string trimmed = path.TrimEnd('\\', '/');
+        if (trimmed.Length == 0)
+        {
+            return path;
+        }
+
+        int separatorIndex = trimmed.LastIndexOfAny(['\\', '/']);
+        return separatorIndex >= 0
+            ? trimmed[(separatorIndex + 1)..]
+            : Path.GetFileName(trimmed);
     }
 
     private static string BuildMemberSourceFocusPreview(JsonElement element)
