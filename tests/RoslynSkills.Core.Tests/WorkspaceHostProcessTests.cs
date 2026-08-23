@@ -101,7 +101,7 @@ public sealed class WorkspaceHostProcessTests
                         max_files = 100,
                     },
                 });
-            using JsonDocument preload = JsonDocument.Parse((await ReadLineWithTimeoutAsync(process, "preload"))!);
+            using JsonDocument preload = JsonDocument.Parse((await ReadLineWithTimeoutAsync(process, "preload", timeoutSeconds: 60))!);
             JsonElement preloadRoot = preload.RootElement;
             Assert.True(preloadRoot.GetProperty("ok").GetBoolean());
             string handle = preloadRoot
@@ -192,19 +192,23 @@ public sealed class WorkspaceHostProcessTests
         return process;
     }
 
-    private static async Task<string?> ReadLineWithTimeoutAsync(Process process, string responseName)
-        => await ReadLineWithTimeoutAsync(process.StandardOutput, process, responseName);
+    private static async Task<string?> ReadLineWithTimeoutAsync(
+        Process process,
+        string responseName,
+        int timeoutSeconds = 10)
+        => await ReadLineWithTimeoutAsync(process.StandardOutput, process, responseName, timeoutSeconds);
 
     private static async Task<string?> ReadLineWithTimeoutAsync(
         TextReader reader,
         Process process,
-        string responseName)
+        string responseName,
+        int timeoutSeconds)
     {
         try
         {
             return await reader
                 .ReadLineAsync()
-                .WaitAsync(TimeSpan.FromSeconds(10));
+                .WaitAsync(TimeSpan.FromSeconds(timeoutSeconds));
         }
         catch (TimeoutException)
         {

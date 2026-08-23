@@ -165,6 +165,68 @@ public sealed class VbCommandTests
     }
 
     [Fact]
+    public async Task FindInvocationsCommand_AutoRestoresUnrestoredWorkspace_AndReportsDiagnostic()
+    {
+        string root = CreateWorkspaceRoot("auto-restore");
+        string projectPath = Path.Combine(root, "TargetHarness.vbproj");
+        string servicePath = Path.Combine(root, "Service.vb");
+        string consumerPath = Path.Combine(root, "Consumer.vb");
+
+        await File.WriteAllTextAsync(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <OptionStrict>On</OptionStrict>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            servicePath,
+            """
+            Public Class Service
+                Public Function Transform(value As Integer) As Integer
+                    Return value * 2
+                End Function
+            End Class
+            """);
+        await File.WriteAllTextAsync(
+            consumerPath,
+            """
+            Public Class Consumer
+                Public Function Use(service As Service) As Integer
+                    Return service.Transform(2)
+                End Function
+            End Class
+            """);
+
+        try
+        {
+            FindInvocationsCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = consumerPath,
+                line = 3,
+                column = 26,
+                brief = true,
+                max_results = 20,
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+
+            Assert.True(result.Ok);
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("auto_restore", json);
+            Assert.Contains("\"total_matches\":1", json);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task CallHierarchyCommand_ReturnsEdgesInVbWorkspace()
     {
         string root = CreateWorkspaceRoot("call-hierarchy");

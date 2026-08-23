@@ -773,11 +773,10 @@ internal static class WorkspaceSemanticLoader
         return evictedStates;
     }
 
-    private static async Task<LoadedWorkspaceState> CreateLoadedWorkspaceStateAsync(
-        WorkspaceCandidate candidate,
-        CancellationToken cancellationToken)
+    internal static MSBuildWorkspace CreateTrackedMsBuildWorkspace(
+        List<string> diagnostics,
+        bool includeAllFailureMessages = false)
     {
-        List<string> diagnostics = new();
         MSBuildWorkspace workspace = MSBuildWorkspace.Create();
         workspace.WorkspaceFailed += (_, args) =>
         {
@@ -787,15 +786,37 @@ internal static class WorkspaceSemanticLoader
             }
 
             string message = args.Diagnostic.Message;
-            if (ShouldIncludeWorkspaceDiagnostic(message))
+            if (includeAllFailureMessages || ShouldIncludeWorkspaceDiagnostic(message))
             {
                 diagnostics.Add(message);
             }
         };
 
+        return workspace;
+    }
+
+    private static async Task<LoadedWorkspaceState> CreateLoadedWorkspaceStateAsync(
+        WorkspaceCandidate candidate,
+        CancellationToken cancellationToken)
+    {
+        List<string> diagnostics = new();
+        MSBuildWorkspace workspace = CreateTrackedMsBuildWorkspace(diagnostics);
+
         try
         {
             Solution solution = await OpenSolutionAsync(workspace, candidate, cancellationToken).ConfigureAwait(false);
+            if (WorkspaceAutoRestore.IsEnabled && WorkspaceAutoRestore.NeedsRestore(solution))
+            {
+                bool restored = await WorkspaceAutoRestore
+                    .TryRestoreAsync(candidate.path, diagnostics, cancellationToken)
+                    .ConfigureAwait(false);
+                if (restored)
+                {
+                    workspace.Dispose();
+                    workspace = CreateTrackedMsBuildWorkspace(diagnostics);
+                    solution = await OpenSolutionAsync(workspace, candidate, cancellationToken).ConfigureAwait(false);
+                }
+            }
             int projectCount = solution.Projects.Count();
             int documentCount = solution.Projects.Sum(project => project.Documents.Count());
             IReadOnlyDictionary<string, long> trackedFileWriteTimesUtc = CaptureTrackedFileWriteTimes(candidate.path, solution);
@@ -813,7 +834,6 @@ internal static class WorkspaceSemanticLoader
             throw;
         }
     }
-
 
     private static string? FindNearestGitRoot(string startDirectory)
     {
