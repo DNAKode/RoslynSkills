@@ -7,13 +7,7 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 cli_project="RoslynSkills.Cli"
 cli_project_path="$repo_root/src/RoslynSkills.Cli"
 cli_dll_name="RoslynSkills.Cli.dll"
-if [[ -f "$repo_root/src/RoslynSkills.Cli/RoslynSkills.Cli.csproj" ]]; then
-  :
-elif [[ -f "$repo_root/src/RoslynAgent.Cli/RoslynAgent.Cli.csproj" ]]; then
-  cli_project="RoslynAgent.Cli"
-  cli_project_path="$repo_root/src/RoslynAgent.Cli"
-  cli_dll_name="RoslynAgent.Cli.dll"
-else
+if [[ ! -f "$repo_root/src/RoslynSkills.Cli/RoslynSkills.Cli.csproj" ]]; then
   echo "Could not resolve Roslyn CLI project under '$repo_root/src'." >&2
   exit 2
 fi

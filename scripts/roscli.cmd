@@ -6,11 +6,6 @@ for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
 set "CLI_PROJECT=RoslynSkills.Cli"
 set "CLI_DLL_NAME=RoslynSkills.Cli.dll"
 if exist "%REPO_ROOT%\src\RoslynSkills.Cli\RoslynSkills.Cli.csproj" goto :cli_resolved
-if exist "%REPO_ROOT%\src\RoslynAgent.Cli\RoslynAgent.Cli.csproj" (
-    set "CLI_PROJECT=RoslynAgent.Cli"
-    set "CLI_DLL_NAME=RoslynAgent.Cli.dll"
-    goto :cli_resolved
-)
 echo Could not resolve Roslyn CLI project under "%REPO_ROOT%\src". 1>&2
 set "EXIT_CODE=2"
 goto :done
