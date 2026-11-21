@@ -467,7 +467,7 @@ public sealed class MemberSourceCommand : IAgentCommand
                     next_step = "describe-command edit.transaction",
                 },
             },
-            fallback_rule = "If a .cs mutation cannot use a Roslyn edit command, record the attempted command and reason in ROSLYN_FALLBACK_REFLECTION_LOG.md.",
+            fallback_rule = "If a .cs mutation cannot use a Roslyn edit command, name the attempted command and the reason in your final report.",
         };
     }
 

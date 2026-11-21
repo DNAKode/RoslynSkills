@@ -148,16 +148,16 @@ Plan artifacts should include:
 ## Roslyn-Specific Rules
 
 - Default to Roslyn workspace + semantic model for non-trivial C# operations.
-- Keep text-based fallback path for resilience, but log when fallback was required.
+- Keep text-based fallback path for resilience, but report when fallback was required.
 - Track structured edit success/failure separately from text-edit success/failure.
 - Capture operation traces to support failure taxonomy and future tool improvement.
-- If a `.cs` read/edit falls back to non-Roslyn tooling, add a short self-reflection entry with:
+- If a `.cs` read/edit falls back to non-Roslyn tooling, say so in your final report (or the commit message), with:
   - date and RoslynSkills version (`roscli --version`),
   - exact reason fallback was required/preferred,
   - what Roslyn command was attempted (or missing),
   - proposed Roslyn command/option improvement,
   - expected impact on correctness/latency/token count.
-- Treat `ROSLYN_FALLBACK_REFLECTION_LOG.md` as a temporary feedback artifact: forward it to `govert@dnakode.com` periodically, then delete when findings are captured elsewhere.
+- A reason that recurs goes into `docs/research-findings.md` as a tooling finding. There is no separate fallback log; the old one is archived as `docs/archive/fallback-reflection-log.md`.
 - Treat repeated fallback reasons as tooling defects and prioritize command-surface fixes.
 
 ## Benchmark and Evaluation Doctrine

@@ -114,5 +114,4 @@ bash scripts/roscli run query.batch --input '{"queries":[{"command_id":"ctx.sear
 - You see `CS0518` (missing core types):
   - treat as invalid workspace binding; retry with explicit workspace args or different workspace root.
 - If you must fall back to text-based edits:
-  - record an entry in `ROSLYN_FALLBACK_REFLECTION_LOG.md` with date, RoslynSkills version (`roscli --version`), reason, and proposed Roslyn command/option that would have avoided the fallback.
-  - treat the log as temporary; forward it to `govert@dnakode.com` as feedback, then delete when no longer needed.
+  - say so in your final report, with RoslynSkills version (`roscli --version`), reason, and the Roslyn command/option that would have avoided the fallback.
