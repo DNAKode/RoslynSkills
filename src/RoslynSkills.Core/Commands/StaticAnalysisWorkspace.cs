@@ -256,6 +256,7 @@ internal sealed class StaticAnalysisWorkspace
 
         try
         {
+            solution = SolutionEditSupport.EnsureDocumentationCommentParsing(solution);
             Project[] projects = solution.Projects
                 .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -283,36 +284,133 @@ internal sealed class StaticAnalysisWorkspace
         }
     }
 
-    public async Task<(StaticAnalysisWorkspace? Workspace, IReadOnlyList<string> UpdatedPaths, CommandError? Error)> ApplyDocumentTextUpdatesAsync(
+    public static IReadOnlyList<Project> FindContainingProjectsForNewSourceFile(Solution solution, string filePath)
+    {
+        string normalizedFilePath = Path.GetFullPath(filePath);
+        if (!CommandLanguageServices.IsSupportedSourceFile(normalizedFilePath))
+        {
+            return Array.Empty<Project>();
+        }
+
+        string language = CommandLanguageServices.DetectLanguageFromFilePath(normalizedFilePath);
+        string? fileDirectory = Path.GetDirectoryName(normalizedFilePath);
+        if (string.IsNullOrWhiteSpace(fileDirectory))
+        {
+            return Array.Empty<Project>();
+        }
+
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        List<(Project Project, string ProjectDirectory)> candidates = new();
+        foreach (Project project in solution.Projects)
+        {
+            if (!string.Equals(project.Language, language, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(project.FilePath))
+            {
+                continue;
+            }
+
+            string? projectDirectory = Path.GetDirectoryName(Path.GetFullPath(project.FilePath));
+            if (string.IsNullOrWhiteSpace(projectDirectory))
+            {
+                continue;
+            }
+
+            string normalizedProjectDir = projectDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string normalizedFileDir = fileDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            bool isUnderProject = string.Equals(normalizedFileDir, normalizedProjectDir, comparison) ||
+                normalizedFileDir.StartsWith(normalizedProjectDir + Path.DirectorySeparatorChar, comparison);
+            if (isUnderProject)
+            {
+                candidates.Add((project, normalizedProjectDir));
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return Array.Empty<Project>();
+        }
+
+        int deepestLength = candidates.Max(entry => entry.ProjectDirectory.Length);
+        return candidates
+            .Where(entry => entry.ProjectDirectory.Length == deepestLength)
+            .Select(entry => entry.Project)
+            .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<(StaticAnalysisWorkspace? Workspace, IReadOnlyList<string> UpdatedPaths, IReadOnlyList<string> AddedPaths, CommandError? Error)> ApplyDocumentTextUpdatesAsync(
         IEnumerable<string> sourcePaths,
         bool includeGenerated,
         int maxFiles,
+        bool allowAddDocuments,
         CancellationToken cancellationToken)
     {
         if (Solution is null)
         {
-            return (null, Array.Empty<string>(), new CommandError("workspace_update_not_supported", "Incremental document text update requires a solution-backed hot workspace."));
+            return (null, Array.Empty<string>(), Array.Empty<string>(), new CommandError("workspace_update_not_supported", "Incremental document text update requires a solution-backed hot workspace."));
         }
 
         Solution updatedSolution = Solution;
         List<string> updatedPaths = new();
+        List<string> addedPaths = new();
         foreach (string sourcePath in sourcePaths.Select(Path.GetFullPath).Distinct(PathComparer))
         {
-            Document[] documents = FindDocuments(updatedSolution, sourcePath).ToArray();
-            if (documents.Length == 0)
+            if (!File.Exists(sourcePath))
             {
-                return (null, updatedPaths, new CommandError("document_not_found", $"Document '{sourcePath}' was not found in the loaded solution."));
+                return (null, updatedPaths, addedPaths, new CommandError("file_not_found", $"Source file '{sourcePath}' does not exist on disk."));
             }
 
-            string source = await File.ReadAllTextAsync(sourcePath, cancellationToken).ConfigureAwait(false);
-            SourceText? previousText = await documents[0].GetTextAsync(cancellationToken).ConfigureAwait(false);
-            SourceText newText = SourceText.From(source, previousText.Encoding ?? System.Text.Encoding.UTF8);
-            foreach (Document document in documents)
+            FileTextSnapshot snapshot = await EditFileText.ReadAsync(sourcePath, cancellationToken).ConfigureAwait(false);
+            SourceText newText = SourceText.From(snapshot.Text, snapshot.Encoding);
+
+            Document[] documents = FindDocuments(updatedSolution, sourcePath).ToArray();
+            if (documents.Length > 0)
             {
-                updatedSolution = updatedSolution.WithDocumentText(document.Id, newText);
+                foreach (Document document in documents)
+                {
+                    updatedSolution = updatedSolution.WithDocumentText(document.Id, newText);
+                }
+
+                updatedPaths.Add(sourcePath);
+                continue;
+            }
+
+            if (!allowAddDocuments)
+            {
+                return (null, updatedPaths, addedPaths, new CommandError("document_not_found", $"Document '{sourcePath}' was not found in the loaded solution."));
+            }
+
+            IReadOnlyList<Project> containingProjects = FindContainingProjectsForNewSourceFile(updatedSolution, sourcePath);
+            if (containingProjects.Count == 0)
+            {
+                return (null, updatedPaths, addedPaths, new CommandError("project_not_found", $"No project in the loaded solution contains new source file '{sourcePath}'."));
+            }
+
+            string fileName = Path.GetFileName(sourcePath);
+            foreach (Project targetProject in containingProjects)
+            {
+                Project? currentProject = updatedSolution.GetProject(targetProject.Id);
+                if (currentProject is null || string.IsNullOrWhiteSpace(currentProject.FilePath))
+                {
+                    continue;
+                }
+
+                string projectDir = Path.GetDirectoryName(Path.GetFullPath(currentProject.FilePath)) ?? string.Empty;
+                string fileDir = Path.GetDirectoryName(sourcePath) ?? projectDir;
+                string relativeDir = Path.GetRelativePath(projectDir, fileDir);
+                string[] folders = string.IsNullOrWhiteSpace(relativeDir) || string.Equals(relativeDir, ".", StringComparison.Ordinal)
+                    ? Array.Empty<string>()
+                    : relativeDir.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+
+                Document addedDocument = currentProject.AddDocument(fileName, newText, folders, sourcePath);
+                updatedSolution = addedDocument.Project.Solution;
             }
 
             updatedPaths.Add(sourcePath);
+            addedPaths.Add(sourcePath);
         }
 
         (StaticAnalysisWorkspace? workspace, CommandError? error) = await FromSolutionAsync(
@@ -327,7 +425,7 @@ internal sealed class StaticAnalysisWorkspace
                 maxFiles,
                 cancellationToken)
             .ConfigureAwait(false);
-        return (workspace, updatedPaths, error);
+        return (workspace, updatedPaths, addedPaths, error);
     }
 
     private static async Task<(StaticAnalysisWorkspace? Workspace, CommandError? Error)> FromSolutionAsync(

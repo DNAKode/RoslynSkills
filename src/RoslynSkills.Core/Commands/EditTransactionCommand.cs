@@ -11,10 +11,11 @@ public sealed class EditTransactionCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "edit.transaction",
-        Summary: "Apply a multi-file edit transaction with immediate diagnostics and optional dry-run.",
+        Summary: "Apply a multi-file edit transaction on the hot workspace with immediate solution diagnostics and optional dry-run.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -88,6 +89,9 @@ public sealed class EditTransactionCommand : IAgentCommand
             index++;
         }
 
+        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
+        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         return errors;
     }
 
@@ -101,6 +105,9 @@ public sealed class EditTransactionCommand : IAgentCommand
 
         bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 200, minValue: 1, maxValue: 5_000);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
         if (!TryParseOperations(input.GetProperty("operations"), out List<TransactionOperation> operations, out CommandError? parseError))
         {
@@ -112,8 +119,8 @@ public sealed class EditTransactionCommand : IAgentCommand
         {
             if (!fileStates.ContainsKey(operation.file_path))
             {
-                string source = await File.ReadAllTextAsync(operation.file_path, cancellationToken).ConfigureAwait(false);
-                fileStates.Add(operation.file_path, new TransactionFileState(operation.file_path, source));
+                FileTextSnapshot snapshot = await EditFileText.ReadAsync(operation.file_path, cancellationToken).ConfigureAwait(false);
+                fileStates.Add(operation.file_path, new TransactionFileState(snapshot));
             }
         }
 
@@ -130,8 +137,10 @@ public sealed class EditTransactionCommand : IAgentCommand
             {
                 after = operation.operation switch
                 {
-                    "set_content" => SourceText.From(operation.new_content ?? string.Empty, before.Encoding ?? Encoding.UTF8),
-                    "replace_span" => before.WithChanges(BuildTextChange(before, operation)),
+                    "set_content" => SourceText.From(
+                        NormalizeTextForFile(state.Snapshot, operation.new_content ?? string.Empty),
+                        state.Snapshot.Encoding),
+                    "replace_span" => before.WithChanges(BuildTextChange(before, state.Snapshot, operation)),
                     _ => before,
                 };
             }
@@ -164,13 +173,15 @@ public sealed class EditTransactionCommand : IAgentCommand
             });
         }
 
-        List<SyntaxTree> syntaxTrees = new(capacity: fileStates.Count);
-        List<object> fileSummaries = new(capacity: fileStates.Count);
+        List<TransactionFileState> orderedStates = fileStates.Values
+            .OrderBy(v => v.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        List<object> fileSummaries = new(capacity: orderedStates.Count);
+        List<string> writtenPaths = new();
         int changedFileCount = 0;
         int totalChangedLines = 0;
-        int wroteFileCount = 0;
 
-        foreach (TransactionFileState state in fileStates.Values.OrderBy(v => v.FilePath, StringComparer.OrdinalIgnoreCase))
+        foreach (TransactionFileState state in orderedStates)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -186,11 +197,15 @@ public sealed class EditTransactionCommand : IAgentCommand
 
             if (apply && changed)
             {
-                await File.WriteAllTextAsync(state.FilePath, state.Current.ToString(), cancellationToken).ConfigureAwait(false);
-                wroteFileCount++;
+                await EditFileText.WriteAsync(
+                        state.FilePath,
+                        state.Current.ToString(),
+                        state.Snapshot.Encoding,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                writtenPaths.Add(state.FilePath);
             }
 
-            syntaxTrees.Add(CSharpSyntaxTree.ParseText(state.Current, path: state.FilePath, cancellationToken: cancellationToken));
             fileSummaries.Add(new
             {
                 file_path = state.FilePath,
@@ -202,25 +217,70 @@ public sealed class EditTransactionCommand : IAgentCommand
             });
         }
 
-        IReadOnlyList<Diagnostic> diagnostics = CompilationDiagnostics.GetDiagnostics(syntaxTrees, cancellationToken);
-        NormalizedDiagnostic[] normalizedDiagnostics = CompilationDiagnostics.Normalize(diagnostics)
+        object hotWorkspaceRefresh = await HotWorkspaceEditRefresh.RefreshAfterWriteAsync(
+                writtenPaths,
+                wroteFile: writtenPaths.Count > 0,
+                allowAddDocuments: false,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        (IReadOnlyList<Diagnostic>? solutionDiagnostics, WorkspaceContextInfo? workspaceContext) =
+            await TryEvaluateSolutionDiagnosticsAsync(
+                    orderedStates,
+                    workspacePath,
+                    workspaceHandle,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+        if (requireWorkspace && solutionDiagnostics is null)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[]
+                {
+                    new CommandError(
+                        "workspace_required",
+                        $"Command '{Descriptor.Id}' required a workspace, but none of the transaction files resolved to a loaded workspace."),
+                });
+        }
+
+        IReadOnlyList<Diagnostic> diagnostics;
+        if (solutionDiagnostics is not null)
+        {
+            diagnostics = solutionDiagnostics;
+        }
+        else
+        {
+            List<SyntaxTree> syntaxTrees = orderedStates
+                .Select(state => CSharpSyntaxTree.ParseText(state.Current, path: state.FilePath, cancellationToken: cancellationToken))
+                .ToList();
+            diagnostics = CompilationDiagnostics.GetDiagnostics(syntaxTrees, cancellationToken);
+        }
+
+        NormalizedDiagnostic[] allNormalized = CompilationDiagnostics.Normalize(diagnostics);
+        NormalizedDiagnostic[] normalizedDiagnostics = allNormalized
             .Take(maxDiagnostics)
             .ToArray();
 
-        int diagnosticsErrors = normalizedDiagnostics.Count(d =>
+        int diagnosticsErrors = allNormalized.Count(d =>
             string.Equals(d.severity, "Error", StringComparison.OrdinalIgnoreCase));
-        int diagnosticsWarnings = normalizedDiagnostics.Count(d =>
+        int diagnosticsWarnings = allNormalized.Count(d =>
             string.Equals(d.severity, "Warning", StringComparison.OrdinalIgnoreCase));
 
         object data = new
         {
+            workspace_path = workspacePath,
+            workspace_handle = workspaceHandle,
+            require_workspace = requireWorkspace,
+            workspace_context = workspaceContext is null ? null : WorkspaceContextPayload.Build(workspaceContext),
             apply_changes = apply,
-            wrote_files = apply && wroteFileCount > 0,
-            wrote_file_count = wroteFileCount,
+            wrote_files = apply && writtenPaths.Count > 0,
+            wrote_file_count = writtenPaths.Count,
             operation_count = operations.Count,
             file_count = fileStates.Count,
             changed_file_count = changedFileCount,
             changed_line_count = totalChangedLines,
+            hot_workspace_refresh = hotWorkspaceRefresh,
             operations = operationResults,
             files = fileSummaries,
             diagnostics_after_edit = new
@@ -234,6 +294,125 @@ public sealed class EditTransactionCommand : IAgentCommand
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static async Task<(IReadOnlyList<Diagnostic>? Diagnostics, WorkspaceContextInfo? WorkspaceContext)> TryEvaluateSolutionDiagnosticsAsync(
+        IReadOnlyList<TransactionFileState> states,
+        string? workspacePath,
+        string? workspaceHandle,
+        CancellationToken cancellationToken)
+    {
+        Solution? baseSolution = null;
+        WorkspaceContextInfo? workspaceContext = null;
+
+        IWorkspaceHostStore store = WorkspaceHostStoreProvider.Current;
+        if (!string.IsNullOrWhiteSpace(workspaceHandle) &&
+            store.TryGet(workspaceHandle.Trim(), out HostedWorkspace? explicitWorkspace) &&
+            explicitWorkspace?.Workspace.Solution is { } explicitSolution)
+        {
+            baseSolution = explicitSolution;
+            workspaceContext = BuildHostedWorkspaceContext(explicitWorkspace, explicitWorkspace.Handle);
+        }
+
+        if (baseSolution is null)
+        {
+            StringComparer pathComparer = OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+            foreach (HostedWorkspace hosted in store.List())
+            {
+                if (hosted.Workspace.Solution is { } hostedSolution &&
+                    states.Any(state => hosted.TrackedSourcePaths.Contains(state.FilePath, pathComparer)))
+                {
+                    baseSolution = hostedSolution;
+                    workspaceContext = BuildHostedWorkspaceContext(hosted, hosted.Handle);
+                    break;
+                }
+            }
+        }
+
+        if (baseSolution is null)
+        {
+            TransactionFileState? firstSourceFile = states.FirstOrDefault(s => CommandLanguageServices.IsSupportedSourceFile(s.FilePath));
+            if (firstSourceFile is not null)
+            {
+                CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
+                        firstSourceFile.FilePath,
+                        cancellationToken,
+                        workspacePath,
+                        workspaceHandle)
+                    .ConfigureAwait(false);
+                workspaceContext = analysis.WorkspaceContext;
+                if (analysis.Document is not null)
+                {
+                    baseSolution = analysis.Document.Project.Solution;
+                }
+            }
+        }
+
+        if (baseSolution is null)
+        {
+            return (null, workspaceContext);
+        }
+
+        Solution updatedSolution = baseSolution;
+        List<DocumentId> affectedDocumentIds = new();
+        foreach (TransactionFileState state in states)
+        {
+            Document[] docs = SolutionEditSupport.FindDocumentsByPath(updatedSolution, state.FilePath).ToArray();
+            if (docs.Length == 0)
+            {
+                continue;
+            }
+
+            foreach (Document doc in docs)
+            {
+                updatedSolution = updatedSolution.WithDocumentText(doc.Id, state.Current);
+                affectedDocumentIds.Add(doc.Id);
+            }
+        }
+
+        if (affectedDocumentIds.Count == 0)
+        {
+            return (null, workspaceContext);
+        }
+
+        IReadOnlyList<Diagnostic> diagnostics = await WorkspaceDiagnostics.GetDiagnosticsForUpdatedSolutionAsync(
+                updatedSolution,
+                affectedDocumentIds,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return (diagnostics, workspaceContext);
+    }
+
+    private static WorkspaceContextInfo BuildHostedWorkspaceContext(HostedWorkspace hosted, string handle)
+        => new(
+            mode: "workspace",
+            resolution_source: "workspace_handle",
+            requested_workspace_path: hosted.Workspace.WorkspacePath,
+            resolved_workspace_path: hosted.Workspace.ResolvedWorkspacePath,
+            project_path: null,
+            fallback_reason: null,
+            attempted_workspace_paths: new[] { hosted.Workspace.ResolvedWorkspacePath },
+            workspace_diagnostics: hosted.Workspace.WorkspaceDiagnostics,
+            workspace_cache_mode: "process_hot",
+            workspace_cache_hit: true,
+            workspace_kind: hosted.Workspace.WorkspaceKind,
+            project_count: hosted.Workspace.ProjectCount,
+            document_count: hosted.Workspace.DocumentCount,
+            workspace_handle: handle,
+            project_resolved: hosted.Workspace.UnresolvedProjects.Count == 0,
+            project_resolution_issues: Array.Empty<string>(),
+            unresolved_project_count: hosted.Workspace.UnresolvedProjects.Count);
+
+    private static string NormalizeTextForFile(FileTextSnapshot snapshot, string text)
+    {
+        if (!snapshot.HasCrLf && !snapshot.HasBareLf)
+        {
+            return text;
+        }
+
+        return EditFileText.NormalizeLineEndings(text, snapshot.LineEnding);
     }
 
     private static bool TryParseOperations(
@@ -320,7 +499,7 @@ public sealed class EditTransactionCommand : IAgentCommand
         return true;
     }
 
-    private static TextChange BuildTextChange(SourceText sourceText, TransactionOperation operation)
+    private static TextChange BuildTextChange(SourceText sourceText, FileTextSnapshot snapshot, TransactionOperation operation)
     {
         if (operation.start_line is null ||
             operation.start_column is null ||
@@ -337,7 +516,8 @@ public sealed class EditTransactionCommand : IAgentCommand
             throw new ArgumentException("replace_span operation has end position before start position.");
         }
 
-        return new TextChange(new TextSpan(start, end - start), operation.new_text ?? string.Empty);
+        string normalizedText = NormalizeTextForFile(snapshot, operation.new_text ?? string.Empty);
+        return new TextChange(new TextSpan(start, end - start), normalizedText);
     }
 
     private static int GetPositionFromLineColumn(SourceText sourceText, int line, int column, bool allowLineEnd)
@@ -357,38 +537,7 @@ public sealed class EditTransactionCommand : IAgentCommand
     }
 
     private static int[] ComputeChangedLines(SourceText before, SourceText after)
-    {
-        IReadOnlyList<TextChangeRange> changes = after.GetChangeRanges(before);
-        if (changes.Count == 0)
-        {
-            return Array.Empty<int>();
-        }
-
-        HashSet<int> lines = new();
-        foreach (TextChangeRange range in changes)
-        {
-            TextSpan beforeSpan = range.Span;
-            if (beforeSpan.Length == 0)
-            {
-                int insertionPosition = Math.Max(0, Math.Min(before.Length, beforeSpan.Start));
-                int insertionLine = before.Lines.GetLineFromPosition(insertionPosition).LineNumber + 1;
-                lines.Add(insertionLine);
-                continue;
-            }
-
-            int startLine = before.Lines.GetLineFromPosition(beforeSpan.Start).LineNumber + 1;
-            int endPosition = Math.Max(beforeSpan.Start, beforeSpan.End - 1);
-            int endLine = before.Lines.GetLineFromPosition(endPosition).LineNumber + 1;
-            for (int line = startLine; line <= endLine; line++)
-            {
-                lines.Add(line);
-            }
-        }
-
-        return lines
-            .OrderBy(v => v)
-            .ToArray();
-    }
+        => SolutionEditSupport.ComputeChangedLines(before, after);
 
     private static bool TryGetOperationKind(
         JsonElement operationElement,
@@ -474,12 +623,15 @@ public sealed class EditTransactionCommand : IAgentCommand
 
     private sealed class TransactionFileState
     {
-        public TransactionFileState(string filePath, string source)
+        public TransactionFileState(FileTextSnapshot snapshot)
         {
-            FilePath = filePath;
-            Original = SourceText.From(source, Encoding.UTF8);
+            Snapshot = snapshot;
+            FilePath = snapshot.FilePath;
+            Original = SourceText.From(snapshot.Text, snapshot.Encoding);
             Current = Original;
         }
+
+        public FileTextSnapshot Snapshot { get; }
 
         public string FilePath { get; }
 

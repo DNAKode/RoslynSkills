@@ -1643,7 +1643,19 @@ Workflow:
         DirectoryInfo? current = new(startDirectory);
         while (current is not null)
         {
-            if (Directory.Exists(Path.Combine(current.FullName, ".git")))
+            if (File.Exists(Path.Combine(current.FullName, ".roslynskills", "workspaces.json")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        current = new(startDirectory);
+        while (current is not null)
+        {
+            string dotGit = Path.Combine(current.FullName, ".git");
+            if (Directory.Exists(dotGit) || File.Exists(dotGit))
             {
                 return current.FullName;
             }

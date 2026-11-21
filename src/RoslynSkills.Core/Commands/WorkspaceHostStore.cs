@@ -27,7 +27,8 @@ internal interface IWorkspaceHostStore
         string handle,
         WorkspaceStatus status,
         IReadOnlyList<string> sourcePaths,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        bool allowAddDocuments = false);
 
     Task<WorkspaceRefreshResult> ReloadAsync(
         string handle,
@@ -227,7 +228,8 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         string handle,
         WorkspaceStatus status,
         IReadOnlyList<string> sourcePaths,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowAddDocuments = false)
     {
         HostedWorkspace hosted;
         lock (_gate)
@@ -261,11 +263,13 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
                 StatusAfter: status);
         }
 
-        (StaticAnalysisWorkspace? updatedWorkspace, IReadOnlyList<string> updatedPaths, CommandError? error) =
+        int effectiveMaxFiles = Math.Max(hosted.MaxFiles, hosted.TrackedSourcePaths.Count + normalizedSourcePaths.Length);
+        (StaticAnalysisWorkspace? updatedWorkspace, IReadOnlyList<string> updatedPaths, IReadOnlyList<string> addedPaths, CommandError? error) =
             await hosted.Workspace.ApplyDocumentTextUpdatesAsync(
                     normalizedSourcePaths,
                     hosted.IncludeGenerated,
-                    Math.Max(1, hosted.TrackedSourcePaths.Count),
+                    effectiveMaxFiles,
+                    allowAddDocuments,
                     cancellationToken)
                 .ConfigureAwait(false);
         if (error is not null || updatedWorkspace is null)
@@ -279,14 +283,37 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
                 Error: error ?? new CommandError("workspace_update_failed", "Incremental source refresh failed."));
         }
 
-        IReadOnlyDictionary<string, DateTimeOffset?> trackedWriteTimes = SnapshotWriteTimes(hosted.TrackedPaths);
+        IReadOnlyList<string> trackedSourcePaths = addedPaths.Count == 0
+            ? hosted.TrackedSourcePaths
+            : hosted.TrackedSourcePaths
+                .Concat(addedPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        IReadOnlyList<string> trackedPaths = addedPaths.Count == 0
+            ? hosted.TrackedPaths
+            : hosted.TrackedPaths
+                .Concat(addedPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+        if (addedPaths.Count > 0)
+        {
+            hosted.ChangeTracker.TrackSourcePaths(addedPaths);
+        }
+
+        IReadOnlyDictionary<string, DateTimeOffset?> trackedWriteTimes = SnapshotWriteTimes(trackedPaths);
         string fingerprint = ComputeFingerprint(updatedWorkspace, trackedWriteTimes);
         hosted.ChangeTracker.ClearPaths(updatedPaths);
         HostedWorkspace refreshed = hosted with
         {
             Workspace = updatedWorkspace,
+            MaxFiles = effectiveMaxFiles,
             LastRefreshUtc = DateTimeOffset.UtcNow,
             WorkspaceFingerprint = fingerprint,
+            TrackedPaths = trackedPaths,
+            TrackedSourcePaths = trackedSourcePaths,
             TrackedWriteTimes = trackedWriteTimes,
         };
 
@@ -535,6 +562,18 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         }
     }
 
+    public void TrackSourcePaths(IEnumerable<string> paths)
+    {
+        lock (_gate)
+        {
+            foreach (string path in paths.Select(Path.GetFullPath))
+            {
+                _trackedSourcePaths.Add(path);
+                _changes.Remove(path);
+            }
+        }
+    }
+
     public void ClearPaths(IEnumerable<string> paths)
     {
         lock (_gate)
@@ -554,15 +593,29 @@ internal sealed class WorkspaceChangeTracker : IDisposable
     private void Record(string path, string changeType)
     {
         string fullPath = Path.GetFullPath(path);
+        if ((string.Equals(changeType, "Changed", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(changeType, "Created", StringComparison.OrdinalIgnoreCase)) &&
+            Directory.Exists(fullPath))
+        {
+            return;
+        }
+
         bool exists = File.Exists(fullPath);
+        DateTimeOffset? lastWriteUtc = exists ? File.GetLastWriteTimeUtc(fullPath) : null;
+        string[] trackedSourcesSnapshot;
+        lock (_gate)
+        {
+            trackedSourcesSnapshot = _trackedSourcePaths.ToArray();
+        }
+
         WorkspaceChange change = WorkspaceChangeClassifier.Classify(
             fullPath,
-            _trackedSourcePaths,
+            trackedSourcesSnapshot,
             _trackedProjectPaths,
             _workspacePath,
             changeType,
             exists,
-            exists ? File.GetLastWriteTimeUtc(fullPath) : null,
+            lastWriteUtc,
             _includeGenerated);
         if (change.Ignored)
         {

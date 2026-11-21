@@ -4,12 +4,22 @@ namespace RoslynSkills.Core.Commands;
 
 internal static class HotWorkspaceEditRefresh
 {
-    public static async Task<object> RefreshAfterWriteAsync(
+    public static Task<object> RefreshAfterWriteAsync(
         string filePath,
         bool wroteFile,
         CancellationToken cancellationToken)
+        => RefreshAfterWriteAsync(
+            new[] { filePath },
+            wroteFile,
+            allowAddDocuments: false,
+            cancellationToken);
+
+    public static async Task<object> RefreshAfterWriteAsync(
+        IReadOnlyList<string> filePaths,
+        bool wroteFile,
+        bool allowAddDocuments,
+        CancellationToken cancellationToken)
     {
-        string normalizedPath = Path.GetFullPath(filePath);
         if (!wroteFile)
         {
             return new
@@ -22,19 +32,49 @@ internal static class HotWorkspaceEditRefresh
             };
         }
 
-        IWorkspaceHostStore store = WorkspaceHostStoreProvider.Current;
-        HostedWorkspace[] matches = store.List()
-            .Where(workspace => workspace.TrackedSourcePaths.Contains(normalizedPath, PathComparer))
+        string[] normalizedPaths = filePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Distinct(PathComparer)
             .ToArray();
+        if (normalizedPaths.Length == 0)
+        {
+            return new
+            {
+                attempted = false,
+                reason = "no_paths",
+                matched_workspace_count = 0,
+                refreshed_workspace_count = 0,
+                refreshes = Array.Empty<object>(),
+            };
+        }
+
+        IWorkspaceHostStore store = WorkspaceHostStoreProvider.Current;
+        List<(HostedWorkspace Workspace, string[] Paths)> matches = new();
+        foreach (HostedWorkspace workspace in store.List())
+        {
+            string[] matchingPaths = normalizedPaths
+                .Where(path => workspace.TrackedSourcePaths.Contains(path, PathComparer) ||
+                               (allowAddDocuments &&
+                                workspace.Workspace.Solution is { } solution &&
+                                StaticAnalysisWorkspace.FindContainingProjectsForNewSourceFile(solution, path).Count > 0))
+                .ToArray();
+            if (matchingPaths.Length > 0)
+            {
+                matches.Add((workspace, matchingPaths));
+            }
+        }
+
         List<object> refreshes = new();
-        foreach (HostedWorkspace workspace in matches)
+        foreach ((HostedWorkspace workspace, string[] matchingPaths) in matches)
         {
             WorkspaceStatus statusBefore = store.BuildStatus(workspace);
             WorkspaceRefreshResult result = await store.ApplyIncrementalSourceRefreshForPathsAsync(
                     workspace.Handle,
                     statusBefore,
-                    new[] { normalizedPath },
-                    cancellationToken)
+                    matchingPaths,
+                    cancellationToken,
+                    allowAddDocuments)
                 .ConfigureAwait(false);
 
             refreshes.Add(new
@@ -54,8 +94,8 @@ internal static class HotWorkspaceEditRefresh
         return new
         {
             attempted = true,
-            reason = matches.Length == 0 ? "no_matching_hot_workspace" : string.Empty,
-            matched_workspace_count = matches.Length,
+            reason = matches.Count == 0 ? "no_matching_hot_workspace" : string.Empty,
+            matched_workspace_count = matches.Count,
             refreshed_workspace_count = refreshes.Count,
             refreshes = refreshes.ToArray(),
         };

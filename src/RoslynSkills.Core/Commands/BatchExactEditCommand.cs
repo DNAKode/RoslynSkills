@@ -113,24 +113,38 @@ public sealed class BatchExactEditCommand : IAgentCommand
         }
 
         bool canWrite = apply && (!atomic || operationErrors.Count == 0);
-        List<object> fileResults = new();
-        int wroteFileCount = 0;
-        foreach (FileState file in files.Values)
+        List<FileState> orderedFiles = files.Values.ToList();
+        List<string> writtenPaths = new();
+        HashSet<string> writtenSet = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (FileState file in orderedFiles)
         {
             bool changed = !string.Equals(file.OriginalContent, file.UpdatedContent, StringComparison.Ordinal);
-            bool wroteFile = false;
             if (canWrite && changed)
             {
-                await File.WriteAllTextAsync(file.FilePath, file.UpdatedContent, cancellationToken).ConfigureAwait(false);
-                wroteFile = true;
-                wroteFileCount++;
+                await EditFileText.WriteAsync(
+                        file.FilePath,
+                        file.UpdatedContent,
+                        file.Snapshot.Encoding,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                writtenPaths.Add(file.FilePath);
+                writtenSet.Add(file.FilePath);
             }
+        }
 
-            object hotWorkspaceRefresh = await HotWorkspaceEditRefresh.RefreshAfterWriteAsync(
-                    file.FilePath,
-                    wroteFile,
-                    cancellationToken)
-                .ConfigureAwait(false);
+        object batchHotWorkspaceRefresh = await HotWorkspaceEditRefresh.RefreshAfterWriteAsync(
+                writtenPaths,
+                wroteFile: writtenPaths.Count > 0,
+                allowAddDocuments: false,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        List<object> fileResults = new();
+        foreach (FileState file in orderedFiles)
+        {
+            bool changed = !string.Equals(file.OriginalContent, file.UpdatedContent, StringComparison.Ordinal);
+            bool wroteFile = writtenSet.Contains(file.FilePath);
 
             object diagnosticsData = await ExactEditDiagnostics.BuildAsync(
                     file.FilePath,
@@ -148,7 +162,16 @@ public sealed class BatchExactEditCommand : IAgentCommand
                 changed,
                 wrote_file = wroteFile,
                 character_delta = file.UpdatedContent.Length - file.OriginalContent.Length,
-                hot_workspace_refresh = hotWorkspaceRefresh,
+                hot_workspace_refresh = wroteFile
+                    ? batchHotWorkspaceRefresh
+                    : new
+                    {
+                        attempted = false,
+                        reason = "file_not_written",
+                        matched_workspace_count = 0,
+                        refreshed_workspace_count = 0,
+                        refreshes = Array.Empty<object>(),
+                    },
                 diagnostics_after_batch = diagnosticsData,
             });
         }
@@ -165,8 +188,9 @@ public sealed class BatchExactEditCommand : IAgentCommand
             executed_operations = operationResults.Count,
             succeeded_operations = succeeded,
             failed_operations = failed,
-            wrote_file_count = wroteFileCount,
+            wrote_file_count = writtenPaths.Count,
             skipped_apply_due_to_errors = apply && atomic && operationErrors.Count > 0,
+            hot_workspace_refresh = batchHotWorkspaceRefresh,
             operations = operationResults.ToArray(),
             file_results = fileResults.ToArray(),
         };
@@ -260,8 +284,8 @@ public sealed class BatchExactEditCommand : IAgentCommand
         string filePath = Path.GetFullPath(TryGetOptionalString(operation, "file_path") ?? defaultFilePath!);
         if (!files.TryGetValue(filePath, out FileState? file))
         {
-            string content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-            file = new FileState(filePath, content);
+            FileTextSnapshot snapshot = await EditFileText.ReadAsync(filePath, cancellationToken).ConfigureAwait(false);
+            file = new FileState(snapshot);
             files[filePath] = file;
         }
 
@@ -277,9 +301,26 @@ public sealed class BatchExactEditCommand : IAgentCommand
     private static OperationResult ApplyReplaceOperation(JsonElement operation, int index, FileState file)
     {
         string oldText = operation.GetProperty("old_text").GetString()!;
-        string newText = operation.GetProperty("new_text").GetString() ?? string.Empty;
+        string rawNewText = operation.GetProperty("new_text").GetString() ?? string.Empty;
+        string newText = NormalizeTextForFile(file.Snapshot, rawNewText);
         bool replaceAll = InputParsing.GetOptionalBool(operation, "replace_all", defaultValue: false);
-        int matchCount = CountOccurrences(file.UpdatedContent, oldText);
+
+        string effectiveOldText = oldText;
+        int matchCount = CountOccurrences(file.UpdatedContent, effectiveOldText);
+        if (matchCount == 0)
+        {
+            string normalizedOldText = NormalizeTextForFile(file.Snapshot, oldText);
+            if (!string.Equals(normalizedOldText, oldText, StringComparison.Ordinal))
+            {
+                int normalizedCount = CountOccurrences(file.UpdatedContent, normalizedOldText);
+                if (normalizedCount > 0)
+                {
+                    effectiveOldText = normalizedOldText;
+                    matchCount = normalizedCount;
+                }
+            }
+        }
+
         if (matchCount == 0)
         {
             CommandError error = new("old_text_not_found", $"Operation {index} old_text was not found.");
@@ -294,8 +335,8 @@ public sealed class BatchExactEditCommand : IAgentCommand
 
         string before = file.UpdatedContent;
         file.UpdatedContent = replaceAll
-            ? file.UpdatedContent.Replace(oldText, newText, StringComparison.Ordinal)
-            : ReplaceFirst(file.UpdatedContent, oldText, newText);
+            ? file.UpdatedContent.Replace(effectiveOldText, newText, StringComparison.Ordinal)
+            : ReplaceFirst(file.UpdatedContent, effectiveOldText, newText);
         object data = BuildOperationData(index, "replace_text", file.FilePath, matchCount, !string.Equals(before, file.UpdatedContent, StringComparison.Ordinal), null);
         return OperationResult.Succeeded(data);
     }
@@ -303,9 +344,26 @@ public sealed class BatchExactEditCommand : IAgentCommand
     private static OperationResult ApplyInsertOperation(JsonElement operation, int index, FileState file)
     {
         string anchorText = operation.GetProperty("anchor_text").GetString()!;
-        string insertText = operation.GetProperty("insert_text").GetString() ?? string.Empty;
+        string rawInsertText = operation.GetProperty("insert_text").GetString() ?? string.Empty;
+        string insertText = NormalizeTextForFile(file.Snapshot, rawInsertText);
         string position = GetPosition(operation);
-        int matchCount = CountOccurrences(file.UpdatedContent, anchorText);
+
+        string effectiveAnchorText = anchorText;
+        int matchCount = CountOccurrences(file.UpdatedContent, effectiveAnchorText);
+        if (matchCount == 0)
+        {
+            string normalizedAnchorText = NormalizeTextForFile(file.Snapshot, anchorText);
+            if (!string.Equals(normalizedAnchorText, anchorText, StringComparison.Ordinal))
+            {
+                int normalizedCount = CountOccurrences(file.UpdatedContent, normalizedAnchorText);
+                if (normalizedCount > 0)
+                {
+                    effectiveAnchorText = normalizedAnchorText;
+                    matchCount = normalizedCount;
+                }
+            }
+        }
+
         if (matchCount == 0)
         {
             CommandError error = new("anchor_text_not_found", $"Operation {index} anchor_text was not found.");
@@ -318,10 +376,10 @@ public sealed class BatchExactEditCommand : IAgentCommand
             return OperationResult.Failed(BuildOperationData(index, "insert_text", file.FilePath, matchCount, false, error), error);
         }
 
-        int anchorIndex = file.UpdatedContent.IndexOf(anchorText, StringComparison.Ordinal);
+        int anchorIndex = file.UpdatedContent.IndexOf(effectiveAnchorText, StringComparison.Ordinal);
         int insertIndex = position.Equals("before", StringComparison.OrdinalIgnoreCase)
             ? anchorIndex
-            : anchorIndex + anchorText.Length;
+            : anchorIndex + effectiveAnchorText.Length;
         file.UpdatedContent = string.Concat(file.UpdatedContent.AsSpan(0, insertIndex), insertText, file.UpdatedContent.AsSpan(insertIndex));
         object data = BuildOperationData(index, "insert_text", file.FilePath, matchCount, true, null, position.ToLowerInvariant());
         return OperationResult.Succeeded(data);
@@ -331,7 +389,8 @@ public sealed class BatchExactEditCommand : IAgentCommand
     {
         int spanStart = operation.GetProperty("span_start").GetInt32();
         int spanLength = GetSpanLength(operation, spanStart);
-        string newText = operation.GetProperty("new_text").GetString() ?? string.Empty;
+        string rawNewText = operation.GetProperty("new_text").GetString() ?? string.Empty;
+        string newText = NormalizeTextForFile(file.Snapshot, rawNewText);
         if (spanLength < 0 ||
             spanStart > file.UpdatedContent.Length ||
             spanLength > file.UpdatedContent.Length - spanStart)
@@ -343,7 +402,8 @@ public sealed class BatchExactEditCommand : IAgentCommand
         string currentText = file.UpdatedContent.Substring(spanStart, spanLength);
         string? expectedText = TryGetOptionalString(operation, "expected_text");
         if (expectedText is not null &&
-            !string.Equals(currentText, expectedText, StringComparison.Ordinal))
+            !string.Equals(currentText, expectedText, StringComparison.Ordinal) &&
+            !string.Equals(currentText, NormalizeTextForFile(file.Snapshot, expectedText), StringComparison.Ordinal))
         {
             CommandError error = new("expected_text_mismatch", $"Operation {index} expected_text did not match the span content.");
             return OperationResult.Failed(BuildSpanOperationData(index, file.FilePath, spanStart, spanLength, false, error), error);
@@ -362,6 +422,16 @@ public sealed class BatchExactEditCommand : IAgentCommand
             !string.Equals(before, file.UpdatedContent, StringComparison.Ordinal),
             null);
         return OperationResult.Succeeded(data);
+    }
+
+    private static string NormalizeTextForFile(FileTextSnapshot snapshot, string text)
+    {
+        if (!snapshot.HasCrLf && !snapshot.HasBareLf)
+        {
+            return text;
+        }
+
+        return EditFileText.NormalizeLineEndings(text, snapshot.LineEnding);
     }
 
     private static object BuildOperationData(
@@ -555,12 +625,15 @@ public sealed class BatchExactEditCommand : IAgentCommand
 
     private sealed class FileState
     {
-        public FileState(string filePath, string originalContent)
+        public FileState(FileTextSnapshot snapshot)
         {
-            FilePath = filePath;
-            OriginalContent = originalContent;
-            UpdatedContent = originalContent;
+            Snapshot = snapshot;
+            FilePath = snapshot.FilePath;
+            OriginalContent = snapshot.Text;
+            UpdatedContent = snapshot.Text;
         }
+
+        public FileTextSnapshot Snapshot { get; }
 
         public string FilePath { get; }
 

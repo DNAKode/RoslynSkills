@@ -81,14 +81,23 @@ internal static class CommandLanguageServices
         string source,
         string filePath,
         string language,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ParseOptions? parseOptions = null)
     {
         if (string.Equals(language, LanguageNames.VisualBasic, StringComparison.Ordinal))
         {
-            return VisualBasicSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
+            return VisualBasicSyntaxTree.ParseText(
+                source,
+                options: parseOptions as VisualBasicParseOptions,
+                path: filePath,
+                cancellationToken: cancellationToken);
         }
 
-        return CSharpSyntaxTree.ParseText(source, path: filePath, cancellationToken: cancellationToken);
+        return CSharpSyntaxTree.ParseText(
+            source,
+            options: parseOptions as CSharpParseOptions,
+            path: filePath,
+            cancellationToken: cancellationToken);
     }
 
     public static Compilation CreateCompilation(

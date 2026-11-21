@@ -903,6 +903,7 @@ internal static class WorkspaceSemanticLoader
                 }
             }
 
+            solution = SolutionEditSupport.EnsureDocumentationCommentParsing(solution);
             IReadOnlyList<UnresolvedProjectInfo> unresolvedProjects = WorkspaceProjectResolution.InspectSolution(solution);
             IReadOnlyList<string> mergedDiagnostics = WorkspaceProjectResolution.MergeDiagnostics(diagnostics, unresolvedProjects);
             int projectCount = solution.Projects.Count();
