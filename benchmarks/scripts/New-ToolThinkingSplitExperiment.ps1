@@ -187,7 +187,7 @@ $checklist = @"
    - treatment: `treatment.transcript.jsonl`
 6. Analyze with:
    `pwsh benchmarks/scripts/Analyze-ToolThinkingSplit.ps1 -ControlTranscript <...> -TreatmentTranscript <...> -OutputJson thinking-metrics.json -OutputMarkdown thinking-summary.md`
-7. Record findings in `docs/research-findings.md` and any tooling gaps in `ROSLYN_FALLBACK_REFLECTION_LOG.md`.
+7. Record findings, tooling gaps included, in `docs/research-findings.md`.
 "@
 
 Set-Content -Path $checklistPath -Value $checklist -NoNewline
