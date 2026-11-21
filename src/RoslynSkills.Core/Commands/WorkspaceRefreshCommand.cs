@@ -122,6 +122,9 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
             tracked_paths = displayHosted.TrackedPaths.Count,
             loaded_at_utc = displayHosted.LoadedAtUtc,
             last_refresh_utc = displayHosted.LastRefreshUtc,
+            unresolved_project_count = displayHosted.Workspace.UnresolvedProjects.Count,
+            unresolved_projects = displayHosted.Workspace.UnresolvedProjects,
+            workspace_diagnostics = displayHosted.Workspace.WorkspaceDiagnostics,
             store_workspace_count = workspaceStore.Count,
         };
 

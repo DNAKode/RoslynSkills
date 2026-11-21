@@ -22,6 +22,9 @@ internal static class WorkspaceContextPayload
             project_count = context.project_count,
             document_count = context.document_count,
             workspace_handle = context.workspace_handle,
+            project_resolved = context.project_resolved,
+            project_resolution_issues = context.project_resolution_issues ?? Array.Empty<string>(),
+            unresolved_project_count = context.unresolved_project_count,
         };
     }
 }

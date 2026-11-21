@@ -1,0 +1,15 @@
+<Project>
+  <!-- Microsoft.CodeAnalysis.Workspaces.MSBuild 5.12.0 pulls Microsoft.Build.Framework -> Microsoft.NET.StringTools.
+       Microsoft.Build.Locator 1.11.2 (MSBL001) forbids copying MSBuild assemblies to runtime output because they must
+       be loaded from the registered .NET SDK at runtime. ExcludeAssets="runtime" is not transitive across
+       ProjectReference, so every project referencing RoslynSkills.Core excludes them here.
+       MSBuild 18.12.2 targets net11.0/netstandard2.0 and emits a TFM warning on net10.0; its runtime assets are
+       excluded and the tool runs on .NET 11 by roll-forward. -->
+  <PropertyGroup Condition="$(MSBuildProjectName.StartsWith('RoslynSkills.')) And '$(MSBuildProjectName)' != 'RoslynSkills.Contracts'">
+    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
+  </PropertyGroup>
+  <ItemGroup Condition="$(MSBuildProjectName.StartsWith('RoslynSkills.')) And '$(MSBuildProjectName)' != 'RoslynSkills.Contracts'">
+    <PackageReference Include="Microsoft.Build.Framework" Version="18.12.2" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.StringTools" Version="18.12.2" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

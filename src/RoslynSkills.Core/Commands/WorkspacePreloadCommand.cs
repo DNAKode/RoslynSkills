@@ -111,6 +111,8 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
             can_incrementally_update = status.CanIncrementallyUpdate,
             requires_reload = status.RequiresReload,
             loaded_at_utc = hosted.LoadedAtUtc,
+            unresolved_project_count = loaded.Workspace.UnresolvedProjects.Count,
+            unresolved_projects = loaded.Workspace.UnresolvedProjects,
             workspace_diagnostics = loaded.Workspace.WorkspaceDiagnostics,
             store_workspace_count = workspaceStore.Count,
         };

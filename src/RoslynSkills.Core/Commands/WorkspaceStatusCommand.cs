@@ -65,6 +65,9 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
             tracked_paths = hosted.TrackedPaths.Count,
             loaded_at_utc = hosted.LoadedAtUtc,
             last_refresh_utc = hosted.LastRefreshUtc,
+            unresolved_project_count = hosted.Workspace.UnresolvedProjects.Count,
+            unresolved_projects = hosted.Workspace.UnresolvedProjects,
+            workspace_diagnostics = hosted.Workspace.WorkspaceDiagnostics,
             store_workspace_count = workspaceStore.Count,
         };
 

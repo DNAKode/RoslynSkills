@@ -31,28 +31,17 @@ internal static class WorkspaceAutoRestore
     }
 
     /// <summary>
-    /// True when any project in the solution has source documents but no metadata
-    /// references at all, which indicates NuGet restore assets were absent at load time.
+    /// True when any project in the solution needs NuGet restore (either it has source
+    /// documents with zero metadata references, or it depends on NuGet packages while
+    /// <c>project.assets.json</c> is missing).
     /// </summary>
     public static bool NeedsRestore(Solution solution)
-    {
-        foreach (Project project in solution.Projects)
-        {
-            bool hasDocuments = false;
-            foreach (Document document in project.Documents)
-            {
-                hasDocuments = true;
-                break;
-            }
+        => GetProjectsNeedingRestore(solution).Count > 0;
 
-            if (hasDocuments && project.MetadataReferences.Count == 0)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    public static IReadOnlyList<UnresolvedProjectInfo> GetProjectsNeedingRestore(Solution solution)
+        => WorkspaceProjectResolution.InspectSolution(solution)
+            .Where(project => project.needs_restore)
+            .ToArray();
 
     /// <summary>
     /// Runs <c>dotnet restore</c> for the workspace path. Returns true only when the
@@ -62,7 +51,8 @@ internal static class WorkspaceAutoRestore
     public static async Task<bool> TryRestoreAsync(
         string workspacePath,
         ICollection<string> diagnostics,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<UnresolvedProjectInfo>? projectsNeedingRestore = null)
     {
         if (!File.Exists(workspacePath))
         {
@@ -70,22 +60,65 @@ internal static class WorkspaceAutoRestore
             return false;
         }
 
+        string projectDetail = projectsNeedingRestore is { Count: > 0 }
+            ? $"{projectsNeedingRestore.Count} unresolved project(s) ({string.Join(", ", projectsNeedingRestore.Take(5).Select(p => p.project_name))}{(projectsNeedingRestore.Count > 5 ? ", ..." : string.Empty)})"
+            : "missing restore assets or metadata references";
         diagnostics.Add(
-            $"auto_restore: workspace '{workspacePath}' loaded with zero metadata references; running 'dotnet restore' before reload.");
+            $"auto_restore: workspace '{workspacePath}' loaded with {projectDetail}; running 'dotnet restore' before reload.");
 
-        ProcessStartInfo startInfo = new("dotnet", $"restore \"{workspacePath}\" --nologo -v q")
+        string workingDirectory = Path.GetDirectoryName(workspacePath) ?? Environment.CurrentDirectory;
+        ProcessStartInfo startInfo = new("dotnet", $"restore \"{workspacePath}\" --nologo -v q --disable-build-servers")
         {
+            WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
         // Prevent MSBuild node-reuse workers from outliving the restore while holding
-        // our redirected output handles open.
-        startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
+        // our redirected output handles open, and clear MSBuildLocator-injected vars so
+        // the child dotnet CLI resolves its own SDK cleanly.
+        startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        startInfo.Environment.Remove("MSBUILD_EXE_PATH");
+        startInfo.Environment.Remove("MSBuildSDKsPath");
+        startInfo.Environment.Remove("MSBuildExtensionsPath");
+
+        System.Text.StringBuilder stdoutBuilder = new();
+        System.Text.StringBuilder stderrBuilder = new();
+        TaskCompletionSource<bool> stdoutDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> stderrDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         using Process process = new();
         process.StartInfo = startInfo;
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null)
+            {
+                stdoutDone.TrySetResult(true);
+            }
+            else
+            {
+                lock (stdoutBuilder)
+                {
+                    stdoutBuilder.AppendLine(e.Data);
+                }
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null)
+            {
+                stderrDone.TrySetResult(true);
+            }
+            else
+            {
+                lock (stderrBuilder)
+                {
+                    stderrBuilder.AppendLine(e.Data);
+                }
+            }
+        };
+
         try
         {
             if (!process.Start())
@@ -100,8 +133,8 @@ internal static class WorkspaceAutoRestore
             return false;
         }
 
-        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
 
         using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(RestoreTimeoutSeconds));
@@ -119,21 +152,16 @@ internal static class WorkspaceAutoRestore
         // Drain remaining output. MSBuild worker children can inherit the redirected
         // handles and outlive the restore process, so bound this drain instead of
         // waiting for pipe EOF indefinitely.
-        string stdout;
-        string stderr;
         using (CancellationTokenSource drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
             drainCts.CancelAfter(TimeSpan.FromSeconds(DrainGraceSeconds));
             try
             {
-                stdout = await stdoutTask.WaitAsync(drainCts.Token).ConfigureAwait(false);
-                stderr = await stderrTask.WaitAsync(drainCts.Token).ConfigureAwait(false);
+                await Task.WhenAll(stdoutDone.Task, stderrDone.Task).WaitAsync(drainCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 diagnostics.Add("auto_restore warning: restore output drains incomplete; continuing.");
-                stdout = string.Empty;
-                stderr = string.Empty;
             }
         }
 
@@ -142,7 +170,24 @@ internal static class WorkspaceAutoRestore
             return true;
         }
 
-        string detail = TruncateTail(stderr, FailureDetailMaxLength);
+        string stderrText;
+        string stdoutText;
+        lock (stderrBuilder)
+        {
+            stderrText = stderrBuilder.ToString();
+        }
+
+        lock (stdoutBuilder)
+        {
+            stdoutText = stdoutBuilder.ToString();
+        }
+
+        string combined = string.IsNullOrWhiteSpace(stderrText)
+            ? stdoutText
+            : string.IsNullOrWhiteSpace(stdoutText)
+                ? stderrText
+                : $"{stderrText.Trim()}{Environment.NewLine}{stdoutText.Trim()}";
+        string detail = TruncateTail(combined, FailureDetailMaxLength);
         diagnostics.Add($"auto_restore failed with exit code {process.ExitCode}: {detail}");
         return false;
     }

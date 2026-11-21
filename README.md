@@ -29,8 +29,8 @@ Canonical pit-of-success guide: `docs/PIT_OF_SUCCESS.md`
 
 Prerequisites:
 
-- .NET 10 SDK
-- a C#/.NET repository
+- .NET 10 SDK (or .NET 11 SDK; targets `net10.0` with Roslyn 5.12 and MSBuild 18.12)
+- a restored C#/.NET repository (`dotnet restore` first in a fresh checkout or worktree)
 
 Install:
 
@@ -38,39 +38,36 @@ Install:
 dotnet tool install --global DNAKode.RoslynSkills.Cli --prerelease
 ```
 
-Bootstrap:
+Bootstrap and bind the hot workspace:
 
 ```powershell
+dotnet restore MySolution.slnx
 roscli --version
-roscli llmstxt
+roscli workspace.use MySolution.slnx --require-solution true
 roscli list-commands --stable-only --ids-only
-roscli quickstart
 ```
 
-First semantic flow:
+First semantic flow (runs on the preloaded hot workspace, refreshed from disk before each call):
 
 ```powershell
-roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --first-declaration true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
-roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true --workspace-path MySolution.slnx --require-workspace true
-roscli diag.get_file_diagnostics src/MyProject/File.cs --workspace-path MySolution.slnx --require-workspace true
+roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --first-declaration true --max-results 20
+roscli nav.find_references src/MyProject/File.cs 42 17 --brief true --max-results 50
+roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true
+roscli diag.get_file_diagnostics src/MyProject/File.cs
 ```
 
 ## Best-Results Playbook (For Agents)
 
 Use this sequence to reduce retries and avoid tool-learning churn:
 
-1. `roscli llmstxt` once at session start.
-2. `roscli list-commands --stable-only --ids-only`.
-3. Use direct commands (`nav.*`, `ctx.*`, `edit.*`, `diag.*`) before exploratory `describe-command`.
-4. Keep reads compact (`--brief true`, bounded `--max-results`).
-5. For project-backed code, force workspace semantics. Prefer the repo solution for hot/full-context work:
-`--workspace-path <.sln|.slnx|.csproj|dir> --require-workspace true`.
-Use `.csproj` only when intentionally project-scoped.
-6. Batch read-only discovery when possible:
-`query.batch`, `nav.find_symbol_batch`.
-7. Validate with diagnostics and build/tests before finalizing.
+1. In a fresh worktree, run `dotnet restore` before binding the workspace. (`workspace.use` also auto-restores projects missing `project.assets.json` or metadata references unless `ROSLYNSKILLS_AUTO_RESTORE=false`, and reports any unresolved projects in `unresolved_projects` and `workspace_diagnostics`.)
+2. Bind the solution once with `roscli workspace.use <solution.sln|.slnx> --require-solution true`. Subsequent read-only semantic commands and exact/semantic edits reuse the hot workspace automatically and re-read files modified on disk before each call.
+3. Set `ROSCLI_DAEMON=required` when you want calls that cannot use the hot workspace (or when the daemon is unavailable) to fail closed instead of reloading the solution in-process.
+4. Keep reads compact (`--brief true`, bounded `--max-results`) and check `workspace_context.mode` / `workspace_context.project_resolved` on file queries.
+5. Prefer direct semantic commands (`nav.*`, `ctx.*`, `analyze.*`, `edit.*`, `diag.*`) before exploratory `describe-command` or text search; batch read-only discovery with `query.batch` or `nav.find_symbol_batch`.
+6. Validate with diagnostics and build/tests before finalizing.
 
-High-call performance mode:
+High-call performance mode (from source checkout):
 
 ```powershell
 scripts\roscli-warm.cmd
@@ -127,13 +124,12 @@ Roadmap note:
 
 ```text
 Use roscli for C#/.NET repo edits and diagnostics.
-1) Run once: roscli llmstxt
-2) Use stable commands first: roscli list-commands --stable-only --ids-only
-3) Use describe-command only when argument shape is unclear
-4) For project files require workspace semantics; prefer .sln/.slnx for repo-wide context:
-   --workspace-path <.sln|.slnx|.csproj|dir> --require-workspace true
-5) Prefer semantic nav/edit/diag commands before text fallback
-6) Keep calls brief/bounded, batch read-only discovery when possible
+1) In a fresh worktree, restore first: dotnet restore <solution.sln|.slnx>
+2) Bind the hot workspace once: roscli workspace.use <solution.sln|.slnx> --require-solution true
+3) Use stable commands first: roscli list-commands --stable-only --ids-only
+4) Use describe-command only when argument shape is unclear
+5) Prefer semantic nav/ctx/analyze/edit/diag commands before text fallback
+6) Keep calls brief/bounded; check workspace_context.mode and project_resolved
 7) Verify diagnostics/build/tests before final answer
 ```
 
@@ -147,14 +143,14 @@ Current catalog snapshot:
 
 Command families:
 
-- `nav.*`: symbol/references/invocations/call-graph/navigation
+- `nav.*`: solution-wide symbol, references, implementations, overrides, invocations (including method groups and `new` sites), and call-hierarchy/call-path navigation
 - `ctx.*`: file/member/search/changed-files context retrieval
-- `analyze.*`: analysis slices and risk scans
+- `analyze.*`: analysis slices (control flow, dataflow, impact slice) and risk scans
 - `diag.*`: diagnostics snapshots and diffs
 - `edit.*`: structured semantic edits, batch exact edits, claim-based multi-agent coordination
 - `repair.*`: diagnostics-driven repair planning/application
 - `session.*`: non-destructive single-file edit loop (`.cs`/`.csx`)
-- `workspace.*`: hot-workspace preload, status, and lifecycle for daemon-backed low-latency tool calls
+- `workspace.*` / `daemon.*`: hot-workspace bind (`workspace.use`), preload, status, refresh, and daemon lifecycle
 - `agent-begin` / `csharp-start`: supervised first-command onboarding for fresh agent sessions
 
 ## XmlSkills (`xmlcli`)
@@ -306,7 +302,7 @@ Preview release process:
 
 1. Run `Publish NuGet Preview` workflow.
 2. Set:
-   - `version`: e.g. `0.1.6-preview.18`
+   - `version`: e.g. `0.1.6-preview.21`
    - `run_tests`: `true`
    - `publish`: `true`
    - `publish_release`: `true`

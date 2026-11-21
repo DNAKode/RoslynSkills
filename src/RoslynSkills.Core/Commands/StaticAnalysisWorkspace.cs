@@ -20,6 +20,7 @@ internal sealed class StaticAnalysisWorkspace
     public int ProjectCount { get; }
     public int DocumentCount { get; }
     public IReadOnlyList<string> WorkspaceDiagnostics { get; }
+    public IReadOnlyList<UnresolvedProjectInfo> UnresolvedProjects { get; }
     public IReadOnlyList<SyntaxTree> SyntaxTrees { get; }
     public IReadOnlyList<string> ProjectFilePaths { get; }
     public IReadOnlyDictionary<SyntaxTree, SemanticModel> SemanticModelsByTree { get; }
@@ -36,6 +37,7 @@ internal sealed class StaticAnalysisWorkspace
         int projectCount,
         int documentCount,
         IReadOnlyList<string> workspaceDiagnostics,
+        IReadOnlyList<UnresolvedProjectInfo> unresolvedProjects,
         IReadOnlyList<SyntaxTree> syntaxTrees,
         IReadOnlyList<string> projectFilePaths,
         IReadOnlyDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
@@ -51,6 +53,7 @@ internal sealed class StaticAnalysisWorkspace
         ProjectCount = projectCount;
         DocumentCount = documentCount;
         WorkspaceDiagnostics = workspaceDiagnostics;
+        UnresolvedProjects = unresolvedProjects;
         SyntaxTrees = syntaxTrees;
         ProjectFilePaths = projectFilePaths;
         SemanticModelsByTree = semanticModelsByTree;
@@ -166,6 +169,7 @@ internal sealed class StaticAnalysisWorkspace
             projectCount: 0,
             documentCount: filePaths.Length,
             workspaceDiagnostics: Array.Empty<string>(),
+            unresolvedProjects: Array.Empty<UnresolvedProjectInfo>(),
             syntaxTrees: trees,
             projectFilePaths: Array.Empty<string>(),
             semanticModelsByTree: semanticModelsByTree,
@@ -225,18 +229,22 @@ internal sealed class StaticAnalysisWorkspace
         try
         {
             solution = await OpenSolutionForWorkspacePathAsync(msbuildWorkspace).ConfigureAwait(false);
-            if (WorkspaceAutoRestore.IsEnabled && WorkspaceAutoRestore.NeedsRestore(solution))
+            if (WorkspaceAutoRestore.IsEnabled)
             {
-                bool restored = await WorkspaceAutoRestore
-                    .TryRestoreAsync(workspaceFilePath, diagnostics, cancellationToken)
-                    .ConfigureAwait(false);
-                if (restored)
+                IReadOnlyList<UnresolvedProjectInfo> projectsNeedingRestore = WorkspaceAutoRestore.GetProjectsNeedingRestore(solution);
+                if (projectsNeedingRestore.Count > 0)
                 {
-                    msbuildWorkspace.Dispose();
-                    msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
-                        diagnostics,
-                        includeAllFailureMessages: true);
-                    solution = await OpenSolutionForWorkspacePathAsync(msbuildWorkspace).ConfigureAwait(false);
+                    bool restored = await WorkspaceAutoRestore
+                        .TryRestoreAsync(workspaceFilePath, diagnostics, cancellationToken, projectsNeedingRestore)
+                        .ConfigureAwait(false);
+                    if (restored)
+                    {
+                        msbuildWorkspace.Dispose();
+                        msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
+                            diagnostics,
+                            includeAllFailureMessages: true);
+                        solution = await OpenSolutionForWorkspacePathAsync(msbuildWorkspace).ConfigureAwait(false);
+                    }
                 }
             }
         }
@@ -263,7 +271,7 @@ internal sealed class StaticAnalysisWorkspace
                     rootDirectory,
                     analysisMode,
                     workspaceKind,
-                    diagnostics.Distinct(StringComparer.Ordinal).Take(30).ToArray(),
+                    diagnostics,
                     includeGenerated,
                     maxFiles,
                     cancellationToken)
@@ -338,6 +346,7 @@ internal sealed class StaticAnalysisWorkspace
         Dictionary<string, SyntaxTree> treesByPath = new(PathComparer);
         Dictionary<SyntaxTree, SemanticModel> semanticModelsByTree = new();
         Dictionary<SyntaxTree, SourceText> sourceTextsByTree = new();
+        Dictionary<ProjectId, Compilation> compilationsByProject = new();
         Project[] projects = solution.Projects
             .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -358,6 +367,8 @@ internal sealed class StaticAnalysisWorkspace
             {
                 continue;
             }
+
+            compilationsByProject[project.Id] = compilation;
 
             foreach (Document document in project.Documents.OrderBy(document => document.FilePath ?? document.Name, StringComparer.OrdinalIgnoreCase))
             {
@@ -400,6 +411,13 @@ internal sealed class StaticAnalysisWorkspace
             return (null, new CommandError("no_input_files", $"No C# or VB source files were found in workspace '{workspaceFilePath}'."));
         }
 
+        IReadOnlyList<UnresolvedProjectInfo> unresolvedProjects = WorkspaceProjectResolution.InspectSolution(
+            solution,
+            compilationsByProject);
+        IReadOnlyList<string> mergedDiagnostics = WorkspaceProjectResolution.MergeDiagnostics(
+            diagnostics,
+            unresolvedProjects);
+
         StaticAnalysisWorkspace workspace = new(
             workspacePath: requestedWorkspacePath,
             resolvedWorkspacePath: workspaceFilePath,
@@ -408,7 +426,8 @@ internal sealed class StaticAnalysisWorkspace
             workspaceKind: workspaceKind,
             projectCount: projects.Length,
             documentCount: documentCount,
-            workspaceDiagnostics: diagnostics.Distinct(StringComparer.Ordinal).Take(30).ToArray(),
+            workspaceDiagnostics: mergedDiagnostics,
+            unresolvedProjects: unresolvedProjects,
             syntaxTrees: trees,
             projectFilePaths: projectFilePaths,
             semanticModelsByTree: semanticModelsByTree,

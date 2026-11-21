@@ -2,25 +2,25 @@
 
 RoslynSkills (`DNAKode/RoslynSkills`) is an engineering-first research program evaluating whether Roslyn-native tooling materially improves agentic coding for C#/.NET versus text-first workflows.
 
-## Current State (2026-05-24)
+## Current State (2026-11-21)
 
 ### What's implemented
 
-- **`roscli`**: 64 commands across `nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, and `workspace.*` families (50 stable, 11 advanced, 3 experimental).
-- **Transport modes**: CLI process-per-call, published-DLL cache, MCP server (stdio JSON-RPC), transport server, hot workspace daemon.
-- **Edit primitives**: `edit.rename_symbol`, `edit.transaction`, `edit.batch_exact`, `edit.replace_in_member`, `edit.replace_text`, `edit.insert_text`, `edit.claim`, `edit.create_file`.
-- **Multi-agent coordination**: Claim-based file/member ownership with claim-before-mutation workflow.
-- **Hot workspace**: Daemon-backed solution preload with `workspace.preload`, aliased as `default` for zero-handle context/editing commands.
-- **Supervised onboarding**: `agent-start` and `csharp-start` with two-turn transcript-verification protocol for fresh agent sessions.
+- **`roscli`**: 64 commands across `nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, and `daemon.*` families (50 stable, 11 advanced, 3 experimental). Built on `net10.0` with Roslyn `5.12.0`, MSBuild `18.12.2`, and `Microsoft.Build.Locator` `1.11.2` (supports both .NET 10 and .NET 11 SDK workspaces and source generators).
+- **Hot workspace daemon**: `workspace.use <solution.slnx>` starts the daemon, preloads the solution once, and binds the `default` alias. Every read-only semantic command (`nav.*`, `analyze.*`, read-only `ctx.*`/`diag.*`/`repair.propose_*`) plus exact/semantic `edit.*` commands run on the hot workspace (see `docs/architecture.md` for routing, freshness, and `ROSCLI_DAEMON=required` fail-closed behavior).
+- **Solution-wide semantic queries**: references, implementations, overrides, invocations, call hierarchy, call path, and impact slice span every project in the loaded solution; call-site searches include method groups converted to delegates and `new`/constructor sites.
+- **Restore & unresolved-project reporting**: restore first in a fresh worktree (`dotnet restore`). `workspace.use`/`workspace.preload` auto-restores projects missing `project.assets.json` or metadata references by default (`ROSLYNSKILLS_AUTO_RESTORE`), reports every remaining unresolved project in `unresolved_projects` and `workspace_diagnostics`, and marks `workspace_context.project_resolved: false` on queries against unresolved projects.
+- **Edit & coordination primitives**: `edit.rename_symbol`, `edit.change_signature`, `edit.transaction`, `edit.batch_exact`, `edit.replace_in_member`, `edit.replace_text`, `edit.insert_text`, `edit.claim`, `edit.create_file`.
+- **Transport modes**: CLI process-per-call, published-DLL cache, hot workspace daemon, MCP server (stdio JSON-RPC), transport server.
+- **Supervised onboarding**: `agent-start`, `agent-begin`, and `csharp-start` for fresh agent sessions.
 - **Benchmark harness**: Paired-run A/B trials, OSS pilot runs, Claude skill-trigger studies, tool-thinking split-lane analysis.
-- **XmlSkills**: In-repo XML/XAML CLI (`xmlcli`) with validate/outline/find/replace commands, feature-gated parser backend comparison.
+- **XmlSkills**: In-repo XML/XAML CLI (`xmlcli`) with validate/outline/find/replace commands.
 
-### Active architecture
+### Active defaults
 
-- Solution workspace binding preferred over project-scoped; hot daemon for repeated calls.
-- Exact-text edits (`edit.batch_exact`, `edit.replace_in_member`) are the primary mutation surface for agents.
-- `edit.claim` required before mutation in supervised multi-agent runs.
-- `agent-start` / `csharp-start` are the recommended fresh-pane onboarding commands.
+- Restore first (`dotnet restore`), then bind the solution via `roscli workspace.use <solution.sln|.slnx> --require-solution true`.
+- Set `ROSCLI_DAEMON=required` when silent in-process solution reloads are unacceptable.
+- Exact-text edits (`edit.batch_exact`, `edit.replace_in_member`) and semantic edits (`edit.rename_symbol`, `edit.change_signature`) are the primary mutation surface; `edit.claim` coordinates multi-agent ownership.
 - `ctx.changed_files` for dirty-worktree orientation; `ctx.member_source` with `focus_text` for large-member exploration.
 
 ### Key unresolved
@@ -28,7 +28,6 @@ RoslynSkills (`DNAKode/RoslynSkills`) is an engineering-first research program e
 - Roslyn token/latency overhead vs text-first on microtasks — semantic tooling adds cost when ambiguity is low.
 - LSP comparator lane remains confounded by timeout/indexing instability.
 - Open-ended large-task comparisons confounded by trajectory variance; bounded-run protocol needed.
-- Hot workspace daemon reliability under concurrent access.
 
 ## Session-Start Quick Reference
 

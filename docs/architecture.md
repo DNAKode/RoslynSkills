@@ -1,25 +1,26 @@
 # RoslynSkills Architecture
 
-Date: 2026-05-24
+Date: 2026-11-21
 Status: Reflects current implementation (supersedes the Feb 2026 planning docs archived in `docs/archive/`).
 
 ## Overview
 
-RoslynSkills provides Roslyn-native CLI (`roscli`) and MCP tooling for coding agents working on C#/.NET repositories. It replaces fragile text-only edits with semantic symbol targeting, structured edits, and workspace-aware diagnostics.
+RoslynSkills provides Roslyn-native CLI (`roscli`) and MCP tooling for coding agents working on C#/.NET and VB.NET repositories. It targets `net10.0` using Roslyn `5.12.0` (`Microsoft.CodeAnalysis.*`), MSBuild `18.12.2` (`Microsoft.Build.*` compile-only via `ExcludeAssets="runtime"`), and `Microsoft.Build.Locator` `1.11.2`, enabling full semantic compilation and source-generator execution against both .NET 10 and .NET 11 SDK workspaces.
 
 ## Component Map
 
 ### `src/RoslynSkills.Core`
 Roslyn workspace management, command implementations, and the command registry.
 
-- **Workspace binding**: `WorkspaceSemanticLoader` handles solution/project discovery, MSBuildLocator registration (prefers .NET SDK MSBuild), and ad-hoc/workspace mode fallback.
-- **Commands**: ~64 commands across families (`nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, plus `agent-begin`/`csharp-start`).
-- **Registry**: `DefaultRegistryFactory` wires commands with input/output schemas, maturity tags, and pit-of-success hints.
+- **Workspace binding & resolution**: `WorkspaceSemanticLoader` and `StaticAnalysisWorkspace` handle solution/project discovery, `MSBuildLocator` registration (preferring the latest installed .NET SDK MSBuild), auto-restore (`WorkspaceAutoRestore`), and project resolution checks (`WorkspaceProjectResolution`).
+- **Commands**: 64 commands across families (`nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, `daemon.*`, plus `agent-begin`/`csharp-start`/`text.measure`).
+- **Registry**: `DefaultRegistryFactory` wires commands with descriptors (including `RunsOnHotWorkspace`, maturity tags, and traits).
 
 ### `src/RoslynSkills.Cli`
 Cross-platform CLI host. Shell-agnostic launchers in `scripts/roscli(.cmd)`.
 
-- **Invocation modes**: `dotnet run` (dev default), published DLL cache (`ROSCLI_USE_PUBLISHED=1` for high-volume agent loops).
+- **Daemon routing**: Routes hot-capable commands to `RoslynSkills.WorkspaceHost` automatically when an alias is bound (`ROSCLI_DAEMON=auto` by default). Setting `ROSCLI_DAEMON=required` fails closed (`hot_workspace_unsupported` or `daemon_unavailable`) instead of reloading the solution in-process. `--no-daemon` or `ROSCLI_DAEMON=off` forces the in-process path.
+- **Invocation modes**: `dotnet run` (dev default), published DLL cache (`ROSCLI_USE_PUBLISHED=1` for high-volume agent loops), or installed global tool (`roscli`).
 - **Input modes**: direct shorthand (positional args), `--input @file.json`, `--input-stdin`.
 - **Output**: JSON envelopes with `Ok`, `CommandId`, `Data`, `Preview`, `Summary`, `Errors`.
 
@@ -30,7 +31,11 @@ JSON-RPC MCP server over stdio. Maps the command registry to MCP `tools/list` an
 Persistent transport server for low-latency warm-state tool calls (experimental lane).
 
 ### `src/RoslynSkills.WorkspaceHost`
-Daemon for hot-workspace reuse. `workspace.preload` loads a solution once; subsequent commands whose descriptor sets `RunsOnHotWorkspace` (every `nav.*` and `analyze.*` command, the read-only `ctx.*`/`diag.*`/`repair.propose_*` semantic commands and the exact/semantic `edit.*` commands) reuse the in-memory workspace. Eliminates per-call MSBuild workspace bind overhead. The host re-reads files changed on disk before each routed call, and usage searches (references, invocations, call graph, implementations) span every project of the loaded solution.
+Daemon for hot-workspace reuse over named pipes (Windows) or Unix domain sockets.
+
+- **Command coverage**: `workspace.use` / `workspace.preload` loads a solution once and binds an alias (default: `default`). Every command whose descriptor sets `RunsOnHotWorkspace` — all `nav.*` and `analyze.*` commands, all read-only `ctx.*`/`diag.*`/`repair.propose_*` semantic commands, and exact/semantic `edit.*` commands — runs directly against the in-memory solution without re-running MSBuild.
+- **Freshness before each routed call**: Before executing a routed command, `HotWorkspaceFreshness` checks disk timestamps and applies `refresh_policy` (`auto` default incrementally updates modified source documents in the in-memory Roslyn solution; `strict` also reloads on structural/project changes; `none` skips refresh). Structured hot edits (`edit.rename_symbol`, `edit.change_signature`) refresh modified files in the host immediately after writing.
+- **Solution-wide semantic searches**: Usage and hierarchy queries (`nav.find_references`, `nav.find_implementations`, `nav.find_overrides`, `nav.find_invocations`, `nav.call_hierarchy`, `nav.call_path`, `analyze.impact_slice`) span every project in the loaded solution. Call-site searches (`nav.find_invocations`, `nav.call_hierarchy`, `nav.call_path`) include method groups converted to delegates and `new`/constructor sites (including implicit `new()` object creation).
 
 ### `src/XmlSkills.*`
 In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monorepo.
@@ -39,14 +44,14 @@ In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monor
 
 | Family | Purpose | Maturity |
 |---|---|---|
-| `nav.*` | Symbol/references/invocations/call-hierarchy navigation | 50 stable |
+| `nav.*` | Solution-wide symbol, references, implementations, overrides, invocations, call hierarchy/path | 50 stable |
 | `ctx.*` | File outline, member source, text search, changed files, symbol envelope | + 11 advanced |
-| `edit.*` | Semantic renames, batch-exact edits, replace-in-member, insert/claim/create | + 3 experimental |
+| `edit.*` | Semantic renames/signature changes, batch-exact edits, replace-in-member, insert/claim/create | + 3 experimental |
 | `diag.*` | File/solution/workspace diagnostics snapshots and diffs | = 64 total |
-| `analyze.*` | Control flow, dataflow, async risk, dependency violations, unused symbols | |
+| `analyze.*` | Control flow, dataflow, impact slice, async risk, dependency violations, unused symbols | |
 | `repair.*` | Diagnostics-driven repair planning and application | |
 | `session.*` | Non-destructive .cs/.csx edit loop with diff/commit | |
-| `workspace.*` | Hot-workspace preload, status, refresh, lifecycle | |
+| `workspace.*` / `daemon.*` | Hot-workspace bind (`workspace.use`), preload, status, refresh, lifecycle | |
 | `agent-begin` / `csharp-start` | Supervised first-command onboarding for fresh agent sessions | |
 
 ## Transport Modes
@@ -61,16 +66,16 @@ In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monor
 
 ## Workspace Model
 
-- **Ad-hoc**: Loose file, no project context. `workspace_context.mode=ad_hoc`.
-- **Project**: Single `.csproj`/`.vbproj` binding. `mode=workspace`.
+- **Ad-hoc**: Loose file, no project context (`workspace_context.mode=ad_hoc`).
+- **Project**: Single `.csproj`/`.vbproj` binding (`mode=workspace`).
 - **Solution**: `.sln`/`.slnx` binding, preferred for repo-wide context. Surfaces `workspace_kind`, `project_count`, `document_count`.
-- **Hot daemon**: Preloaded solution in a persistent process. `workspace_cache_mode=process_hot`. Aliased as `default` after preload.
+- **Hot daemon**: Preloaded solution in a persistent process (`workspace_cache_mode=process_hot`), aliased as `default` via `workspace.use`.
 
 Key rules:
-- Prefer `.sln`/`.slnx` for repo-wide or hot-host context.
-- Use `--require-workspace true` when ad-hoc fallback is unacceptable.
-- Verify `workspace_context.mode` on nav/diag file commands.
-- `workspace` mode is necessary but not sufficient — validate that diagnostics don't include `CS0518` (missing core reference assemblies).
+- **Restore first in a fresh worktree**: Run `dotnet restore` before loading a solution. When `ROSLYNSKILLS_AUTO_RESTORE` is enabled (the default), workspace load detects projects with zero metadata references or missing `project.assets.json` for `PackageReference`/`PackageDownload` dependencies and runs `dotnet restore` before reloading.
+- **Unresolved-project reporting**: Any project that still fails to resolve (missing restore assets, zero metadata references, unresolved `ProjectReference`, or broken `System.Object`) is reported in `unresolved_projects` and as `unresolved_project:` entries in `workspace_diagnostics` on `workspace.use`/`preload`/`status`/`refresh`. Queries against a file in an unresolved project set `workspace_context.project_resolved: false` with `project_resolution_issues`.
+- Prefer `.sln`/`.slnx` for repo-wide or hot-host context; use `--require-workspace true` when ad-hoc fallback is unacceptable.
+- Use `ROSCLI_DAEMON=required` when a hot workspace is mandatory so unsupported commands or a stopped daemon fail closed instead of reloading in-process.
 
 ## Edit Primitives
 

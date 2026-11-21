@@ -400,7 +400,15 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         data["workspace_path"] = workspacePath;
         data["require_workspace"] = requireWorkspace;
         data["workspace_context"] = WorkspaceContextPayload.Build(anchorAnalysis.WorkspaceContext);
-        data["diagnostics_context"] = new { mode = "workspace", note = "Diagnostics are project-backed from the resolved workspace of the anchor file." };
+        string diagnosticsNote = anchorAnalysis.WorkspaceContext.project_resolved == false
+            ? $"Anchor project is unresolved ({string.Join("; ", anchorAnalysis.WorkspaceContext.project_resolution_issues ?? Array.Empty<string>())}); diagnostics may include false missing-type errors until restored."
+            : "Diagnostics are project-backed from the resolved workspace of the anchor file.";
+        data["diagnostics_context"] = new
+        {
+            mode = "workspace",
+            project_resolved = anchorAnalysis.WorkspaceContext.project_resolved,
+            note = diagnosticsNote,
+        };
         data["total_files"] = filePaths.Length;
         data["total_diagnostics"] = filteredDiagnostics.Count;
         data["returned_diagnostics"] = returnedDiagnostics.Length;

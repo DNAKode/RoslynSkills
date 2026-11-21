@@ -5,6 +5,7 @@ using System.Text.Json;
 
 namespace RoslynSkills.Core.Tests;
 
+[Collection("WorkspaceAutoRestore")]
 public sealed class VbCommandTests
 {
     [Fact]
@@ -180,6 +181,9 @@ public sealed class VbCommandTests
                 <TargetFramework>net10.0</TargetFramework>
                 <OptionStrict>On</OptionStrict>
               </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit" Version="2.9.3" />
+              </ItemGroup>
             </Project>
             """);
         await File.WriteAllTextAsync(
@@ -194,9 +198,13 @@ public sealed class VbCommandTests
         await File.WriteAllTextAsync(
             consumerPath,
             """
+            Imports Xunit
+
             Public Class Consumer
                 Public Function Use(service As Service) As Integer
-                    Return service.Transform(2)
+                    Dim result As Integer = service.Transform(2)
+                    Assert.Equal(4, result)
+                    Return result
                 End Function
             End Class
             """);
@@ -207,8 +215,8 @@ public sealed class VbCommandTests
             JsonElement input = ToJsonElement(new
             {
                 file_path = consumerPath,
-                line = 3,
-                column = 26,
+                line = 5,
+                column = 41,
                 brief = true,
                 max_results = 20,
             });
@@ -218,6 +226,7 @@ public sealed class VbCommandTests
             Assert.True(result.Ok);
             string json = JsonSerializer.Serialize(result.Data);
             Assert.Contains("auto_restore", json);
+            Assert.Contains("\"project_resolved\":true", json);
             Assert.Contains("\"total_matches\":1", json);
         }
         finally

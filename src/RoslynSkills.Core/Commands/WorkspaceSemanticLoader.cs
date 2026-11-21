@@ -1,4 +1,4 @@
-﻿using Microsoft.Build.Locator;
+using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
@@ -23,7 +23,10 @@ internal sealed record WorkspaceContextInfo(
     string? workspace_kind = null,
     int project_count = 0,
     int document_count = 0,
-    string? workspace_handle = null);
+    string? workspace_handle = null,
+    bool? project_resolved = null,
+    IReadOnlyList<string>? project_resolution_issues = null,
+    int unresolved_project_count = 0);
 
 internal sealed record WorkspaceSemanticLoadResult(
     string file_path,
@@ -139,6 +142,19 @@ internal static class WorkspaceSemanticLoader
 
                         SourceText sourceText = await syntaxTree.GetTextAsync(cancellationToken).ConfigureAwait(false);
                         SyntaxNode root = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+                        IReadOnlyList<string> projectIssues = WorkspaceProjectResolution.ResolveProjectIssues(
+                            cachedWorkspace.state.UnresolvedProjects,
+                            document.Project,
+                            compilation);
+                        bool projectResolved = projectIssues.Count == 0;
+                        IReadOnlyList<string> effectiveDiagnostics = EnsureProjectResolutionDiagnostic(
+                            cachedWorkspace.state.Diagnostics,
+                            document.Project,
+                            projectIssues);
+                        int unresolvedProjectCount = projectResolved
+                            ? cachedWorkspace.state.UnresolvedProjects.Count
+                            : Math.Max(1, cachedWorkspace.state.UnresolvedProjects.Count);
+
                         WorkspaceContextInfo workspaceContext = new(
                             mode: "workspace",
                             resolution_source: candidatePlan.resolution_source,
@@ -147,14 +163,17 @@ internal static class WorkspaceSemanticLoader
                             project_path: document.Project.FilePath,
                             fallback_reason: null,
                             attempted_workspace_paths: attemptedWorkspacePaths.ToArray(),
-                            workspace_diagnostics: cachedWorkspace.state.Diagnostics,
+                            workspace_diagnostics: effectiveDiagnostics,
                             workspace_load_duration_ms: (int)workspaceLoadTimer.ElapsedMilliseconds,
                             msbuild_registration_duration_ms: msbuildRegistrationDurationMs,
                             workspace_cache_mode: cachedWorkspace.workspace_cache_mode,
                             workspace_cache_hit: cachedWorkspace.workspace_cache_hit,
                             workspace_kind: candidate.kind,
                             project_count: cachedWorkspace.state.ProjectCount,
-                            document_count: cachedWorkspace.state.DocumentCount);
+                            document_count: cachedWorkspace.state.DocumentCount,
+                            project_resolved: projectResolved,
+                            project_resolution_issues: projectIssues,
+                            unresolved_project_count: unresolvedProjectCount);
 
                         return new WorkspaceSemanticLoadResult(
                             file_path: normalizedFilePath,
@@ -319,22 +338,38 @@ internal static class WorkspaceSemanticLoader
         Document? document = hosted.Workspace.Solution is null
             ? null
             : FindDocument(hosted.Workspace.Solution, normalizedFilePath);
+        IReadOnlyList<string> projectIssues = WorkspaceProjectResolution.ResolveProjectIssues(
+            hosted.Workspace.UnresolvedProjects,
+            document?.Project,
+            semanticModel.Compilation);
+        bool projectResolved = projectIssues.Count == 0;
+        IReadOnlyList<string> effectiveDiagnostics = EnsureProjectResolutionDiagnostic(
+            hosted.Workspace.WorkspaceDiagnostics,
+            document?.Project,
+            projectIssues);
+        int unresolvedProjectCount = projectResolved
+            ? hosted.Workspace.UnresolvedProjects.Count
+            : Math.Max(1, hosted.Workspace.UnresolvedProjects.Count);
+
         WorkspaceContextInfo workspaceContext = new(
             mode: "workspace",
             resolution_source: "workspace_handle",
             requested_workspace_path: hosted.Workspace.WorkspacePath,
             resolved_workspace_path: hosted.Workspace.ResolvedWorkspacePath,
-            project_path: null,
+            project_path: document?.Project.FilePath,
             fallback_reason: null,
             attempted_workspace_paths: new[] { hosted.Workspace.ResolvedWorkspacePath },
-            workspace_diagnostics: hosted.Workspace.WorkspaceDiagnostics,
+            workspace_diagnostics: effectiveDiagnostics,
             workspace_load_duration_ms: (int)workspaceLoadTimer.ElapsedMilliseconds,
             workspace_cache_mode: "process_hot",
             workspace_cache_hit: true,
             workspace_kind: hosted.Workspace.WorkspaceKind,
             project_count: hosted.Workspace.ProjectCount,
             document_count: hosted.Workspace.DocumentCount,
-            workspace_handle: workspaceHandle);
+            workspace_handle: workspaceHandle,
+            project_resolved: projectResolved,
+            project_resolution_issues: projectIssues,
+            unresolved_project_count: unresolvedProjectCount);
 
         return new WorkspaceSemanticLoadResult(
             file_path: normalizedFilePath,
@@ -347,6 +382,34 @@ internal static class WorkspaceSemanticLoader
             language: language,
             document: document,
             workspace_context: workspaceContext);
+    }
+
+    private static IReadOnlyList<string> EnsureProjectResolutionDiagnostic(
+        IReadOnlyList<string> existingDiagnostics,
+        Project? project,
+        IReadOnlyList<string> projectIssues)
+    {
+        if (projectIssues.Count == 0)
+        {
+            return existingDiagnostics;
+        }
+
+        string projectName = project?.Name ?? "unknown";
+        string? projectPath = project?.FilePath;
+        string expectedDiagnostic = WorkspaceProjectResolution.FormatDiagnostic(
+            new UnresolvedProjectInfo(projectName, projectPath, projectIssues, needs_restore: false));
+
+        if (existingDiagnostics.Any(entry =>
+                string.Equals(entry, expectedDiagnostic, StringComparison.Ordinal) ||
+                (entry.StartsWith(WorkspaceProjectResolution.UnresolvedProjectDiagnosticPrefix, StringComparison.Ordinal) &&
+                 entry.Contains(projectName, StringComparison.OrdinalIgnoreCase))))
+        {
+            return existingDiagnostics;
+        }
+
+        List<string> updated = new(existingDiagnostics.Count + 1) { expectedDiagnostic };
+        updated.AddRange(existingDiagnostics);
+        return updated.ToArray();
     }
 
     internal static void ClearProcessWorkspaceCacheForTests()
@@ -778,21 +841,39 @@ internal static class WorkspaceSemanticLoader
         bool includeAllFailureMessages = false)
     {
         MSBuildWorkspace workspace = MSBuildWorkspace.Create();
-        workspace.WorkspaceFailed += (_, args) =>
+        workspace.RegisterWorkspaceFailedHandler(args =>
         {
-            if (args.Diagnostic.Kind != WorkspaceDiagnosticKind.Failure)
+            string message = args.Diagnostic.Message;
+            bool isFailure = args.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure;
+            bool isRestoreWarning = args.Diagnostic.Kind == WorkspaceDiagnosticKind.Warning &&
+                IsRestoreOrResolutionWarning(message);
+            if (!isFailure && !isRestoreWarning)
             {
                 return;
             }
 
-            string message = args.Diagnostic.Message;
-            if (includeAllFailureMessages || ShouldIncludeWorkspaceDiagnostic(message))
+            if (includeAllFailureMessages || isRestoreWarning || ShouldIncludeWorkspaceDiagnostic(message))
             {
-                diagnostics.Add(message);
+                lock (diagnostics)
+                {
+                    diagnostics.Add(message);
+                }
             }
-        };
+        });
 
         return workspace;
+    }
+
+    private static bool IsRestoreOrResolutionWarning(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        return message.IndexOf("NETSDK1004", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            message.IndexOf("project.assets.json", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            message.IndexOf("Msbuild failed", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static async Task<LoadedWorkspaceState> CreateLoadedWorkspaceStateAsync(
@@ -805,18 +886,25 @@ internal static class WorkspaceSemanticLoader
         try
         {
             Solution solution = await OpenSolutionAsync(workspace, candidate, cancellationToken).ConfigureAwait(false);
-            if (WorkspaceAutoRestore.IsEnabled && WorkspaceAutoRestore.NeedsRestore(solution))
+            if (WorkspaceAutoRestore.IsEnabled)
             {
-                bool restored = await WorkspaceAutoRestore
-                    .TryRestoreAsync(candidate.path, diagnostics, cancellationToken)
-                    .ConfigureAwait(false);
-                if (restored)
+                IReadOnlyList<UnresolvedProjectInfo> projectsNeedingRestore = WorkspaceAutoRestore.GetProjectsNeedingRestore(solution);
+                if (projectsNeedingRestore.Count > 0)
                 {
-                    workspace.Dispose();
-                    workspace = CreateTrackedMsBuildWorkspace(diagnostics);
-                    solution = await OpenSolutionAsync(workspace, candidate, cancellationToken).ConfigureAwait(false);
+                    bool restored = await WorkspaceAutoRestore
+                        .TryRestoreAsync(candidate.path, diagnostics, cancellationToken, projectsNeedingRestore)
+                        .ConfigureAwait(false);
+                    if (restored)
+                    {
+                        workspace.Dispose();
+                        workspace = CreateTrackedMsBuildWorkspace(diagnostics);
+                        solution = await OpenSolutionAsync(workspace, candidate, cancellationToken).ConfigureAwait(false);
+                    }
                 }
             }
+
+            IReadOnlyList<UnresolvedProjectInfo> unresolvedProjects = WorkspaceProjectResolution.InspectSolution(solution);
+            IReadOnlyList<string> mergedDiagnostics = WorkspaceProjectResolution.MergeDiagnostics(diagnostics, unresolvedProjects);
             int projectCount = solution.Projects.Count();
             int documentCount = solution.Projects.Sum(project => project.Documents.Count());
             IReadOnlyDictionary<string, long> trackedFileWriteTimesUtc = CaptureTrackedFileWriteTimes(candidate.path, solution);
@@ -824,7 +912,8 @@ internal static class WorkspaceSemanticLoader
                 workspace,
                 solution,
                 trackedFileWriteTimesUtc,
-                diagnostics.Distinct(StringComparer.Ordinal).Take(30).ToArray(),
+                mergedDiagnostics,
+                unresolvedProjects,
                 projectCount,
                 documentCount);
         }
@@ -1099,6 +1188,7 @@ internal static class WorkspaceSemanticLoader
             Solution solution,
             IReadOnlyDictionary<string, long> trackedFileWriteTimesUtc,
             IReadOnlyList<string> diagnostics,
+            IReadOnlyList<UnresolvedProjectInfo> unresolvedProjects,
             int projectCount,
             int documentCount)
         {
@@ -1106,6 +1196,7 @@ internal static class WorkspaceSemanticLoader
             Solution = solution;
             TrackedFileWriteTimesUtc = trackedFileWriteTimesUtc;
             Diagnostics = diagnostics;
+            UnresolvedProjects = unresolvedProjects;
             ProjectCount = projectCount;
             DocumentCount = documentCount;
         }
@@ -1114,6 +1205,7 @@ internal static class WorkspaceSemanticLoader
         public Solution Solution { get; }
         public IReadOnlyDictionary<string, long> TrackedFileWriteTimesUtc { get; }
         public IReadOnlyList<string> Diagnostics { get; }
+        public IReadOnlyList<UnresolvedProjectInfo> UnresolvedProjects { get; }
         public int ProjectCount { get; }
         public int DocumentCount { get; }
 

@@ -110,10 +110,10 @@ if (-not $SkipTests) {
 
 & (Join-Path $repoRoot "scripts\\skills\\Validate-Skills.ps1")
 
-Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $cliProjectPath, "-c", $Configuration, "-o", $cliPublishDir, "--nologo")
-Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $xmlCliProjectPath, "-c", $Configuration, "-o", $xmlCliPublishDir, "--nologo")
-Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $mcpProjectPath, "-c", $Configuration, "-o", $mcpPublishDir, "--nologo")
-Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $transportProjectPath, "-c", $Configuration, "-o", $transportPublishDir, "--nologo")
+Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $cliProjectPath, "-c", $Configuration, "-o", $cliPublishDir, "--nologo", "-p:Version=$normalizedVersion")
+Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $xmlCliProjectPath, "-c", $Configuration, "-o", $xmlCliPublishDir, "--nologo", "-p:Version=$normalizedVersion")
+Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $mcpProjectPath, "-c", $Configuration, "-o", $mcpPublishDir, "--nologo", "-p:Version=$normalizedVersion")
+Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("publish", $transportProjectPath, "-c", $Configuration, "-o", $transportPublishDir, "--nologo", "-p:Version=$normalizedVersion")
 
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @(
     "pack",
