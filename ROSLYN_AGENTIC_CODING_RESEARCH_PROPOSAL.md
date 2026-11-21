@@ -1,4 +1,4 @@
-﻿# Research Proposal: Roslyn-Native Agentic Coding for C#/.NET
+# Research Proposal: Roslyn-Native Agentic Coding for C#/.NET
 
 Date: February 8, 2026  
 Status: Active implementation and benchmark validation (proposal remains source of truth for RQs/methodology)
@@ -402,12 +402,16 @@ This captures practical utility and adoption, not only raw correctness.
 
 ## 13. Immediate Next Steps
 
-1. Produce detailed research plan with actionable projects and acceptance criteria.
-2. Define operation-surface taxonomy and command-language candidates.
-3. Design benchmark scaffolding requirements and artifact schema.
-4. Draft cross-referenced detailed design and implementation/test plans.
-5. Implement agent-in-the-loop A/B evaluation protocol with tool-choice and self-report logging.
-6. Begin implementation on unblocked highest-value nodes.
+Items 1–6 below were the initial execution plan (February 2026). All have been completed. Current state is tracked in `AGENTS.md` and the new `docs/architecture.md`.
+
+1. ~~Produce detailed research plan with actionable projects and acceptance criteria.~~ ✓
+2. ~~Define operation-surface taxonomy and command-language candidates.~~ ✓
+3. ~~Design benchmark scaffolding requirements and artifact schema.~~ ✓
+4. ~~Draft cross-referenced detailed design and implementation/test plans.~~ ✓
+5. ~~Implement agent-in-the-loop A/B evaluation protocol with tool-choice and self-report logging.~~ ✓
+6. ~~Begin implementation on unblocked highest-value nodes.~~ ✓
+
+Current active work (May 2026): hot workspace daemon, multi-agent claim-based edit coordination, supervised agent onboarding (`agent-start`/`csharp-start`), exact-edit primitives (`edit.batch_exact`, `edit.replace_in_member`, `edit.insert_text`), and trajectory-level context-size optimization.
 
 ---
 

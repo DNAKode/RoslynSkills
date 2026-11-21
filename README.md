@@ -141,66 +141,35 @@ Use roscli for C#/.NET repo edits and diagnostics.
 
 Current catalog snapshot:
 
-- `roscli list-commands --ids-only` -> `47` commands
-- maturity counts: `stable=33`, `advanced=11`, `experimental=3`
+- `roscli list-commands --ids-only` -> `64` commands
+- maturity counts: `stable=50`, `advanced=11`, `experimental=3`
 - `roscli llmstxt` defaults to stable-only startup guidance (`--full` for complete catalog)
 
 Command families:
 
 - `nav.*`: symbol/references/invocations/call-graph/navigation
-- `ctx.*`: file/member/search context retrieval
+- `ctx.*`: file/member/search/changed-files context retrieval
 - `analyze.*`: analysis slices and risk scans
 - `diag.*`: diagnostics snapshots and diffs
-- `edit.*`: structured semantic edits and transactions
+- `edit.*`: structured semantic edits, batch exact edits, claim-based multi-agent coordination
 - `repair.*`: diagnostics-driven repair planning/application
 - `session.*`: non-destructive single-file edit loop (`.cs`/`.csx`)
+- `workspace.*`: hot-workspace preload, status, and lifecycle for daemon-backed low-latency tool calls
+- `agent-begin` / `csharp-start`: supervised first-command onboarding for fresh agent sessions
 
-## XmlSkills Preview (`xmlcli`)
+## XmlSkills (`xmlcli`)
 
-This repo now also includes an XML/XAML-focused CLI lane, `XmlSkills`, with separate projects:
-
-- `src/XmlSkills.Contracts`
-- `src/XmlSkills.Core`
-- `src/XmlSkills.Cli`
-- `tests/XmlSkills.Cli.Tests`
-
-Install preview tool:
+This repo also includes an XML/XAML-focused CLI lane for agents working with `.xaml`, `.xml`, and `.csproj` files.
 
 ```powershell
 dotnet tool install --global DNAKode.XmlSkills.Cli --prerelease
 ```
 
-Startup sequence:
-
 ```powershell
 xmlcli llmstxt
-xmlcli list-commands --ids-only
-xmlcli xml.validate_document App.xaml
-xmlcli xml.file_outline App.xaml --brief true --max-nodes 120
-```
-
-Current stable commands:
-
-- `xml.backend_capabilities`
-- `xml.validate_document`
-- `xml.file_outline`
-- `xml.find_elements`
-- `xml.replace_element_text` (dry-run by default, `--apply true` to persist)
-
-Experimental research command:
-
-- `xml.parse_compare` (strict `xdocument` vs tolerant `language_xml` output)
-
-Feature flag for experimental backend mode:
-
-```powershell
-$env:XMLCLI_ENABLE_LANGUAGE_XML = "1"
-```
-
-Research script:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-XmlParserBackendComparison.ps1 -EnableLanguageXml
+xmlcli xml.file_outline App.xaml --brief true
+xmlcli xml.find_elements App.xaml Button --brief true --max-results 10
+xmlcli xml.replace_element_text App.xaml "//Button[@Name='Ok']" --new-text "Submit" --apply true
 ```
 
 Guide: `docs/xml/PIT_OF_SUCCESS.md`

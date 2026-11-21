@@ -73,7 +73,7 @@ Then archive:
 - `paired-run-summary.json`,
 - `paired-run-summary.md`,
 - per-run transcripts,
-- scored deltas in `RESEARCH_FINDINGS.md`.
+- scored deltas in `docs/research-findings.md`.
 
 ## External Setup Notes (Claude `csharp-lsp`)
 

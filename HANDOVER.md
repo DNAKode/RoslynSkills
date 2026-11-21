@@ -1,34 +1,82 @@
-RoslynSkills is a Roslyn-native CLI/MCP toolchain (`roscli`) plus benchmark harnesses to test whether semantic tooling improves agent coding outcomes vs text-first baselines. Latest local release build is `v0.1.6-preview.17` (bundle + nupkg built via `scripts/release/Build-ReleaseArtifacts.ps1`), with outputs under `artifacts/release/0.1.6-preview.17/`; the current rollup/matrix remains `benchmarks/experiments/20260213-approach-matrix-v0.1.6-preview.14.md` with supporting narrative in `RESEARCH_FINDINGS.md` and the active plan slice in `DETAILED_RESEARCH_PLAN.md` (P8.1).
+# RoslynSkills Handover
 
-The most important recent correctness finding is a workspace false-positive: `workspace_context.mode=workspace` can still yield nonsense diagnostics like `CS0518` (core types missing) if MSBuildWorkspace binds to an incompatible MSBuild instance (often VS MSBuild lagging preview TFMs). This is fixed in `src/RoslynSkills.Core/Commands/WorkspaceSemanticLoader.cs` by preferring `.NET SDK` MSBuild (`DiscoveryType.DotNetSdk`) during MSBuildLocator registration; it is regression-covered by `tests/RoslynSkills.Core.Tests/WorkspaceSemanticLoaderTests.cs` and documented as a benchmark validity gate in `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md` and `docs/WORKSPACE_CONTEXT_SMOKE.md`.
+RoslynSkills (`DNAKode/RoslynSkills`) is an engineering-first research program evaluating whether Roslyn-native tooling materially improves agentic coding for C#/.NET versus text-first workflows.
 
-For fast roscli-vs-base comparisons, the primary harness is `benchmarks/scripts/Run-PairedAgentRuns.ps1`. It supports Codex reasoning effort via `-CodexReasoningEffort` (wired to `codex exec -c model_reasoning_effort="..."`), has guidance profiles including `brief-first-v2`/`workspace-locked`/`diagnostics-first`/`edit-then-verify`, and has an integrity switch `-FailOnMissingTreatmentRoslynUsage` to prevent treatment lanes silently becoming text-only; harness behavior is pinned by `tests/RoslynSkills.Benchmark.Tests/PairedRunHarnessScriptTests.cs`.
+## Current State (2026-05-24)
 
-Large OSS realism runs are orchestrated by `benchmarks/scripts/Run-OssCsharpPilotRealRuns.ps1` and `benchmarks/experiments/oss-csharp-pilot-v1/manifest.json`. The OSS harness now supports a fail-closed treatment-required condition (`treatment-roslyn-required`) so treatment lanes cannot silently complete with zero Roslyn tool calls. A MediatR treatment-required run is recorded under:
+### What's implemented
 
-- artifacts: `artifacts/real-agent-runs/20260213-110716-oss-csharp-pilot/*`
-- run record: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-110716-oss-csharp-pilot/run-codex-treatment-roslyn-required-mediatr-behavior-targeting-brief-first-r01.json`
+- **`roscli`**: 64 commands across `nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, and `workspace.*` families (50 stable, 11 advanced, 3 experimental).
+- **Transport modes**: CLI process-per-call, published-DLL cache, MCP server (stdio JSON-RPC), transport server, hot workspace daemon.
+- **Edit primitives**: `edit.rename_symbol`, `edit.transaction`, `edit.batch_exact`, `edit.replace_in_member`, `edit.replace_text`, `edit.insert_text`, `edit.claim`, `edit.create_file`.
+- **Multi-agent coordination**: Claim-based file/member ownership with claim-before-mutation workflow.
+- **Hot workspace**: Daemon-backed solution preload with `workspace.preload`, aliased as `default` for zero-handle context/editing commands.
+- **Supervised onboarding**: `agent-start` and `csharp-start` with two-turn transcript-verification protocol for fresh agent sessions.
+- **Benchmark harness**: Paired-run A/B trials, OSS pilot runs, Claude skill-trigger studies, tool-thinking split-lane analysis.
+- **XmlSkills**: In-repo XML/XAML CLI (`xmlcli`) with validate/outline/find/replace commands, feature-gated parser backend comparison.
 
-The OSS pilot now defines an explicit primary comparison pair (control vs treatment-required) via `primary_control_condition_id`/`primary_treatment_condition_id` in the manifest, and `agent-eval-gate` supports multi-condition experiments accordingly. The OSS harness also now writes schema-aligned `tools_offered`/`tool_calls` fields so OSS run records can be validated/scored with the shared `agent-eval-*` pipeline; older OSS run records can be backfilled via `benchmarks/scripts/Upgrade-OssPilotRunRecords.ps1`.
+### Active architecture
 
-Latest OSS scope expansion bundle (Codex Spark, low, `brief-first-v4`) with passing gate:
+- Solution workspace binding preferred over project-scoped; hot daemon for repeated calls.
+- Exact-text edits (`edit.batch_exact`, `edit.replace_in_member`) are the primary mutation surface for agents.
+- `edit.claim` required before mutation in supervised multi-agent runs.
+- `agent-start` / `csharp-start` are the recommended fresh-pane onboarding commands.
+- `ctx.changed_files` for dirty-worktree orientation; `ctx.member_source` with `focus_text` for large-member exploration.
 
-- artifacts: `artifacts/real-agent-runs/20260213-142746-oss-csharp-pilot/*`
-- run records: `benchmarks/experiments/oss-csharp-pilot-v1/runs/20260213-142746-oss-csharp-pilot/*.json`
-- gate summary: `artifacts/agent-eval/20260213-145801/summary/agent-eval-summary.md`
+### Key unresolved
 
-Immediate next steps: continue roscli vs base comparisons varying prompt posture, model (`gpt-5.3-codex` vs `gpt-5.3-codex-spark`), and reasoning effort, while enforcing validity gates (project tasks must show healthy workspace binding: mode=workspace plus no `CS0518`; treatment runs should fail closed if tools were not used). Use `benchmarks/scripts/Run-PairedAgentRuns.ps1 -SkipClaude -TaskShape project -RoslynGuidanceProfile brief-first-v2 -CodexModel gpt-5.3-codex-spark -CodexReasoningEffort low -FailOnMissingTreatmentRoslynUsage` for microtask sweeps; keep LSP-via-MCP as experimental until timeout/indexing confounds are resolved (see `benchmarks/LSP_COMPARATOR_PLAN.md`).
+- Roslyn token/latency overhead vs text-first on microtasks — semantic tooling adds cost when ambiguity is low.
+- LSP comparator lane remains confounded by timeout/indexing instability.
+- Open-ended large-task comparisons confounded by trajectory variance; bounded-run protocol needed.
+- Hot workspace daemon reliability under concurrent access.
 
-Checkpoint (2026-02-13): `docs/CHECKPOINT_2026-02-13.md` summarizes the current empirical posture (microtask overhead vs ambiguity value hypothesis) and the pivot to Claude “skill-style” guidance iteration (new paired profile `skill-tight-v1`, which is tuned for Claude to invoke `bash scripts/roscli ...` and clamp output to 2 lines).
+## Session-Start Quick Reference
 
-Checkpoint (2026-02-17): `docs/CHECKPOINT_2026-02-17.md` captures the widened non-rename scope pass. `Run-PairedAgentRuns.ps1` now supports mixed operation families (`change-signature`, `update-usings`, `add-member`, `replace-member-body`, `create-file`) and a new `operation-neutral-v1` profile to avoid rename-specific guidance leakage. Recent artifacts:
+```powershell
+# Verify tooling
+roscli --version
+roscli list-commands --ids-only                    # 64 commands
 
-- Claude wide sweep (3 tasks x 4 conditions): `artifacts/skill-tests/20260217-wide-claude-v1/skill-trigger-summary.md`
-- Claude paired spot check with `operation-neutral-v1`: `artifacts/real-agent-runs/20260217-claude-opneutral-addmember-v2/paired-run-summary.md`
+# Run tests
+dotnet test RoslynSkills.slnx -c Release
 
-Current empirical posture in this slice:
+# Local dev wrappers
+scripts\roscli.cmd list-commands --ids-only        # dev lane (dotnet run)
+scripts\roscli-stable.cmd list-commands --ids-only  # published cache lane
+```
 
-- Explicit skill invocation materially increases Roslyn adoption (`with-skill-invoked roslyn_used_rate=1.0` in the wide sweep).
-- Non-invoked/budgeted lanes still show adoption instability.
-- Treatment correctness is now stable on the add-member paired check after relaxing style-only constraint strictness; overhead remains significant (round-trips and tokens).
-- Split-lane tool-thinking analysis now distinguishes "Roslyn used" vs "Roslyn used well" via productive-call metrics (`productive_roslyn_command_count`, `roslyn_used_well_score`) to avoid false positives from schema-probe-only usage.
+## Primary Harness Commands
+
+```powershell
+# Paired control vs treatment A/B runs (microtasks)
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-PairedAgentRuns.ps1 `
+  -TaskShape project `
+  -RoslynGuidanceProfile brief-first `
+  -CodexModel gpt-5.3-codex-spark `
+  -CodexReasoningEffort low `
+  -FailOnMissingTreatmentRoslynUsage `
+  -SkipClaude
+
+# OSS realism runs
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Run-OssCsharpPilotRealRuns.ps1
+
+# Claude skill trigger/adoption studies
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Test-ClaudeSkillTriggering.ps1
+
+# Tool-call performance benchmarks
+powershell -ExecutionPolicy Bypass -File benchmarks/scripts/Benchmark-ToolCallPerf.ps1
+```
+
+## Docs Index
+
+| File | Purpose |
+|---|---|
+| `README.md` | Project overview, 5-minute start, best-results playbook |
+| `AGENTS.md` | Execution doctrine, heuristics, compact meta-learning log |
+| `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md` | Research design, RQs, hypotheses, evaluation |
+| `HANDOVER.md` | This file — session-start reference |
+| `docs/architecture.md` | Implemented architecture (command families, transport, workspace, edits) |
+| `docs/PIT_OF_SUCCESS.md` | Canonical pit-of-success guidance |
+| `docs/research-findings.md` | Empirical findings log with artifact references |
+| `docs/META_LEARNING_ARCHIVE.md` | Historical meta-learning (Feb 2026) |
+| `docs/archive/` | Initial planning docs (design spec, research plan, implementation plan) |
