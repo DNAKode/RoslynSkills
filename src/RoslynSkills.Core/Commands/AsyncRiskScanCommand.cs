@@ -15,7 +15,8 @@ public sealed class AsyncRiskScanCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Experimental,
-        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -25,6 +26,7 @@ public sealed class AsyncRiskScanCommand : IAgentCommand
             return errors;
         }
 
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
 
@@ -56,7 +58,7 @@ public sealed class AsyncRiskScanCommand : IAgentCommand
         HashSet<string> severityFilter = ParseSeverityFilter(input);
 
         (StaticAnalysisWorkspace? Workspace, CommandError? Error) loadResult = await StaticAnalysisWorkspace
-            .LoadAsync(workspacePath, includeGenerated, maxFiles, cancellationToken)
+            .ResolveAsync(input, workspacePath, includeGenerated, maxFiles, cancellationToken)
             .ConfigureAwait(false);
         if (loadResult.Error is not null || loadResult.Workspace is null)
         {

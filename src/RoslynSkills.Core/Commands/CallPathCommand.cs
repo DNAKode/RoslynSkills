@@ -14,7 +14,8 @@ public sealed class CallPathCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Experimental,
-        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -31,6 +32,7 @@ public sealed class CallPathCommand : IAgentCommand
         InputParsing.TryGetRequiredInt(input, "target_column", errors, out _, minValue: 1, maxValue: 1_000_000);
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         InputParsing.ValidateOptionalBool(input, "include_object_creations", errors);
@@ -88,7 +90,7 @@ public sealed class CallPathCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis sourceAnalysis = await CommandFileAnalysis.LoadAsync(sourceFilePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis sourceAnalysis = await CommandFileAnalysis.LoadAsync(sourceFilePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, sourceAnalysis);
         if (workspaceError is not null)
         {
@@ -96,7 +98,7 @@ public sealed class CallPathCommand : IAgentCommand
         }
 
         (bool SourceOk, IMethodSymbol? Method, string? ErrorMessage) sourceResolution = await ResolveMethodAnchorAsync(
-            sourceAnalysis.Compilation,
+            sourceAnalysis,
             sourceFilePath,
             sourceLine,
             sourceColumn,
@@ -109,7 +111,7 @@ public sealed class CallPathCommand : IAgentCommand
         }
 
         (bool SourceOk, IMethodSymbol? Method, string? ErrorMessage) targetResolution = await ResolveMethodAnchorAsync(
-            sourceAnalysis.Compilation,
+            sourceAnalysis,
             targetFilePath,
             targetLine,
             targetColumn,
@@ -121,11 +123,11 @@ public sealed class CallPathCommand : IAgentCommand
                 new[] { new CommandError("invalid_target", targetResolution.ErrorMessage ?? "Could not resolve target method anchor.") });
         }
 
+        SearchScope scope = await SolutionSearchScope.ResolveAsync(sourceAnalysis, target: null, includeGenerated, cancellationToken).ConfigureAwait(false);
         CallGraph graph = await BuildCallGraphAsync(
-            sourceAnalysis.Compilation,
+            scope,
             includeObjectCreations,
             includeExternal,
-            includeGenerated,
             contextLines,
             brief,
             maxGraphEdges,
@@ -202,6 +204,7 @@ public sealed class CallPathCommand : IAgentCommand
             source_symbol = BuildSymbolPayload(sourceResolution.Method, sourceId),
             target_symbol = BuildSymbolPayload(targetResolution.Method, targetId),
             scanned_syntax_trees = graph.scannedSyntaxTreeCount,
+            search = scope.ToPayload(),
             total_nodes = graph.nodesById.Count,
             total_edges = graph.totalEdges,
             graph_truncated = graph.truncatedByEdgeLimit,
@@ -260,19 +263,21 @@ public sealed class CallPathCommand : IAgentCommand
     }
 
     private static async Task<(bool SourceOk, IMethodSymbol? Method, string? ErrorMessage)> ResolveMethodAnchorAsync(
-        Compilation compilation,
+        CommandFileAnalysis analysis,
         string filePath,
         int line,
         int column,
         CancellationToken cancellationToken)
     {
         string normalizedPath = Path.GetFullPath(filePath);
-        SyntaxTree? tree = compilation.SyntaxTrees.FirstOrDefault(t =>
-            string.Equals(Path.GetFullPath(t.FilePath), normalizedPath, StringComparison.OrdinalIgnoreCase));
-        if (tree is null)
+        (SyntaxTree Tree, Compilation Compilation)? located = await SolutionSearchScope.FindTreeAsync(analysis, normalizedPath, cancellationToken).ConfigureAwait(false);
+        if (located is null)
         {
-            return (false, null, $"File '{normalizedPath}' is not in the active compilation. Use --workspace-path to load a shared workspace.");
+            return (false, null, $"File '{normalizedPath}' is not in the loaded workspace. Use --workspace-path to load a shared workspace.");
         }
+
+        SyntaxTree tree = located.Value.Tree;
+        Compilation compilation = located.Value.Compilation;
 
         SourceText sourceText = await tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
         if (line > sourceText.Lines.Count)
@@ -303,10 +308,9 @@ public sealed class CallPathCommand : IAgentCommand
     }
 
     private static async Task<CallGraph> BuildCallGraphAsync(
-        Compilation compilation,
+        SearchScope scope,
         bool includeObjectCreations,
         bool includeExternal,
-        bool includeGenerated,
         int contextLines,
         bool brief,
         int maxGraphEdges,
@@ -318,7 +322,7 @@ public sealed class CallPathCommand : IAgentCommand
         int scannedSyntaxTreeCount = 0;
         bool truncatedByEdgeLimit = false;
 
-        foreach (SyntaxTree syntaxTree in compilation.SyntaxTrees)
+        foreach (SearchUnit unit in scope.Units)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -328,23 +332,13 @@ public sealed class CallPathCommand : IAgentCommand
                 break;
             }
 
-            string treeFilePath = string.IsNullOrWhiteSpace(syntaxTree.FilePath)
-                ? "<unknown>"
-                : Path.GetFullPath(syntaxTree.FilePath);
-
-            if (!includeGenerated && CommandFileFilters.IsGeneratedPath(treeFilePath))
-            {
-                continue;
-            }
-
-            SemanticModel semanticModel = compilation.GetSemanticModel(syntaxTree, ignoreAccessibility: true);
-            SyntaxNode root = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-            SourceText sourceText = await syntaxTree.GetTextAsync(cancellationToken).ConfigureAwait(false);
+            string treeFilePath = unit.FilePath;
+            SourceText sourceText = await unit.Tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
             scannedSyntaxTreeCount++;
 
-            foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.EnumerateCallSites(
-                         semanticModel,
-                         root,
+            foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.GetCallSites(
+                         unit.Compilation,
+                         unit.Tree,
                          includeObjectCreations,
                          cancellationToken))
             {
@@ -353,6 +347,11 @@ public sealed class CallPathCommand : IAgentCommand
                 {
                     truncatedByEdgeLimit = true;
                     break;
+                }
+
+                if (callSite.caller is null)
+                {
+                    continue;
                 }
 
                 if (!includeExternal && (!IsInSource(callSite.caller) || !IsInSource(callSite.callee)))

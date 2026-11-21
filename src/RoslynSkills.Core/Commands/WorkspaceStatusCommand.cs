@@ -10,7 +10,8 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
         Summary: "Report hot workspace binding, fingerprint, dirty state, and loaded solution/project counts.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

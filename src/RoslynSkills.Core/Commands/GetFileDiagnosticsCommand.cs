@@ -11,7 +11,8 @@ public sealed class GetFileDiagnosticsCommand : IAgentCommand
         Summary: "Compile a C#/VB file in-memory and return normalized diagnostics.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

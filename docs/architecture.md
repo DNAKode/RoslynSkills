@@ -30,7 +30,7 @@ JSON-RPC MCP server over stdio. Maps the command registry to MCP `tools/list` an
 Persistent transport server for low-latency warm-state tool calls (experimental lane).
 
 ### `src/RoslynSkills.WorkspaceHost`
-Daemon for hot-workspace reuse. `workspace.preload` loads a solution once; subsequent `ctx.*`, `nav.*`, `edit.*`, `diag.*` commands reuse the in-memory workspace. Eliminates per-call MSBuild workspace bind overhead.
+Daemon for hot-workspace reuse. `workspace.preload` loads a solution once; subsequent commands whose descriptor sets `RunsOnHotWorkspace` (every `nav.*` and `analyze.*` command, the read-only `ctx.*`/`diag.*`/`repair.propose_*` semantic commands and the exact/semantic `edit.*` commands) reuse the in-memory workspace. Eliminates per-call MSBuild workspace bind overhead. The host re-reads files changed on disk before each routed call, and usage searches (references, invocations, call graph, implementations) span every project of the loaded solution.
 
 ### `src/XmlSkills.*`
 In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monorepo.

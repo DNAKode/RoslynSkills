@@ -10,7 +10,8 @@ public sealed class InsertTextCommand : IAgentCommand
         Summary: "Insert text before or after an exact anchor snippet in one file with optional C# diagnostics.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

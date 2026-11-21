@@ -837,24 +837,9 @@ Workflow:
             : null;
     }
 
-    private static bool IsDaemonCapableCommand(string commandId)
-        => commandId is
-            "workspace.status" or
-            "workspace.refresh" or
-            "workspace.close" or
-            "nav.find_symbol" or
-            "nav.find_symbol_batch" or
-            "nav.find_references" or
-            "nav.find_invocations" or
-            "ctx.member_source" or
-            "diag.get_file_diagnostics" or
-            "query.batch" or
-            "edit.replace_text" or
-            "edit.replace_in_member" or
-            "edit.insert_text" or
-            "edit.batch_exact" or
-            "edit.rename_symbol" or
-            "edit.change_signature";
+    private static bool IsWorkspaceSemanticFamily(string commandId)
+        => commandId.StartsWith("nav.", StringComparison.Ordinal) ||
+           commandId.StartsWith("analyze.", StringComparison.Ordinal);
 
     private static string GetDaemonRoutingMode()
     {
@@ -1035,6 +1020,7 @@ Workflow:
         }
 
         int? daemonExitCode = await TryRunDaemonCapableCommandAsync(
+            command,
             commandId,
             input,
             stdout,
@@ -1068,6 +1054,7 @@ Workflow:
     }
 
     private async Task<int?> TryRunDaemonCapableCommandAsync(
+        IAgentCommand command,
         string commandId,
         JsonElement input,
         TextWriter stdout,
@@ -1075,11 +1062,6 @@ Workflow:
         bool noDaemon)
     {
         if (noDaemon)
-        {
-            return null;
-        }
-
-        if (!IsDaemonCapableCommand(commandId))
         {
             return null;
         }
@@ -1092,6 +1074,24 @@ Workflow:
 
         bool requireHotWorkspace = string.Equals(routingMode, "required", StringComparison.OrdinalIgnoreCase) ||
                                    IsPublishedModeEnabled("ROSCLI_REQUIRE_HOT_WORKSPACE");
+
+        // A command declares in its descriptor that it can run on the host's loaded workspace (RunsOnHotWorkspace);
+        // the routing never keeps its own list of command ids.
+        if (!command.Descriptor.RunsOnHotWorkspace)
+        {
+            // Required mode promises that no call reloads a solution in-process. A workspace-semantic command that
+            // cannot use the hot workspace must say so, not silently reload.
+            if (requireHotWorkspace && IsWorkspaceSemanticFamily(commandId))
+            {
+                await WriteEnvelopeAsync(stdout, ErrorEnvelope(
+                    commandId,
+                    "hot_workspace_unsupported",
+                    $"Command '{commandId}' cannot run on the hot workspace and would load the solution in-process. Pass --no-daemon to run it that way, or unset ROSCLI_DAEMON=required.")).ConfigureAwait(false);
+                return 1;
+            }
+
+            return null;
+        }
         WorkspaceHostDaemonManager manager = new();
         string? repoRoot = InferToolCallDaemonRepoRoot(input);
         WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
@@ -4837,7 +4837,7 @@ Workflow:
               - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
               - workspace.use/preload infer daemon repo root from the target solution/project path unless --repo-root is provided.
               - Daemon-capable tool calls with file_path/workspace_path infer the same daemon repo root, so supervising from another cwd still finds the target hot workspace.
-              - Daemon-capable semantic commands use ROSCLI_DAEMON=auto by default; pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
+              - Semantic nav/ctx/analyze/diag commands and the exact/semantic edits run on the daemon's hot workspace (ROSCLI_DAEMON=auto by default; a bound alias is refreshed from disk before each call); pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.
               - Set ROSCLI_DAEMON=required and ROSCLI_WORKSPACE_ALIAS=default to fail closed when a hot workspace is required.
               - Recommended first minute:
                 roscli agent-start

@@ -35,7 +35,8 @@ public sealed class QueryBatchCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Advanced,
-        Traits: [CommandTrait.BatchOrchestration, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.BatchOrchestration, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

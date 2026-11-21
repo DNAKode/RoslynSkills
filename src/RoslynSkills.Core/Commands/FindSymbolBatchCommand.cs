@@ -20,7 +20,8 @@ public sealed class FindSymbolBatchCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Advanced,
-        Traits: new[] { CommandTrait.BatchOrchestration, CommandTrait.PotentiallySlow });
+        Traits: new[] { CommandTrait.BatchOrchestration, CommandTrait.PotentiallySlow },
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

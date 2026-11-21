@@ -10,7 +10,8 @@ public sealed record CommandDescriptor(
     string OutputSchemaVersion,
     bool MutatesState,
     string Maturity = CommandMaturity.Stable,
-    IReadOnlyList<string>? Traits = null);
+    IReadOnlyList<string>? Traits = null,
+    bool RunsOnHotWorkspace = false);
 
 public static class CommandMaturity
 {

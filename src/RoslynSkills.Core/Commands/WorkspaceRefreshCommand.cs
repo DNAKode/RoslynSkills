@@ -10,7 +10,8 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
         Summary: "Refresh known dirty source files incrementally and classify reload-required hot-workspace changes.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

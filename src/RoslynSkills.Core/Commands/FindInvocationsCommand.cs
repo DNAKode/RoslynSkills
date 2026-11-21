@@ -12,7 +12,8 @@ public sealed class FindInvocationsCommand : IAgentCommand
         Summary: "Find method call sites anchored by line/column with semantic matching across the active compilation.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -101,27 +102,26 @@ public sealed class FindInvocationsCommand : IAgentCommand
         bool truncated = false;
         int searchedSyntaxTreeCount = 0;
 
-        foreach (SyntaxTree tree in analysis.Compilation.SyntaxTrees)
+        // The target's own project plus every project that depends on it, not just the anchor file's compilation.
+        SearchScope scope = await SolutionSearchScope.ResolveAsync(analysis, targetMethod, includeGenerated, cancellationToken).ConfigureAwait(false);
+        string? searchName = SolutionSearchScope.GetSearchName(targetMethod);
+        HashSet<string> seenMatches = new(StringComparer.Ordinal);
+
+        foreach (SearchUnit unit in scope.Units)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string treeFilePath = string.IsNullOrWhiteSpace(tree.FilePath)
-                ? analysis.FilePath
-                : Path.GetFullPath(tree.FilePath);
-
-            if (!includeGenerated && CommandFileFilters.IsGeneratedPath(treeFilePath))
+            if (!SolutionSearchScope.MightMention(unit, searchName))
             {
                 continue;
             }
 
-            SyntaxNode root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-            SourceText sourceText = await tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
-            SemanticModel semanticModel = analysis.Compilation.GetSemanticModel(tree, ignoreAccessibility: true);
+            SourceText sourceText = await unit.Tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
             searchedSyntaxTreeCount++;
 
-            foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.EnumerateCallSites(
-                         semanticModel,
-                         root,
+            foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.GetCallSites(
+                         unit.Compilation,
+                         unit.Tree,
                          includeObjectCreations,
                          cancellationToken))
             {
@@ -130,11 +130,16 @@ public sealed class FindInvocationsCommand : IAgentCommand
                     continue;
                 }
 
+                if (!seenMatches.Add($"{unit.FilePath}|{callSite.node.SpanStart}|{callSite.call_kind}"))
+                {
+                    continue;
+                }
+
                 AddMatch(
                     matches,
                     callSite.node.Span,
                     callSite.callee,
-                    treeFilePath,
+                    unit.FilePath,
                     sourceText,
                     contextLines,
                     maxResults,
@@ -189,6 +194,7 @@ public sealed class FindInvocationsCommand : IAgentCommand
                 method_kind = targetMethod.MethodKind.ToString(),
             },
             searched_syntax_trees = searchedSyntaxTreeCount,
+            search = scope.ToPayload(),
             total_matches = matches.Count,
             truncated,
             matches = matchesPayload,

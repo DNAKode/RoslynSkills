@@ -12,7 +12,8 @@ public sealed class RenameSymbolCommand : IAgentCommand
         Summary: "Rename a symbol anchored by line/column in one C# file using semantic matching.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

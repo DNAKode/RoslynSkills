@@ -15,7 +15,8 @@ public sealed class ImpactSliceCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Advanced,
-        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -34,6 +35,7 @@ public sealed class ImpactSliceCommand : IAgentCommand
         InputParsing.ValidateOptionalBool(input, "include_overrides", errors);
         InputParsing.ValidateOptionalBool(input, "include_implementations", errors);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
@@ -67,7 +69,7 @@ public sealed class ImpactSliceCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {
@@ -101,14 +103,23 @@ public sealed class ImpactSliceCommand : IAgentCommand
         List<ImpactRelatedSymbol> overrides = new();
         List<ImpactRelatedSymbol> implementations = new();
 
+        // Usages can live in any project that depends on the anchor's project, not only in the anchor file's compilation.
+        SearchScope scope = await SolutionSearchScope.ResolveAsync(analysis, anchorSymbol, includeGenerated: true, cancellationToken).ConfigureAwait(false);
+        string? searchName = SolutionSearchScope.GetSearchName(anchorSymbol);
+
         if (includeReferences || includeCallers || includeOverrides || includeImplementations)
         {
-            foreach (SyntaxTree tree in analysis.Compilation.SyntaxTrees)
+            foreach (SearchUnit unit in scope.Units)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                SemanticModel semanticModel = analysis.Compilation.GetSemanticModel(tree, ignoreAccessibility: true);
-                SyntaxNode root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-                string treeFilePath = string.IsNullOrWhiteSpace(tree.FilePath) ? "<unknown>" : Path.GetFullPath(tree.FilePath);
+                if (!SolutionSearchScope.MightMention(unit, searchName))
+                {
+                    continue;
+                }
+
+                SemanticModel semanticModel = unit.Compilation.GetSemanticModel(unit.Tree, ignoreAccessibility: true);
+                SyntaxNode root = await unit.Tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+                string treeFilePath = unit.FilePath;
 
                 if (includeReferences && references.Count < maxReferences)
                 {
@@ -300,6 +311,7 @@ public sealed class ImpactSliceCommand : IAgentCommand
                 symbol_kind = anchorSymbol.Kind.ToString(),
                 symbol_id = CommandTextFormatting.GetStableSymbolId(anchorSymbol),
             },
+            search = scope.ToPayload(),
             impact_counts = new
             {
                 references = references.Count,

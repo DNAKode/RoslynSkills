@@ -1,4 +1,5 @@
 ﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
 using System.Text.Json;
@@ -9,10 +10,11 @@ public sealed class FindReferencesCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "nav.find_references",
-        Summary: "Find same-symbol references anchored by line/column with semantic matching.",
+        Summary: "Find same-symbol references anchored by line/column with semantic matching; spans the whole loaded solution when the file belongs to one.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -28,6 +30,8 @@ public sealed class FindReferencesCommand : IAgentCommand
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+        InputParsing.ValidateOptionalBool(input, "include_declaration", errors);
+        InputParsing.ValidateOptionalBool(input, "include_generated", errors);
 
         if (!File.Exists(filePath))
         {
@@ -59,6 +63,7 @@ public sealed class FindReferencesCommand : IAgentCommand
         int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 200, minValue: 1, maxValue: 2_000);
         int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 2, minValue: 0, maxValue: 20);
         bool includeDeclaration = InputParsing.GetOptionalBool(input, "include_declaration", defaultValue: true);
+        bool includeGenerated = InputParsing.GetOptionalBool(input, "include_generated", defaultValue: false);
 
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
@@ -87,8 +92,66 @@ public sealed class FindReferencesCommand : IAgentCommand
         }
 
         string? targetSymbolId = CommandTextFormatting.GetStableSymbolId(targetSymbol);
-        List<ReferenceMatch> matches = new();
+        List<ReferenceMatch> matches;
+        bool truncated;
+        SearchScope? scope = null;
+        Solution? solution = analysis.Document?.Project.Solution;
+        if (solution is not null)
+        {
+            (matches, truncated) = await FindSolutionReferencesAsync(
+                solution,
+                targetSymbol,
+                includeDeclaration,
+                includeGenerated,
+                contextLines,
+                maxResults,
+                cancellationToken).ConfigureAwait(false);
+            scope = new SearchScope(Array.Empty<SearchUnit>(), SolutionSearchScope.SolutionKind, solution.Projects.Count());
+        }
+        else
+        {
+            (matches, truncated) = FindSameFileReferences(analysis, targetSymbol, includeDeclaration, contextLines, maxResults, cancellationToken);
+        }
 
+        object data = new
+        {
+            file_path = analysis.FilePath,
+            query = new
+            {
+                line,
+                column,
+                include_declaration = includeDeclaration,
+                include_generated = includeGenerated,
+                max_results = maxResults,
+                workspace_path = workspacePath,
+                require_workspace = requireWorkspace,
+                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
+            },
+            symbol = new
+            {
+                symbol_display = targetSymbol.ToDisplayString(),
+                symbol_kind = targetSymbol.Kind.ToString(),
+                symbol_id = targetSymbolId,
+            },
+            search_scope = scope?.Kind ?? SolutionSearchScope.CompilationKind,
+            searched_projects = scope?.ProjectCount ?? 1,
+            total_matches = matches.Count,
+            truncated,
+            matches,
+        };
+
+        return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static (List<ReferenceMatch> Matches, bool Truncated) FindSameFileReferences(
+        CommandFileAnalysis analysis,
+        ISymbol targetSymbol,
+        bool includeDeclaration,
+        int contextLines,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        List<ReferenceMatch> matches = new();
         foreach (SyntaxToken token in analysis.Root.DescendantTokens(descendIntoTrivia: false))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -114,43 +177,118 @@ public sealed class FindReferencesCommand : IAgentCommand
             int tokenColumn = span.Start.Character + 1;
             string snippet = CommandTextFormatting.BuildSnippet(analysis.SourceText, tokenLine, contextLines);
 
+            if (matches.Count >= maxResults)
+            {
+                return (matches, true);
+            }
+
             matches.Add(new ReferenceMatch(
+                file_path: analysis.FilePath,
                 line: tokenLine,
                 column: tokenColumn,
                 syntax_kind: CommandLanguageServices.GetSyntaxKindName(token.Parent),
                 is_declaration: isDeclaration,
                 snippet: snippet));
+        }
 
-            if (matches.Count >= maxResults)
+        return (matches, false);
+    }
+
+    /// <summary>
+    /// Whole-solution search: Roslyn's symbol finder visits every document of every project that can see the symbol,
+    /// so callers in sibling projects are found, not just the anchor file.
+    /// </summary>
+    private static async Task<(List<ReferenceMatch> Matches, bool Truncated)> FindSolutionReferencesAsync(
+        Solution solution,
+        ISymbol targetSymbol,
+        bool includeDeclaration,
+        bool includeGenerated,
+        int contextLines,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        IEnumerable<ReferencedSymbol> referenced = await SymbolFinder
+            .FindReferencesAsync(targetSymbol, solution, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Cascading also reports overrides, implementations and base members; keep the anchored symbol only.
+        ReferencedSymbol[] groups = referenced
+            .Where(group => IsSameSymbol(group.Definition, targetSymbol))
+            .ToArray();
+
+        List<(string FilePath, int Line, int Column, string Kind, bool IsDeclaration, string Snippet)> found = new();
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        Dictionary<SyntaxTree, SourceText> texts = new();
+
+        async Task AddAsync(Location location, bool isDeclaration)
+        {
+            if (!location.IsInSource || location.SourceTree is null)
             {
-                break;
+                return;
+            }
+
+            SyntaxTree tree = location.SourceTree;
+            string filePath = string.IsNullOrWhiteSpace(tree.FilePath) ? "<unknown>" : Path.GetFullPath(tree.FilePath);
+            if (!includeGenerated && CommandFileFilters.IsGeneratedPath(filePath))
+            {
+                return;
+            }
+
+            if (!texts.TryGetValue(tree, out SourceText? text))
+            {
+                text = await tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
+                texts[tree] = text;
+            }
+
+            LinePositionSpan span = text.Lines.GetLinePositionSpan(location.SourceSpan);
+            int line = span.Start.Line + 1;
+            int column = span.Start.Character + 1;
+            if (!seen.Add($"{filePath}|{line}|{column}"))
+            {
+                return;
+            }
+
+            SyntaxNode root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+            SyntaxToken token = root.FindToken(location.SourceSpan.Start);
+            found.Add((
+                filePath,
+                line,
+                column,
+                CommandLanguageServices.GetSyntaxKindName(token.Parent),
+                isDeclaration,
+                CommandTextFormatting.BuildSnippet(text, line, contextLines)));
+        }
+
+        foreach (ReferencedSymbol group in groups)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (includeDeclaration)
+            {
+                foreach (Location definitionLocation in group.Definition.Locations)
+                {
+                    await AddAsync(definitionLocation, isDeclaration: true).ConfigureAwait(false);
+                }
+            }
+
+            foreach (ReferenceLocation reference in group.Locations)
+            {
+                if (reference.IsCandidateLocation || reference.IsImplicit)
+                {
+                    continue;
+                }
+
+                await AddAsync(reference.Location, isDeclaration: false).ConfigureAwait(false);
             }
         }
 
-        object data = new
-        {
-            file_path = analysis.FilePath,
-            query = new
-            {
-                line,
-                column,
-                include_declaration = includeDeclaration,
-                max_results = maxResults,
-                workspace_path = workspacePath,
-                require_workspace = requireWorkspace,
-                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
-            },
-            symbol = new
-            {
-                symbol_display = targetSymbol.ToDisplayString(),
-                symbol_kind = targetSymbol.Kind.ToString(),
-                symbol_id = targetSymbolId,
-            },
-            total_matches = matches.Count,
-            matches,
-        };
-
-        return new CommandExecutionResult(data, Array.Empty<CommandError>());
+        List<ReferenceMatch> ordered = found
+            .OrderBy(match => match.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(match => match.Line)
+            .ThenBy(match => match.Column)
+            .Take(maxResults)
+            .Select(match => new ReferenceMatch(match.FilePath, match.Line, match.Column, match.Kind, match.IsDeclaration, match.Snippet))
+            .ToList();
+        return (ordered, found.Count > maxResults);
     }
 
     private static bool IsSameSymbol(ISymbol? candidate, ISymbol target)
@@ -169,6 +307,7 @@ public sealed class FindReferencesCommand : IAgentCommand
     }
 
     private sealed record ReferenceMatch(
+        string file_path,
         int line,
         int column,
         string syntax_kind,

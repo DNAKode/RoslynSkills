@@ -1,4 +1,5 @@
 using RoslynSkills.Cli;
+using RoslynSkills.Contracts;
 using RoslynSkills.Core;
 using System.Diagnostics;
 using System.Text;
@@ -2633,15 +2634,33 @@ public sealed class CliApplicationTests
     [InlineData("edit.replace_text")]
     [InlineData("edit.insert_text")]
     [InlineData("edit.batch_exact")]
-    public void ExactEditBridgeCommands_AreDaemonCapable(string commandId)
+    [InlineData("nav.find_references")]
+    [InlineData("nav.find_invocations")]
+    [InlineData("nav.call_hierarchy")]
+    [InlineData("nav.call_path")]
+    [InlineData("ctx.call_chain_slice")]
+    [InlineData("analyze.impact_slice")]
+    [InlineData("analyze.control_flow_graph")]
+    [InlineData("analyze.dataflow_slice")]
+    [InlineData("analyze.unused_private_symbols")]
+    [InlineData("analyze.dependency_violations")]
+    [InlineData("analyze.override_coverage")]
+    [InlineData("analyze.async_risk_scan")]
+    public void HotWorkspaceCommands_AreRoutedToTheDaemon(string commandId)
     {
-        System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
-            "IsDaemonCapableCommand",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        // Routing is read from the command descriptor, so a command cannot be left out of a separate id list.
+        Assert.True(DefaultRegistryFactory.Create().TryGet(commandId, out IAgentCommand? command));
+        Assert.True(command!.Descriptor.RunsOnHotWorkspace);
+    }
 
-        bool result = (bool)method.Invoke(null, new object[] { commandId })!;
-
-        Assert.True(result);
+    [Theory]
+    [InlineData("session.open")]
+    [InlineData("edit.claim")]
+    [InlineData("ctx.changed_files")]
+    public void InProcessOnlyCommands_AreNotRoutedToTheDaemon(string commandId)
+    {
+        Assert.True(DefaultRegistryFactory.Create().TryGet(commandId, out IAgentCommand? command));
+        Assert.False(command!.Descriptor.RunsOnHotWorkspace);
     }
 
     [Fact]

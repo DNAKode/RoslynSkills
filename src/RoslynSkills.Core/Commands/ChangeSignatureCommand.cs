@@ -13,7 +13,8 @@ public sealed class ChangeSignatureCommand : IAgentCommand
         Summary: "Change method signature anchored by line/column (parameters, return type, optional name).",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

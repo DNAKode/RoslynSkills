@@ -12,7 +12,8 @@ public sealed class BatchExactEditCommand : IAgentCommand
         Summary: "Apply multiple exact text/span edits with per-operation reporting and atomic apply by default.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

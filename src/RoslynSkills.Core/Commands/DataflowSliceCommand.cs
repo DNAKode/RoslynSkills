@@ -13,7 +13,8 @@ public sealed class DataflowSliceCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Advanced,
-        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -28,6 +29,7 @@ public sealed class DataflowSliceCommand : IAgentCommand
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         InputParsing.ValidateOptionalInt(input, "max_symbols", errors, minValue: 1, maxValue: 20_000);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
@@ -53,7 +55,7 @@ public sealed class DataflowSliceCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {

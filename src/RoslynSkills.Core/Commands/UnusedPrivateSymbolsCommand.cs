@@ -14,7 +14,8 @@ public sealed class UnusedPrivateSymbolsCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Advanced,
-        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -24,6 +25,7 @@ public sealed class UnusedPrivateSymbolsCommand : IAgentCommand
             return errors;
         }
 
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         if (!File.Exists(workspacePath) && !Directory.Exists(workspacePath))
@@ -48,7 +50,7 @@ public sealed class UnusedPrivateSymbolsCommand : IAgentCommand
         int maxSymbols = InputParsing.GetOptionalInt(input, "max_symbols", defaultValue: 1_000, minValue: 1, maxValue: 50_000);
 
         (StaticAnalysisWorkspace? Workspace, CommandError? Error) loadResult = await StaticAnalysisWorkspace
-            .LoadAsync(workspacePath, includeGenerated, maxFiles, cancellationToken)
+            .ResolveAsync(input, workspacePath, includeGenerated, maxFiles, cancellationToken)
             .ConfigureAwait(false);
         if (loadResult.Error is not null || loadResult.Workspace is null)
         {

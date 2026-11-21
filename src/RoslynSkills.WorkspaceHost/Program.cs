@@ -559,6 +559,11 @@ internal static class Program
             return;
         }
 
+        HotWorkspaceFreshnessResult? freshness = await EnsureHotWorkspaceFreshAsync(
+            command,
+            root,
+            input).ConfigureAwait(false);
+
         CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None).ConfigureAwait(false);
         if (result.Ok)
         {
@@ -571,7 +576,7 @@ internal static class Program
             root,
             method,
             responseData,
-            result.Ok);
+            result.Ok) ?? BuildFreshnessMetadata(root, freshness);
         CommandEnvelope envelope = new(
             Ok: result.Ok,
             CommandId: commandId,
@@ -590,6 +595,68 @@ internal static class Program
             Workspace: workspaceMetadata,
             Envelope: envelope,
             Errors: result.Ok ? null : result.Errors)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A command that runs on a hot workspace must see the files as they are on disk now, not as they were at the last
+    /// call. The lifecycle commands (<c>workspace.*</c>) are excluded: they report or change that state themselves.
+    /// </summary>
+    private static async Task<HotWorkspaceFreshnessResult?> EnsureHotWorkspaceFreshAsync(
+        IAgentCommand command,
+        JsonElement root,
+        JsonElement input)
+    {
+        if (!command.Descriptor.RunsOnHotWorkspace ||
+            command.Descriptor.Id.StartsWith("workspace.", StringComparison.Ordinal) ||
+            !TryGetProperty(input, "workspace_handle", out JsonElement handleProperty) ||
+            handleProperty.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(handleProperty.GetString()))
+        {
+            return null;
+        }
+
+        return await HotWorkspaceFreshness.EnsureFreshAsync(
+                handleProperty.GetString()!,
+                GetStringProperty(root, "refresh_policy"),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private static WorkspaceHostWorkspaceMetadata? BuildFreshnessMetadata(
+        JsonElement requestRoot,
+        HotWorkspaceFreshnessResult? freshness)
+    {
+        if (freshness is null ||
+            !WorkspaceHostStoreProvider.Current.TryGet(freshness.WorkspaceHandle, out HostedWorkspace? hosted) ||
+            hosted is null)
+        {
+            return null;
+        }
+
+        List<string> diagnostics = hosted.Workspace.WorkspaceDiagnostics.ToList();
+        if (freshness.Error is not null)
+        {
+            diagnostics.Add($"refresh_error: {freshness.Error.Code}: {freshness.Error.Message}");
+        }
+
+        return new WorkspaceHostWorkspaceMetadata(
+            Alias: GetStringProperty(requestRoot, "workspace_alias"),
+            WorkspaceHandle: freshness.WorkspaceHandle,
+            WorkspaceKind: hosted.Workspace.WorkspaceKind,
+            SolutionScoped: string.Equals(hosted.Workspace.WorkspaceKind, "solution", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(hosted.Workspace.WorkspaceKind, "slnx", StringComparison.OrdinalIgnoreCase),
+            ResolutionSource: "workspace_handle",
+            RefreshPolicy: freshness.RefreshPolicy,
+            RefreshAction: freshness.RefreshAction,
+            DirtyBefore: freshness.DirtyBefore,
+            DirtyAfter: freshness.DirtyAfter,
+            RequiresReload: freshness.RequiresReload,
+            RequiresDesignTimeBuild: false,
+            WorkspaceFingerprint: hosted.WorkspaceFingerprint,
+            ProjectCount: hosted.Workspace.ProjectCount,
+            DocumentCount: hosted.Workspace.DocumentCount,
+            InvalidatedPaths: freshness.InvalidatedPaths,
+            WorkspaceDiagnostics: diagnostics);
     }
 
     private static object? BuildResponseData(string commandId, object? data, bool resultOk)

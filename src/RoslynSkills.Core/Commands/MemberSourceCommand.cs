@@ -19,7 +19,8 @@ public sealed class MemberSourceCommand : IAgentCommand
         Summary: "Return source for the anchored member (or body-only view) with bounded context.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

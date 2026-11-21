@@ -11,7 +11,8 @@ public sealed class FindImplementationsCommand : IAgentCommand
         Summary: "Find type/member implementations in the current file anchored by line/column.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -25,6 +26,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         if (!File.Exists(filePath))
         {
@@ -54,7 +56,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {
@@ -76,9 +78,27 @@ public sealed class FindImplementationsCommand : IAgentCommand
                 new[] { new CommandError("symbol_not_found", "Unable to resolve a semantic symbol at the provided location.") });
         }
 
+        string searchScope = SolutionSearchScope.CompilationKind;
         List<ImplementationMatch> matches = new();
+        Solution? solution = analysis.Document?.Project.Solution;
 
-        if (anchorSymbol is INamedTypeSymbol namedType)
+        if (solution is not null &&
+            anchorSymbol is INamedTypeSymbol or IMethodSymbol or IPropertySymbol or IEventSymbol)
+        {
+            // Implementers live in other files and projects; ask the whole loaded solution.
+            IReadOnlyList<RelatedDeclaration> related = await SolutionSymbolRelations
+                .FindImplementationsAsync(solution, anchorSymbol, cancellationToken)
+                .ConfigureAwait(false);
+            matches.AddRange(related.Take(maxResults).Select(declaration => new ImplementationMatch(
+                declaration.Kind,
+                declaration.Line,
+                declaration.Column,
+                declaration.SymbolDisplay,
+                declaration.Relationship,
+                declaration.FilePath)));
+            searchScope = SolutionSearchScope.SolutionKind;
+        }
+        else if (anchorSymbol is INamedTypeSymbol namedType)
         {
             AddTypeImplementations(namedType, analysis, matches, maxResults, cancellationToken);
         }
@@ -101,6 +121,8 @@ public sealed class FindImplementationsCommand : IAgentCommand
                 new[] { new CommandError("invalid_target", $"Symbol kind '{anchorSymbol.Kind}' does not have implementation semantics.") });
         }
 
+        matches = matches.Select(match => match.file_path is null ? match with { file_path = analysis.FilePath } : match).ToList();
+
         object data = new
         {
             file_path = analysis.FilePath,
@@ -111,6 +133,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
                 symbol_kind = anchorSymbol.Kind.ToString(),
                 symbol_id = CommandTextFormatting.GetStableSymbolId(anchorSymbol),
             },
+            search_scope = searchScope,
             total_matches = matches.Count,
             matches,
         };
@@ -326,6 +349,7 @@ public sealed class FindImplementationsCommand : IAgentCommand
         int line,
         int column,
         string symbol_display,
-        string relationship);
+        string relationship,
+        string? file_path = null);
 }
 

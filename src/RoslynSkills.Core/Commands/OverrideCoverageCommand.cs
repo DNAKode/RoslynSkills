@@ -14,7 +14,8 @@ public sealed class OverrideCoverageCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Advanced,
-        Traits: [CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -24,6 +25,7 @@ public sealed class OverrideCoverageCommand : IAgentCommand
             return errors;
         }
 
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         if (!TryGetCoverageThreshold(input, out _))
@@ -61,7 +63,7 @@ public sealed class OverrideCoverageCommand : IAgentCommand
         int minDerivedTypes = InputParsing.GetOptionalInt(input, "min_derived_types", defaultValue: 1, minValue: 1, maxValue: 10_000);
 
         (StaticAnalysisWorkspace? Workspace, CommandError? Error) loadResult = await StaticAnalysisWorkspace
-            .LoadAsync(workspacePath, includeGenerated, maxFiles, cancellationToken)
+            .ResolveAsync(input, workspacePath, includeGenerated, maxFiles, cancellationToken)
             .ConfigureAwait(false);
         if (loadResult.Error is not null || loadResult.Workspace is null)
         {

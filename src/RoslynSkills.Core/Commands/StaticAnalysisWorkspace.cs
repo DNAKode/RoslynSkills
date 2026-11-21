@@ -59,6 +59,28 @@ internal sealed class StaticAnalysisWorkspace
         Solution = solution;
     }
 
+    /// <summary>
+    /// Returns the hot workspace named by <c>workspace_handle</c> in <paramref name="input"/> when the host holds it,
+    /// otherwise loads <paramref name="workspacePath"/> from disk.
+    /// </summary>
+    public static Task<(StaticAnalysisWorkspace? Workspace, CommandError? Error)> ResolveAsync(
+        System.Text.Json.JsonElement input,
+        string workspacePath,
+        bool includeGenerated,
+        int maxFiles,
+        CancellationToken cancellationToken)
+    {
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        if (workspaceHandle is not null &&
+            WorkspaceHostStoreProvider.Current.TryGet(workspaceHandle, out HostedWorkspace? hosted) &&
+            hosted is not null)
+        {
+            return Task.FromResult<(StaticAnalysisWorkspace?, CommandError?)>((hosted.Workspace, null));
+        }
+
+        return LoadAsync(workspacePath, includeGenerated, maxFiles, cancellationToken);
+    }
+
     public static async Task<(StaticAnalysisWorkspace? Workspace, CommandError? Error)> LoadAsync(
         string workspacePath,
         bool includeGenerated,

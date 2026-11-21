@@ -14,7 +14,8 @@ public sealed class CfgCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Stable,
-        Traits: [CommandTrait.DerivedAnalysis]);
+        Traits: [CommandTrait.DerivedAnalysis],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -30,6 +31,7 @@ public sealed class CfgCommand : IAgentCommand
         InputParsing.ValidateOptionalInt(input, "max_blocks", errors, minValue: 1, maxValue: 20_000);
         InputParsing.ValidateOptionalInt(input, "max_edges", errors, minValue: 1, maxValue: 50_000);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
@@ -56,7 +58,7 @@ public sealed class CfgCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {

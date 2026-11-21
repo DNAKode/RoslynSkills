@@ -11,7 +11,8 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
         Summary: "Propose a structured repair plan from current diagnostics.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -22,6 +23,7 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
         }
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (!File.Exists(filePath))
@@ -46,7 +48,7 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
         int maxProposals = InputParsing.GetOptionalInt(input, "max_proposals", defaultValue: 25, minValue: 1, maxValue: 500);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 200, minValue: 1, maxValue: 2_000);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {

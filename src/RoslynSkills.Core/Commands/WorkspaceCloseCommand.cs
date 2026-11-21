@@ -10,7 +10,8 @@ public sealed class WorkspaceCloseCommand : IAgentCommand
         Summary: "Close and discard a hot workspace handle.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

@@ -14,7 +14,8 @@ public sealed class DependencyViolationsCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Experimental,
-        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -24,6 +25,7 @@ public sealed class DependencyViolationsCommand : IAgentCommand
             return errors;
         }
 
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         InputParsing.ValidateOptionalBool(input, "ignore_same_namespace", errors);
@@ -72,7 +74,7 @@ public sealed class DependencyViolationsCommand : IAgentCommand
         int maxViolations = InputParsing.GetOptionalInt(input, "max_violations", defaultValue: 2_000, minValue: 1, maxValue: 100_000);
 
         (StaticAnalysisWorkspace? Workspace, CommandError? Error) loadResult = await StaticAnalysisWorkspace
-            .LoadAsync(workspacePath, includeGenerated, maxFiles, cancellationToken)
+            .ResolveAsync(input, workspacePath, includeGenerated, maxFiles, cancellationToken)
             .ConfigureAwait(false);
         if (loadResult.Error is not null || loadResult.Workspace is null)
         {

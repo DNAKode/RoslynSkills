@@ -12,7 +12,8 @@ public sealed class FindSymbolCommand : IAgentCommand
         Summary: "Find identifier occurrences in a C#/VB file with structured hierarchical context.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

@@ -17,7 +17,8 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         OutputSchemaVersion: "1.0",
         MutatesState: false,
         Maturity: CommandMaturity.Advanced,
-        Traits: [CommandTrait.PotentiallySlow]);
+        Traits: [CommandTrait.PotentiallySlow],
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -31,6 +32,7 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         }
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
         if (filePaths.Length == 0 && string.IsNullOrWhiteSpace(directoryPath) && overrides.Count == 0)
@@ -253,7 +255,7 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
             return await fallback.ExecuteAsync(input, cancellationToken).ConfigureAwait(false);
         }
 
-        CommandFileAnalysis anchorAnalysis = await CommandFileAnalysis.LoadAsync(anchorFilePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis anchorAnalysis = await CommandFileAnalysis.LoadAsync(anchorFilePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, anchorAnalysis);
         if (workspaceError is not null)
         {

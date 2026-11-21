@@ -10,7 +10,8 @@ public sealed class ReplaceTextCommand : IAgentCommand
         Summary: "Replace an exact text snippet in one file with immediate optional C# diagnostics.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: true);
+        MutatesState: true,
+        RunsOnHotWorkspace: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {

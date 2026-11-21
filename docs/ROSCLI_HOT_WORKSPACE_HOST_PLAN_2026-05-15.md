@@ -392,14 +392,18 @@ Phase 1: read-only hot path
 - `diag.get_file_diagnostics`
 - `query.batch`
 
-Phase 2: broader semantic analysis
+Phase 2: broader semantic analysis (routed since 2026-11-21, see the follow-up at the end)
 
 - `nav.call_hierarchy`
 - `nav.call_path`
+- `nav.find_implementations`, `nav.find_overrides`
+- `ctx.call_chain_slice`, `ctx.dependency_slice`, `ctx.symbol_envelope`
 - `analyze.control_flow_graph`
 - `analyze.dataflow_slice`
 - `analyze.impact_slice`
-- `diag.get_workspace_snapshot`
+- `analyze.unused_private_symbols`, `analyze.dependency_violations`, `analyze.override_coverage`, `analyze.async_risk_scan`
+- `diag.get_workspace_snapshot`, `diag.get_after_edit`
+- `repair.propose_from_diagnostics`
 
 Phase 3: structured edits
 
@@ -781,3 +785,15 @@ The `.49` supervised round confirmed change-biased previews were easier to audit
 The `.50` supervised round validated the structured divergence fields: the agent cited `first_changed_offset=127`, `first_changed_line_delta=1`, and `first_changed_column_delta=21` while auditing a palette ranking assertion edit. The next ergonomics gap was log readability: offsets are machine-locatable, but compact reports still benefit from a delta-only snippet. `matches[]` now includes `old_change_preview` and `new_change_preview`, short bounded previews centered on the first changed region, separate from the broader old/new previews.
 
 The `.51` supervised round confirmed the delta-only previews made reporting easier: the agent cited `old_change_preview` and `new_change_preview` directly while validating a palette scroll mouse assertion edit. The next tooling gap was absolute navigation. `matches[]` now includes `old_change_line`, `old_change_column`, `new_change_line`, and `new_change_column` derived from the first changed region so audit tools can jump directly to the delta location.
+
+## 2026-11-21 Follow-Up: Every Read-Only Semantic Command Runs On The Hot Workspace
+
+A measured trial on a 190k-line, 33-project solution (CalcDb) showed that `nav.call_hierarchy`, `nav.call_path`, `analyze.impact_slice`, `ctx.call_chain_slice`, `nav.find_implementations` and `diag.get_workspace_snapshot` reloaded the solution on every call (70-180 s) although a daemon held it, that `ROSCLI_DAEMON=required` did not stop them, and that the hot-path searches answered from one file or one project.
+
+Causes, all found in code, not in the transport:
+
+- The host executes any registered command; what decided whether a command used the hot workspace was (a) a hardcoded id list in `CliApplication.IsDaemonCapableCommand` and (b) whether the command read `workspace_handle` at all. The list was written for phase 1 and the Phase 2 commands were never added, and they ignored the handle when routed anyway (they called `CommandFileAnalysis.LoadAsync(file, ct, workspacePath)` without it), so even a manually routed call loaded a second copy of the solution inside the host.
+- Routing now reads `CommandDescriptor.RunsOnHotWorkspace`; the CLI has no id list. In `required` mode a `nav.*`/`analyze.*` command that does not declare it fails with `hot_workspace_unsupported` instead of silently reloading. A test keeps every `nav.*`/`analyze.*` command declared.
+- The searches were scoped to one file or one compilation by construction, hot or not: `nav.find_references` scanned the anchor file's tokens, `nav.find_invocations`, `nav.call_hierarchy`, `nav.call_path` and `analyze.impact_slice` scanned the anchor project's compilation, and `nav.find_implementations`/`nav.find_overrides` compared declarations of the anchor file only (0 matches for an interface implemented elsewhere). They now use the solution: `SolutionSearchScope` (target project plus every project that depends on it, with a text pre-filter on the symbol name) for call-site scans, and `SymbolFinder` for references, implementations and overrides. Results carry `file_path`, `search_scope` and `searched_projects`.
+- Call sites now include method groups converted to delegates (`call_kind: method_group`, e.g. a factory registered in a static field) and uses in field/property initializers. Call-site scans are cached per `Compilation`, which a hot workspace keeps for every project an edit did not touch.
+- The host brings a workspace up to date before every routed call (`HotWorkspaceFreshness`): source edits made by any tool since the last call are applied incrementally; `refresh_policy: none` opts out, `strict` also reloads on project/membership changes.

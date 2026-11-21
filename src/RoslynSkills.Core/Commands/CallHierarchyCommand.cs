@@ -25,7 +25,8 @@ public sealed class CallHierarchyCommand : IAgentCommand
             OutputSchemaVersion: "1.0",
             MutatesState: false,
             Maturity: CommandMaturity.Advanced,
-            Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow]);
+            Traits: [CommandTrait.Heuristic, CommandTrait.DerivedAnalysis, CommandTrait.PotentiallySlow],
+            RunsOnHotWorkspace: true);
     }
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
@@ -39,6 +40,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
         InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         InputParsing.ValidateOptionalBool(input, "include_object_creations", errors);
@@ -95,7 +97,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {
@@ -124,11 +126,11 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 });
         }
 
+        SearchScope scope = await SolutionSearchScope.ResolveAsync(analysis, target: null, includeGenerated, cancellationToken).ConfigureAwait(false);
         CallGraph graph = await BuildCallGraphAsync(
-            analysis.Compilation,
+            scope,
             includeObjectCreations,
             includeExternal,
-            includeGenerated,
             contextLines,
             brief,
             cancellationToken).ConfigureAwait(false);
@@ -270,6 +272,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 method_kind = anchorMethod.MethodKind.ToString(),
             },
             scanned_syntax_trees = graph.scannedSyntaxTreeCount,
+            search = scope.ToPayload(),
             total_nodes = selectedNodes.Count,
             total_edges = selectedEdgesByKey.Count,
             truncated,
@@ -324,10 +327,9 @@ public sealed class CallHierarchyCommand : IAgentCommand
     }
 
     private static async Task<CallGraph> BuildCallGraphAsync(
-        Compilation compilation,
+        SearchScope scope,
         bool includeObjectCreations,
         bool includeExternal,
-        bool includeGenerated,
         int contextLines,
         bool brief,
         CancellationToken cancellationToken)
@@ -338,31 +340,26 @@ public sealed class CallHierarchyCommand : IAgentCommand
         HashSet<string> edgeKeys = new(StringComparer.Ordinal);
         int scannedSyntaxTreeCount = 0;
 
-        foreach (SyntaxTree syntaxTree in compilation.SyntaxTrees)
+        foreach (SearchUnit unit in scope.Units)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string treeFilePath = string.IsNullOrWhiteSpace(syntaxTree.FilePath)
-                ? "<unknown>"
-                : Path.GetFullPath(syntaxTree.FilePath);
-
-            if (!includeGenerated && CommandFileFilters.IsGeneratedPath(treeFilePath))
-            {
-                continue;
-            }
-
-            SemanticModel semanticModel = compilation.GetSemanticModel(syntaxTree, ignoreAccessibility: true);
-            SyntaxNode root = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-            SourceText sourceText = await syntaxTree.GetTextAsync(cancellationToken).ConfigureAwait(false);
+            string treeFilePath = unit.FilePath;
+            SourceText sourceText = await unit.Tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
             scannedSyntaxTreeCount++;
 
-            foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.EnumerateCallSites(
-                         semanticModel,
-                         root,
+            foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.GetCallSites(
+                         unit.Compilation,
+                         unit.Tree,
                          includeObjectCreations,
                          cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (callSite.caller is null)
+                {
+                    continue;
+                }
+
                 if (!includeExternal && (!IsInSource(callSite.caller) || !IsInSource(callSite.callee)))
                 {
                     continue;
