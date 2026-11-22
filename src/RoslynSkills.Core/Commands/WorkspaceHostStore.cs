@@ -44,6 +44,10 @@ internal static class WorkspaceHostStoreProvider
 
 internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 {
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
     private readonly Dictionary<string, HostedWorkspace> _workspaces = new(StringComparer.Ordinal);
     private readonly object _gate = new();
 
@@ -83,20 +87,55 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             .Select(tree => tree.FilePath)
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Distinct(PathComparer)
+            .OrderBy(path => path, PathComparer)
             .ToArray();
+        HashSet<string> sourcePathSet = new(sourcePaths, PathComparer);
+
         string[] projectPaths = workspace.ProjectFilePaths
             .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Distinct(PathComparer)
+            .OrderBy(path => path, PathComparer)
             .ToArray();
+        HashSet<string> projectPathSet = new(projectPaths, PathComparer);
+
+        IReadOnlyList<ProjectSourceRules> projectSourceRules = workspace.Solution is { } solution
+            ? ProjectSourceRules.FromSolution(solution, workspace.RootDirectory)
+            : Array.Empty<ProjectSourceRules>();
+
+        // Snapshot source files that already existed on disk inside project folders at load time
+        // yet were not included by MSBuild (e.g., conditional removes or external targets), so
+        // pre-call disk reconciliation never spuriously adds them as "new" files.
+        HashSet<string> solutionDocumentPaths = new(sourcePathSet, PathComparer);
+        if (workspace.Solution is { } loadedSolution)
+        {
+            foreach (Microsoft.CodeAnalysis.Project project in loadedSolution.Projects)
+            {
+                foreach (Microsoft.CodeAnalysis.Document doc in project.Documents)
+                {
+                    if (!string.IsNullOrWhiteSpace(doc.FilePath))
+                    {
+                        solutionDocumentPaths.Add(Path.GetFullPath(doc.FilePath));
+                    }
+                }
+            }
+        }
+
+        HashSet<string> baselineExcludedSourcePaths = new(PathComparer);
+        foreach (string candidate in ProjectSourceRules.EnumerateCandidateSourceFiles(projectSourceRules, includeGenerated))
+        {
+            if (!solutionDocumentPaths.Contains(candidate))
+            {
+                baselineExcludedSourcePaths.Add(candidate);
+            }
+        }
+
         string[] trackedPaths = sourcePaths
             .Concat(projectPaths)
-            .Append(workspace.ResolvedWorkspacePath)
-            .Concat(EnumerateExistingStructuralConfigPaths(workspace.RootDirectory))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Append(Path.GetFullPath(workspace.ResolvedWorkspacePath))
+            .Concat(EnumerateExistingStructuralConfigPaths(workspace.RootDirectory, projectPaths))
+            .Distinct(PathComparer)
+            .OrderBy(path => path, PathComparer)
             .ToArray();
         IReadOnlyDictionary<string, DateTimeOffset?> trackedWriteTimes = SnapshotWriteTimes(trackedPaths);
         string fingerprint = ComputeFingerprint(workspace, trackedWriteTimes);
@@ -105,6 +144,8 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             sourcePaths,
             projectPaths,
             workspace.ResolvedWorkspacePath,
+            projectSourceRules,
+            baselineExcludedSourcePaths,
             includeGenerated);
 
         HostedWorkspace hosted = new(
@@ -118,7 +159,11 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             WorkspaceFingerprint: fingerprint,
             TrackedPaths: trackedPaths,
             TrackedSourcePaths: sourcePaths,
+            TrackedSourcePathSet: sourcePathSet,
             TrackedProjectPaths: projectPaths,
+            TrackedProjectPathSet: projectPathSet,
+            ProjectSourceRules: projectSourceRules,
+            BaselineExcludedSourcePaths: baselineExcludedSourcePaths,
             TrackedWriteTimes: trackedWriteTimes,
             ChangeTracker: changeTracker);
 
@@ -159,10 +204,38 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 
     public WorkspaceStatus BuildStatus(HostedWorkspace hosted)
     {
-        Dictionary<string, WorkspaceChange> changes = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, WorkspaceChange> changes = new(PathComparer);
+        List<string>? staleWatcherPaths = null;
+
         foreach (WorkspaceChange change in hosted.ChangeTracker.SnapshotChanges())
         {
-            changes[change.Path] = change;
+            bool existsNow = File.Exists(change.Path);
+            DateTimeOffset? currentWriteTime = existsNow ? GetLastWriteTime(change.Path) : null;
+            WorkspaceChange verified = WorkspaceChangeClassifier.Classify(
+                change.Path,
+                hosted.Workspace.RootDirectory,
+                hosted.TrackedSourcePathSet.Contains(change.Path),
+                hosted.TrackedProjectPathSet.Contains(change.Path),
+                hosted.Workspace.ResolvedWorkspacePath,
+                hosted.ProjectSourceRules,
+                hosted.BaselineExcludedSourcePaths,
+                change.ChangeType,
+                existsNow,
+                currentWriteTime,
+                hosted.IncludeGenerated);
+            if (verified.Ignored)
+            {
+                staleWatcherPaths ??= new List<string>();
+                staleWatcherPaths.Add(change.Path);
+                continue;
+            }
+
+            changes[verified.Path] = verified;
+        }
+
+        if (staleWatcherPaths is { Count: > 0 })
+        {
+            hosted.ChangeTracker.ClearPaths(staleWatcherPaths);
         }
 
         foreach (string path in hosted.TrackedPaths)
@@ -175,12 +248,16 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             {
                 WorkspaceChange change = WorkspaceChangeClassifier.Classify(
                     path,
-                    hosted.TrackedSourcePaths,
-                    hosted.TrackedProjectPaths,
+                    hosted.Workspace.RootDirectory,
+                    hosted.TrackedSourcePathSet.Contains(path),
+                    hosted.TrackedProjectPathSet.Contains(path),
                     hosted.Workspace.ResolvedWorkspacePath,
+                    hosted.ProjectSourceRules,
+                    hosted.BaselineExcludedSourcePaths,
                     "snapshot",
                     current is not null,
-                    current);
+                    current,
+                    hosted.IncludeGenerated);
                 if (!change.Ignored)
                 {
                     changes[path] = change;
@@ -188,9 +265,65 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             }
         }
 
+        // Catch newly added structural config files (e.g., Directory.Build.props) even if watcher lagged.
+        foreach (string configPath in EnumerateExistingStructuralConfigPaths(hosted.Workspace.RootDirectory, hosted.TrackedProjectPaths))
+        {
+            if (hosted.TrackedWriteTimes.ContainsKey(configPath) || changes.ContainsKey(configPath))
+            {
+                continue;
+            }
+
+            DateTimeOffset? current = GetLastWriteTime(configPath);
+            WorkspaceChange change = WorkspaceChangeClassifier.Classify(
+                configPath,
+                hosted.Workspace.RootDirectory,
+                isTrackedSource: false,
+                isKnownProject: false,
+                hosted.Workspace.ResolvedWorkspacePath,
+                hosted.ProjectSourceRules,
+                hosted.BaselineExcludedSourcePaths,
+                "disk_scan",
+                current is not null,
+                current,
+                hosted.IncludeGenerated);
+            if (!change.Ignored)
+            {
+                changes[configPath] = change;
+            }
+        }
+
+        // Reconcile new source files under loaded project folders directly from disk so creations by external
+        // tools, git checkout, or git stash pop are visible immediately without relying on watcher timing.
+        if (hosted.ProjectSourceRules.Count > 0)
+        {
+            DateTimeOffset observedUtc = DateTimeOffset.UtcNow;
+            foreach (string candidatePath in ProjectSourceRules.EnumerateCandidateSourceFiles(
+                         hosted.ProjectSourceRules,
+                         hosted.IncludeGenerated))
+            {
+                if (hosted.TrackedSourcePathSet.Contains(candidatePath) ||
+                    hosted.BaselineExcludedSourcePaths.Contains(candidatePath) ||
+                    changes.ContainsKey(candidatePath))
+                {
+                    continue;
+                }
+
+                changes[candidatePath] = new WorkspaceChange(
+                    Path: candidatePath,
+                    DirtyKind: "source_added",
+                    CanIncrementallyUpdate: true,
+                    RequiresReload: false,
+                    Exists: true,
+                    LastWriteUtc: GetLastWriteTime(candidatePath),
+                    ObservedUtc: observedUtc,
+                    ChangeType: "disk_scan",
+                    Ignored: false);
+            }
+        }
+
         WorkspaceChange[] dirtyEntries = changes.Values
             .Where(change => !change.Ignored)
-            .OrderBy(change => change.Path, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(change => change.Path, PathComparer)
             .ToArray();
         bool requiresReload = dirtyEntries.Any(change => change.RequiresReload);
         return new WorkspaceStatus(
@@ -207,29 +340,53 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         WorkspaceStatus status,
         CancellationToken cancellationToken)
     {
-        string[] sourcePaths = status.Changes
-            .Where(change => string.Equals(change.DirtyKind, "source_change", StringComparison.OrdinalIgnoreCase) &&
-                             change.CanIncrementallyUpdate &&
+        string[] modifiedOrAddedPaths = status.Changes
+            .Where(change => change.CanIncrementallyUpdate &&
                              !change.RequiresReload &&
                              change.Exists)
             .Select(change => change.Path)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(PathComparer)
             .ToArray();
 
-        return await ApplyIncrementalSourceRefreshForPathsAsync(
+        string[] removedPaths = status.Changes
+            .Where(change => change.CanIncrementallyUpdate &&
+                             !change.RequiresReload &&
+                             !change.Exists)
+            .Select(change => change.Path)
+            .Distinct(PathComparer)
+            .ToArray();
+
+        return await ApplyIncrementalSourceChangesAsync(
                 handle,
                 status,
-                sourcePaths,
-                cancellationToken)
+                modifiedOrAddedPaths,
+                removedPaths,
+                cancellationToken,
+                allowAddDocuments: true)
             .ConfigureAwait(false);
     }
 
-    public async Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshForPathsAsync(
+    public Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshForPathsAsync(
         string handle,
         WorkspaceStatus status,
         IReadOnlyList<string> sourcePaths,
         CancellationToken cancellationToken,
         bool allowAddDocuments = false)
+        => ApplyIncrementalSourceChangesAsync(
+            handle,
+            status,
+            sourcePaths,
+            Array.Empty<string>(),
+            cancellationToken,
+            allowAddDocuments);
+
+    private async Task<WorkspaceRefreshResult> ApplyIncrementalSourceChangesAsync(
+        string handle,
+        WorkspaceStatus status,
+        IReadOnlyList<string> modifiedOrAddedPaths,
+        IReadOnlyList<string> removedPaths,
+        CancellationToken cancellationToken,
+        bool allowAddDocuments)
     {
         HostedWorkspace hosted;
         lock (_gate)
@@ -248,12 +405,18 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             hosted = current;
         }
 
-        string[] normalizedSourcePaths = sourcePaths
+        string[] normalizedModifiedOrAdded = modifiedOrAddedPaths
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(PathComparer)
             .ToArray();
-        if (normalizedSourcePaths.Length == 0)
+        string[] normalizedRemoved = removedPaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Distinct(PathComparer)
+            .ToArray();
+
+        if (normalizedModifiedOrAdded.Length == 0 && normalizedRemoved.Length == 0)
         {
             return new WorkspaceRefreshResult(
                 Applied: false,
@@ -263,13 +426,22 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
                 StatusAfter: status);
         }
 
-        int effectiveMaxFiles = Math.Max(hosted.MaxFiles, hosted.TrackedSourcePaths.Count + normalizedSourcePaths.Length);
-        (StaticAnalysisWorkspace? updatedWorkspace, IReadOnlyList<string> updatedPaths, IReadOnlyList<string> addedPaths, CommandError? error) =
-            await hosted.Workspace.ApplyDocumentTextUpdatesAsync(
-                    normalizedSourcePaths,
+        // Record write times before reading file contents so an edit arriving mid-refresh is still caught next call.
+        Dictionary<string, DateTimeOffset?> preReadWriteTimes = new(PathComparer);
+        foreach (string path in normalizedModifiedOrAdded)
+        {
+            preReadWriteTimes[path] = GetLastWriteTime(path);
+        }
+
+        int effectiveMaxFiles = Math.Max(hosted.MaxFiles, hosted.TrackedSourcePaths.Count + normalizedModifiedOrAdded.Length);
+        (StaticAnalysisWorkspace? updatedWorkspace, IReadOnlyList<string> updatedPaths, IReadOnlyList<string> addedPaths, IReadOnlyList<string> appliedRemovedPaths, CommandError? error) =
+            await hosted.Workspace.ApplyDocumentChangesAsync(
+                    normalizedModifiedOrAdded,
+                    normalizedRemoved,
                     hosted.IncludeGenerated,
                     effectiveMaxFiles,
                     allowAddDocuments,
+                    hosted.ProjectSourceRules,
                     cancellationToken)
                 .ConfigureAwait(false);
         if (error is not null || updatedWorkspace is null)
@@ -283,29 +455,83 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
                 Error: error ?? new CommandError("workspace_update_failed", "Incremental source refresh failed."));
         }
 
-        IReadOnlyList<string> trackedSourcePaths = addedPaths.Count == 0
-            ? hosted.TrackedSourcePaths
-            : hosted.TrackedSourcePaths
-                .Concat(addedPaths)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        IReadOnlyList<string> trackedPaths = addedPaths.Count == 0
-            ? hosted.TrackedPaths
-            : hosted.TrackedPaths
-                .Concat(addedPaths)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+        if (updatedPaths.Count == 0 && appliedRemovedPaths.Count == 0)
+        {
+            hosted.ChangeTracker.ClearPaths(normalizedModifiedOrAdded.Concat(normalizedRemoved));
+            WorkspaceStatus unchangedAfter = BuildStatus(hosted);
+            return new WorkspaceRefreshResult(
+                Applied: false,
+                RefreshAction: "none",
+                UpdatedPaths: Array.Empty<string>(),
+                StatusBefore: status,
+                StatusAfter: unchangedAfter);
+        }
+
+        HashSet<string> removedSet = new(appliedRemovedPaths, PathComparer);
+        HashSet<string> nextSourceSet = new(hosted.TrackedSourcePathSet, PathComparer);
+        foreach (string added in addedPaths)
+        {
+            nextSourceSet.Add(added);
+        }
+
+        foreach (string removed in appliedRemovedPaths)
+        {
+            nextSourceSet.Remove(removed);
+        }
+
+        string[] trackedSourcePaths = nextSourceSet
+            .OrderBy(path => path, PathComparer)
+            .ToArray();
+
+        HashSet<string> nextTrackedSet = new(hosted.TrackedPaths, PathComparer);
+        foreach (string added in addedPaths)
+        {
+            nextTrackedSet.Add(added);
+        }
+
+        foreach (string removed in appliedRemovedPaths)
+        {
+            nextTrackedSet.Remove(removed);
+        }
+
+        string[] trackedPaths = nextTrackedSet
+            .OrderBy(path => path, PathComparer)
+            .ToArray();
+
+        Dictionary<string, DateTimeOffset?> trackedWriteTimes = new(PathComparer);
+        foreach ((string path, DateTimeOffset? writeTime) in hosted.TrackedWriteTimes)
+        {
+            if (!removedSet.Contains(path))
+            {
+                trackedWriteTimes[path] = writeTime;
+            }
+        }
+
+        foreach (string updated in updatedPaths)
+        {
+            if (preReadWriteTimes.TryGetValue(updated, out DateTimeOffset? preReadTime))
+            {
+                trackedWriteTimes[updated] = preReadTime;
+            }
+            else
+            {
+                trackedWriteTimes[updated] = GetLastWriteTime(updated);
+            }
+        }
 
         if (addedPaths.Count > 0)
         {
             hosted.ChangeTracker.TrackSourcePaths(addedPaths);
         }
 
-        IReadOnlyDictionary<string, DateTimeOffset?> trackedWriteTimes = SnapshotWriteTimes(trackedPaths);
-        string fingerprint = ComputeFingerprint(updatedWorkspace, trackedWriteTimes);
+        if (appliedRemovedPaths.Count > 0)
+        {
+            hosted.ChangeTracker.UntrackSourcePaths(appliedRemovedPaths);
+        }
+
         hosted.ChangeTracker.ClearPaths(updatedPaths);
+
+        string fingerprint = ComputeFingerprint(updatedWorkspace, trackedWriteTimes);
         HostedWorkspace refreshed = hosted with
         {
             Workspace = updatedWorkspace,
@@ -314,6 +540,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             WorkspaceFingerprint = fingerprint,
             TrackedPaths = trackedPaths,
             TrackedSourcePaths = trackedSourcePaths,
+            TrackedSourcePathSet = nextSourceSet,
             TrackedWriteTimes = trackedWriteTimes,
         };
 
@@ -322,13 +549,21 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             _workspaces[handle] = refreshed;
         }
 
+        string[] allAppliedPaths = updatedPaths
+            .Concat(appliedRemovedPaths)
+            .Distinct(PathComparer)
+            .OrderBy(path => path, PathComparer)
+            .ToArray();
+
         WorkspaceStatus statusAfter = BuildStatus(refreshed);
         return new WorkspaceRefreshResult(
             Applied: true,
-            RefreshAction: "incremental_document_update",
-            UpdatedPaths: updatedPaths,
+            RefreshAction: WorkspaceHostProtocol.RefreshAction.IncrementalDocumentUpdate,
+            UpdatedPaths: allAppliedPaths,
             StatusBefore: status,
-            StatusAfter: statusAfter);
+            StatusAfter: statusAfter,
+            AddedPaths: addedPaths,
+            RemovedPaths: appliedRemovedPaths);
     }
 
     public async Task<WorkspaceRefreshResult> ReloadAsync(
@@ -395,7 +630,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 
     private static IReadOnlyDictionary<string, DateTimeOffset?> SnapshotWriteTimes(IEnumerable<string> paths)
     {
-        Dictionary<string, DateTimeOffset?> snapshot = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, DateTimeOffset?> snapshot = new(PathComparer);
         foreach (string path in paths)
         {
             snapshot[path] = GetLastWriteTime(path);
@@ -407,19 +642,54 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
     private static DateTimeOffset? GetLastWriteTime(string path)
         => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
 
-    private static IEnumerable<string> EnumerateExistingStructuralConfigPaths(string rootDirectory)
+    private static IEnumerable<string> EnumerateExistingStructuralConfigPaths(
+        string rootDirectory,
+        IEnumerable<string> projectPaths)
     {
-        if (!Directory.Exists(rootDirectory))
+        HashSet<string> candidateDirs = new(PathComparer);
+        string? normalizedRoot = Directory.Exists(rootDirectory)
+            ? Path.GetFullPath(rootDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            : null;
+        if (!string.IsNullOrWhiteSpace(normalizedRoot))
         {
-            yield break;
+            candidateDirs.Add(normalizedRoot);
         }
 
-        foreach (string fileName in WorkspaceChangeClassifier.StructuralConfigFileNames)
+        foreach (string projectPath in projectPaths)
         {
-            string path = Path.Combine(rootDirectory, fileName);
-            if (File.Exists(path))
+            string? dir = Path.GetDirectoryName(Path.GetFullPath(projectPath));
+            while (!string.IsNullOrWhiteSpace(dir))
             {
-                yield return Path.GetFullPath(path);
+                string trimmed = dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!candidateDirs.Add(trimmed))
+                {
+                    break;
+                }
+
+                if (!string.IsNullOrWhiteSpace(normalizedRoot) && PathComparer.Equals(trimmed, normalizedRoot))
+                {
+                    break;
+                }
+
+                dir = Path.GetDirectoryName(trimmed);
+            }
+        }
+
+        HashSet<string> yielded = new(PathComparer);
+        foreach (string dir in candidateDirs)
+        {
+            if (!Directory.Exists(dir))
+            {
+                continue;
+            }
+
+            foreach (string fileName in WorkspaceChangeClassifier.StructuralConfigFileNames)
+            {
+                string path = Path.GetFullPath(Path.Combine(dir, fileName));
+                if (File.Exists(path) && yielded.Add(path))
+                {
+                    yield return path;
+                }
             }
         }
     }
@@ -435,7 +705,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         builder.AppendLine(workspace.ProjectCount.ToString());
         builder.AppendLine(workspace.DocumentCount.ToString());
 
-        foreach ((string path, DateTimeOffset? writeTime) in trackedWriteTimes.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        foreach ((string path, DateTimeOffset? writeTime) in trackedWriteTimes.OrderBy(pair => pair.Key, PathComparer))
         {
             builder.Append(path);
             builder.Append('|');
@@ -458,7 +728,11 @@ internal sealed record HostedWorkspace(
     string WorkspaceFingerprint,
     IReadOnlyList<string> TrackedPaths,
     IReadOnlyList<string> TrackedSourcePaths,
+    IReadOnlySet<string> TrackedSourcePathSet,
     IReadOnlyList<string> TrackedProjectPaths,
+    IReadOnlySet<string> TrackedProjectPathSet,
+    IReadOnlyList<ProjectSourceRules> ProjectSourceRules,
+    IReadOnlySet<string> BaselineExcludedSourcePaths,
     IReadOnlyDictionary<string, DateTimeOffset?> TrackedWriteTimes,
     WorkspaceChangeTracker ChangeTracker) : IDisposable
 {
@@ -482,7 +756,9 @@ internal sealed record WorkspaceRefreshResult(
     IReadOnlyList<string> UpdatedPaths,
     WorkspaceStatus StatusBefore,
     WorkspaceStatus StatusAfter,
-    CommandError? Error = null);
+    CommandError? Error = null,
+    IReadOnlyList<string>? AddedPaths = null,
+    IReadOnlyList<string>? RemovedPaths = null);
 
 internal sealed record WorkspaceChange(
     string Path,
@@ -497,25 +773,38 @@ internal sealed record WorkspaceChange(
 
 internal sealed class WorkspaceChangeTracker : IDisposable
 {
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
     private readonly FileSystemWatcher? _watcher;
+    private readonly string _rootDirectory;
     private readonly HashSet<string> _trackedSourcePaths;
     private readonly HashSet<string> _trackedProjectPaths;
     private readonly string _workspacePath;
+    private readonly IReadOnlyList<ProjectSourceRules> _projectSourceRules;
+    private readonly IReadOnlySet<string> _baselineExcludedSourcePaths;
     private readonly bool _includeGenerated;
     private readonly object _gate = new();
-    private readonly Dictionary<string, WorkspaceChange> _changes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, WorkspaceChange> _changes = new(PathComparer);
 
     private WorkspaceChangeTracker(
         FileSystemWatcher? watcher,
+        string rootDirectory,
         IEnumerable<string> trackedSourcePaths,
         IEnumerable<string> trackedProjectPaths,
         string workspacePath,
+        IReadOnlyList<ProjectSourceRules> projectSourceRules,
+        IReadOnlySet<string> baselineExcludedSourcePaths,
         bool includeGenerated)
     {
         _watcher = watcher;
-        _trackedSourcePaths = new HashSet<string>(trackedSourcePaths.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-        _trackedProjectPaths = new HashSet<string>(trackedProjectPaths.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
+        _rootDirectory = string.IsNullOrWhiteSpace(rootDirectory) ? string.Empty : Path.GetFullPath(rootDirectory);
+        _trackedSourcePaths = new HashSet<string>(trackedSourcePaths.Select(Path.GetFullPath), PathComparer);
+        _trackedProjectPaths = new HashSet<string>(trackedProjectPaths.Select(Path.GetFullPath), PathComparer);
         _workspacePath = Path.GetFullPath(workspacePath);
+        _projectSourceRules = projectSourceRules;
+        _baselineExcludedSourcePaths = baselineExcludedSourcePaths;
         _includeGenerated = includeGenerated;
     }
 
@@ -524,23 +813,41 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         IEnumerable<string> trackedSourcePaths,
         IEnumerable<string> trackedProjectPaths,
         string workspacePath,
+        IReadOnlyList<ProjectSourceRules> projectSourceRules,
+        IReadOnlySet<string> baselineExcludedSourcePaths,
         bool includeGenerated)
     {
         if (!Directory.Exists(rootDirectory))
         {
-            return new WorkspaceChangeTracker(null, trackedSourcePaths, trackedProjectPaths, workspacePath, includeGenerated);
+            return new WorkspaceChangeTracker(
+                null,
+                rootDirectory,
+                trackedSourcePaths,
+                trackedProjectPaths,
+                workspacePath,
+                projectSourceRules,
+                baselineExcludedSourcePaths,
+                includeGenerated);
         }
 
         FileSystemWatcher watcher = new(rootDirectory)
         {
             IncludeSubdirectories = true,
+            InternalBufferSize = 65536,
             NotifyFilter = NotifyFilters.FileName |
-                           NotifyFilters.DirectoryName |
                            NotifyFilters.LastWrite |
                            NotifyFilters.Size |
                            NotifyFilters.CreationTime,
         };
-        WorkspaceChangeTracker tracker = new(watcher, trackedSourcePaths, trackedProjectPaths, workspacePath, includeGenerated);
+        WorkspaceChangeTracker tracker = new(
+            watcher,
+            rootDirectory,
+            trackedSourcePaths,
+            trackedProjectPaths,
+            workspacePath,
+            projectSourceRules,
+            baselineExcludedSourcePaths,
+            includeGenerated);
         watcher.Changed += (_, args) => tracker.Record(args.FullPath, args.ChangeType.ToString());
         watcher.Created += (_, args) => tracker.Record(args.FullPath, args.ChangeType.ToString());
         watcher.Deleted += (_, args) => tracker.Record(args.FullPath, args.ChangeType.ToString());
@@ -549,7 +856,9 @@ internal sealed class WorkspaceChangeTracker : IDisposable
             tracker.Record(args.OldFullPath, "RenamedFrom");
             tracker.Record(args.FullPath, "RenamedTo");
         };
-        watcher.Error += (_, _) => tracker.Record(rootDirectory, "WatcherError");
+        // A WatcherError (e.g. buffer overflow under heavy git/build churn) must not force a reload:
+        // BuildStatus reconciles tracked paths and loaded project directories directly from disk.
+        watcher.Error += (_, _) => { };
         watcher.EnableRaisingEvents = true;
         return tracker;
     }
@@ -574,6 +883,18 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         }
     }
 
+    public void UntrackSourcePaths(IEnumerable<string> paths)
+    {
+        lock (_gate)
+        {
+            foreach (string path in paths.Select(Path.GetFullPath))
+            {
+                _trackedSourcePaths.Remove(path);
+                _changes.Remove(path);
+            }
+        }
+    }
+
     public void ClearPaths(IEnumerable<string> paths)
     {
         lock (_gate)
@@ -592,27 +913,44 @@ internal sealed class WorkspaceChangeTracker : IDisposable
 
     private void Record(string path, string changeType)
     {
-        string fullPath = Path.GetFullPath(path);
-        if ((string.Equals(changeType, "Changed", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(changeType, "Created", StringComparison.OrdinalIgnoreCase)) &&
-            Directory.Exists(fullPath))
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (Directory.Exists(fullPath) ||
+            WorkspaceChangeClassifier.ShouldIgnore(fullPath, _rootDirectory, _includeGenerated))
         {
             return;
         }
 
         bool exists = File.Exists(fullPath);
         DateTimeOffset? lastWriteUtc = exists ? File.GetLastWriteTimeUtc(fullPath) : null;
-        string[] trackedSourcesSnapshot;
+        bool isTrackedSource;
         lock (_gate)
         {
-            trackedSourcesSnapshot = _trackedSourcePaths.ToArray();
+            isTrackedSource = _trackedSourcePaths.Contains(fullPath);
         }
 
+        bool isKnownProject = _trackedProjectPaths.Contains(fullPath);
         WorkspaceChange change = WorkspaceChangeClassifier.Classify(
             fullPath,
-            trackedSourcesSnapshot,
-            _trackedProjectPaths,
+            _rootDirectory,
+            isTrackedSource,
+            isKnownProject,
             _workspacePath,
+            _projectSourceRules,
+            _baselineExcludedSourcePaths,
             changeType,
             exists,
             lastWriteUtc,
@@ -631,6 +969,14 @@ internal sealed class WorkspaceChangeTracker : IDisposable
 
 internal static class WorkspaceChangeClassifier
 {
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
     public static readonly IReadOnlyList<string> StructuralConfigFileNames = new[]
     {
         "Directory.Build.props",
@@ -642,9 +988,12 @@ internal static class WorkspaceChangeClassifier
 
     public static WorkspaceChange Classify(
         string path,
-        IEnumerable<string> trackedSourcePaths,
-        IEnumerable<string> trackedProjectPaths,
+        string rootDirectory,
+        bool isTrackedSource,
+        bool isKnownProject,
         string workspacePath,
+        IReadOnlyList<ProjectSourceRules> projectSourceRules,
+        IReadOnlySet<string> baselineExcludedSourcePaths,
         string eventName,
         bool exists,
         DateTimeOffset? lastWriteUtc,
@@ -652,67 +1001,68 @@ internal static class WorkspaceChangeClassifier
     {
         string fullPath = Path.GetFullPath(path);
         DateTimeOffset observedUtc = DateTimeOffset.UtcNow;
-        if (ShouldIgnore(fullPath, includeGenerated))
+        if (ShouldIgnore(fullPath, rootDirectory, includeGenerated))
         {
             return new WorkspaceChange(fullPath, "ignored", false, false, exists, lastWriteUtc, observedUtc, eventName, Ignored: true);
         }
 
-        HashSet<string> sourceSet = new(trackedSourcePaths.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-        HashSet<string> projectSet = new(trackedProjectPaths.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-        bool isTrackedSource = sourceSet.Contains(fullPath);
-        bool isKnownProject = projectSet.Contains(fullPath);
-        bool isWorkspaceFile = string.Equals(fullPath, Path.GetFullPath(workspacePath), StringComparison.OrdinalIgnoreCase);
-        bool isSourceFile = CommandLanguageServices.IsSupportedSourceFile(fullPath);
-
-        if (isTrackedSource && exists)
-        {
-            return new WorkspaceChange(fullPath, "source_change", true, false, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
-        }
-
-        if (isTrackedSource && !exists)
-        {
-            return new WorkspaceChange(fullPath, "unknown_or_membership_change", false, true, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
-        }
-
+        bool isWorkspaceFile = PathComparer.Equals(fullPath, Path.GetFullPath(workspacePath));
         if (isWorkspaceFile || isKnownProject || IsProjectStructurePath(fullPath))
         {
             return new WorkspaceChange(fullPath, "project_structure_change", false, true, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
         }
 
-        if (IsAnalyzerConfigPath(fullPath))
+        if (isTrackedSource)
         {
-            return new WorkspaceChange(fullPath, "analyzer_config_change", false, true, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
+            return exists
+                ? new WorkspaceChange(fullPath, "source_change", true, false, exists, lastWriteUtc, observedUtc, eventName, Ignored: false)
+                : new WorkspaceChange(fullPath, "source_removed", true, false, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
         }
 
-        if (isSourceFile)
+        if (exists &&
+            CommandLanguageServices.IsSupportedSourceFile(fullPath) &&
+            !baselineExcludedSourcePaths.Contains(fullPath) &&
+            ProjectSourceRules.MatchesAnyProject(projectSourceRules, fullPath, includeGenerated))
         {
-            return new WorkspaceChange(fullPath, "unknown_or_membership_change", false, true, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
+            return new WorkspaceChange(fullPath, "source_added", true, false, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
         }
 
-        return new WorkspaceChange(fullPath, "unknown_or_membership_change", false, true, exists, lastWriteUtc, observedUtc, eventName, Ignored: false);
+        // Non-source files, excluded source files, directory events, and untracked deletions do not dirty or reload.
+        return new WorkspaceChange(fullPath, "ignored", false, false, exists, lastWriteUtc, observedUtc, eventName, Ignored: true);
     }
 
-    private static bool ShouldIgnore(string path, bool includeGenerated)
+    public static bool ShouldIgnore(string fullPath, string rootDirectory, bool includeGenerated)
     {
-        string[] segments = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (segments.Any(segment =>
-                string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(segment, ".git", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(segment, ".roslynskills", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(segment, "TestResults", StringComparison.OrdinalIgnoreCase)))
+        string pathToInspect = fullPath;
+        if (!string.IsNullOrWhiteSpace(rootDirectory))
         {
-            return true;
+            string normalizedRoot = rootDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (fullPath.Length > normalizedRoot.Length &&
+                fullPath.StartsWith(normalizedRoot, PathComparison) &&
+                (fullPath[normalizedRoot.Length] == Path.DirectorySeparatorChar ||
+                 fullPath[normalizedRoot.Length] == Path.AltDirectorySeparatorChar))
+            {
+                pathToInspect = fullPath[(normalizedRoot.Length + 1)..];
+            }
         }
 
-        string extension = Path.GetExtension(path);
+        string[] segments = pathToInspect.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < segments.Length; i++)
+        {
+            if (ProjectSourceRules.IsIgnoredDirectorySegment(segments[i]))
+            {
+                return true;
+            }
+        }
+
+        string extension = Path.GetExtension(fullPath);
         if (string.Equals(extension, ".log", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(extension, ".tmp", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        return !includeGenerated && CommandFileFilters.IsGeneratedPath(path);
+        return !includeGenerated && CommandFileFilters.IsGeneratedPath(fullPath);
     }
 
     private static bool IsProjectStructurePath(string path)
@@ -728,16 +1078,6 @@ internal static class WorkspaceChangeClassifier
 
         string fileName = Path.GetFileName(path);
         return StructuralConfigFileNames.Any(name => string.Equals(name, fileName, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool IsAnalyzerConfigPath(string path)
-    {
-        string extension = Path.GetExtension(path);
-        string fileName = Path.GetFileName(path);
-        return string.Equals(extension, ".editorconfig", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(extension, ".globalconfig", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(extension, ".ruleset", StringComparison.OrdinalIgnoreCase) ||
-               fileName.Contains("analyzer", StringComparison.OrdinalIgnoreCase);
     }
 }
 

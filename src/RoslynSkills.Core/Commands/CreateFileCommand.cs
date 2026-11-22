@@ -314,9 +314,6 @@ public sealed class CreateFileCommand : IAgentCommand
             return explicitSolution;
         }
 
-        StringComparer pathComparer = OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
         foreach (HostedWorkspace workspace in store.List())
         {
             if (workspace.Workspace.Solution is not { } solution)
@@ -324,8 +321,12 @@ public sealed class CreateFileCommand : IAgentCommand
                 continue;
             }
 
-            if (workspace.TrackedSourcePaths.Contains(filePath, pathComparer) ||
-                StaticAnalysisWorkspace.FindContainingProjectsForNewSourceFile(solution, filePath).Count > 0)
+            if (workspace.TrackedSourcePathSet.Contains(filePath) ||
+                StaticAnalysisWorkspace.FindContainingProjectsForNewSourceFile(
+                    solution,
+                    filePath,
+                    workspace.IncludeGenerated,
+                    workspace.ProjectSourceRules).Count > 0)
             {
                 return solution;
             }

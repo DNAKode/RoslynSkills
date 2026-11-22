@@ -906,10 +906,11 @@ public sealed class VbCommandTests
     }
 
     [Fact]
-    public async Task WorkspaceRefreshCommand_ClassifiesNewSourceFileFromWatcherAsMembershipChange()
+    public async Task WorkspaceRefreshCommand_AddsNewSourceFileIncrementallyAndReloadsOnProjectChange()
     {
         string root = CreateWorkspaceRoot("hot-refresh-watcher");
         (string solutionPath, string appPath, _) = await CreateTwoProjectSlnxWorkspaceAsync(root);
+        string appProjectPath = Path.Combine(Path.GetDirectoryName(appPath)!, "App.csproj");
         string newSourcePath = Path.Combine(Path.GetDirectoryName(appPath)!, "NewMember.cs");
         string? handle = null;
 
@@ -929,30 +930,40 @@ public sealed class VbCommandTests
 
             await File.WriteAllTextAsync(newSourcePath, "public class NewMember { }");
 
+            WorkspaceStatusCommand status = new();
+            CommandExecutionResult statusBefore = await status.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle }),
+                CancellationToken.None);
+            Assert.True(statusBefore.Ok);
+            using (JsonDocument statusDoc = JsonDocument.Parse(JsonSerializer.Serialize(statusBefore.Data)))
+            {
+                JsonElement statusRoot = statusDoc.RootElement;
+                Assert.True(statusRoot.GetProperty("dirty").GetBoolean());
+                Assert.True(statusRoot.GetProperty("can_incrementally_update").GetBoolean());
+                Assert.False(statusRoot.GetProperty("requires_reload").GetBoolean());
+                Assert.Contains("source_added", statusRoot.GetProperty("dirty_kinds").EnumerateArray().Select(item => item.GetString()));
+                Assert.Contains(
+                    Path.GetFullPath(newSourcePath),
+                    statusRoot.GetProperty("invalidated_paths").EnumerateArray().Select(item => item.GetString()));
+            }
+
             WorkspaceRefreshCommand refresh = new();
-            JsonElement refreshRoot = await WaitForDirtyKindAsync(
-                refresh,
-                handle,
-                "unknown_or_membership_change");
-
-            Assert.True(refreshRoot.GetProperty("dirty").GetBoolean());
-            Assert.False(refreshRoot.GetProperty("can_incrementally_update").GetBoolean());
-            Assert.True(refreshRoot.GetProperty("requires_reload").GetBoolean());
-            Assert.Contains(
-                Path.GetFullPath(newSourcePath),
-                refreshRoot.GetProperty("invalidated_paths").EnumerateArray().Select(item => item.GetString()));
-
-            CommandExecutionResult strictRefresh = await refresh.ExecuteAsync(
-                ToJsonElement(new { workspace_handle = handle, mode = "strict" }),
+            CommandExecutionResult balancedRefresh = await refresh.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle, mode = "balanced" }),
                 CancellationToken.None);
 
-            Assert.True(strictRefresh.Ok);
-            using JsonDocument strictDoc = JsonDocument.Parse(JsonSerializer.Serialize(strictRefresh.Data));
-            JsonElement strictRoot = strictDoc.RootElement;
-            Assert.Equal("reload", strictRoot.GetProperty("refresh_action").GetString());
-            Assert.True(strictRoot.GetProperty("dirty_before").GetBoolean());
-            Assert.False(strictRoot.GetProperty("dirty_after").GetBoolean());
-            Assert.False(strictRoot.GetProperty("requires_reload").GetBoolean());
+            Assert.True(balancedRefresh.Ok);
+            using (JsonDocument refreshDoc = JsonDocument.Parse(JsonSerializer.Serialize(balancedRefresh.Data)))
+            {
+                JsonElement refreshRoot = refreshDoc.RootElement;
+                Assert.Equal("incremental_document_update", refreshRoot.GetProperty("refresh_action").GetString());
+                Assert.True(refreshRoot.GetProperty("dirty_before").GetBoolean());
+                Assert.False(refreshRoot.GetProperty("dirty_after").GetBoolean());
+                Assert.False(refreshRoot.GetProperty("requires_reload").GetBoolean());
+                Assert.Contains(
+                    Path.GetFullPath(newSourcePath),
+                    refreshRoot.GetProperty("added_paths").EnumerateArray().Select(item => item.GetString()));
+            }
 
             FindSymbolCommand findNewMember = new();
             CommandExecutionResult symbolResult = await findNewMember.ExecuteAsync(
@@ -967,8 +978,24 @@ public sealed class VbCommandTests
                 CancellationToken.None);
 
             Assert.True(symbolResult.Ok);
-            using JsonDocument symbolDoc = JsonDocument.Parse(JsonSerializer.Serialize(symbolResult.Data));
-            Assert.True(symbolDoc.RootElement.GetProperty("total_matches").GetInt32() >= 1);
+            using (JsonDocument symbolDoc = JsonDocument.Parse(JsonSerializer.Serialize(symbolResult.Data)))
+            {
+                Assert.True(symbolDoc.RootElement.GetProperty("total_matches").GetInt32() >= 1);
+            }
+
+            // A .csproj edit still requires a reload, and strict mode reloads cleanly.
+            await File.AppendAllTextAsync(appProjectPath, Environment.NewLine + "<!-- strict reload check -->");
+            CommandExecutionResult strictRefresh = await refresh.ExecuteAsync(
+                ToJsonElement(new { workspace_handle = handle, mode = "strict" }),
+                CancellationToken.None);
+
+            Assert.True(strictRefresh.Ok);
+            using JsonDocument strictDoc = JsonDocument.Parse(JsonSerializer.Serialize(strictRefresh.Data));
+            JsonElement strictRoot = strictDoc.RootElement;
+            Assert.Equal("reload", strictRoot.GetProperty("refresh_action").GetString());
+            Assert.True(strictRoot.GetProperty("dirty_before").GetBoolean());
+            Assert.False(strictRoot.GetProperty("dirty_after").GetBoolean());
+            Assert.False(strictRoot.GetProperty("requires_reload").GetBoolean());
         }
         finally
         {
@@ -1072,34 +1099,6 @@ public sealed class VbCommandTests
     {
         using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
         return doc.RootElement.GetProperty("workspace_handle").GetString()!;
-    }
-
-    private static async Task<JsonElement> WaitForDirtyKindAsync(
-        WorkspaceRefreshCommand refresh,
-        string handle,
-        string dirtyKind)
-    {
-        for (int i = 0; i < 25; i++)
-        {
-            CommandExecutionResult result = await refresh.ExecuteAsync(
-                ToJsonElement(new { workspace_handle = handle }),
-                CancellationToken.None);
-            Assert.True(result.Ok);
-            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(result.Data));
-            JsonElement root = doc.RootElement.Clone();
-            if (root.GetProperty("dirty_kinds").EnumerateArray().Any(item => string.Equals(item.GetString(), dirtyKind, StringComparison.Ordinal)))
-            {
-                return root;
-            }
-
-            await Task.Delay(100);
-        }
-
-        CommandExecutionResult finalResult = await refresh.ExecuteAsync(
-            ToJsonElement(new { workspace_handle = handle }),
-            CancellationToken.None);
-        using JsonDocument finalDoc = JsonDocument.Parse(JsonSerializer.Serialize(finalResult.Data));
-        return finalDoc.RootElement.Clone();
     }
 
     private static async Task<(string solutionPath, string appPath, string libPath)> CreateTwoProjectSlnxWorkspaceAsync(string root)

@@ -21,9 +21,10 @@ internal sealed record HotWorkspaceFreshnessResult(
 internal static class HotWorkspaceFreshness
 {
     /// <summary>
-    /// Applies pending source changes to the workspace named by <paramref name="workspaceHandle"/>.
-    /// <c>auto</c>/<c>balanced</c> (default) applies known source-file edits incrementally; <c>strict</c> also reloads the
-    /// solution when project or membership changes need it; <c>none</c> leaves the workspace as it is.
+    /// Applies pending source changes (edits, additions matching project include rules, and removals) to the workspace
+    /// named by <paramref name="workspaceHandle"/>. <c>auto</c>/<c>balanced</c> (default) applies source changes
+    /// incrementally and reports <c>requires_reload</c> only when project or solution files change; <c>strict</c> also
+    /// reloads the solution when project or solution files change; <c>none</c> leaves the workspace as it is.
     /// Returns null when nothing was checked (policy <c>none</c> or unknown handle).
     /// </summary>
     public static async Task<HotWorkspaceFreshnessResult?> EnsureFreshAsync(

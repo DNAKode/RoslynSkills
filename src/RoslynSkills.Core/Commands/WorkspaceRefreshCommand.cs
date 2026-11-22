@@ -102,11 +102,15 @@ public sealed class WorkspaceRefreshCommand : IAgentCommand
             refresh_action = refreshAction,
             refresh_mode = mode,
             updated_paths = refreshResult?.UpdatedPaths ?? Array.Empty<string>(),
+            added_paths = refreshResult?.AddedPaths ?? Array.Empty<string>(),
+            removed_paths = refreshResult?.RemovedPaths ?? Array.Empty<string>(),
             requires_reload = statusAfter.RequiresReload,
             note = string.Equals(refreshAction, "incremental_document_update", StringComparison.Ordinal)
-                ? "Known source file changes were applied to the hot Roslyn solution."
+                ? "Source file changes were applied to the hot Roslyn solution."
+                : string.Equals(refreshAction, "reload", StringComparison.Ordinal)
+                ? "Hot Roslyn solution was reloaded from disk."
                 : statusAfter.Dirty
-                ? "Workspace membership or structural files changed. Reload handling is implemented in a later hot-server sequence item."
+                ? "Project or solution files changed; reload the hot workspace (workspace.refresh --mode strict or --mode reload)."
                 : "No tracked file changes detected.",
             mode = displayHosted.Mode,
             include_generated = displayHosted.IncludeGenerated,

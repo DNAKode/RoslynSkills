@@ -54,10 +54,14 @@ internal static class HotWorkspaceEditRefresh
         foreach (HostedWorkspace workspace in store.List())
         {
             string[] matchingPaths = normalizedPaths
-                .Where(path => workspace.TrackedSourcePaths.Contains(path, PathComparer) ||
+                .Where(path => workspace.TrackedSourcePathSet.Contains(path) ||
                                (allowAddDocuments &&
                                 workspace.Workspace.Solution is { } solution &&
-                                StaticAnalysisWorkspace.FindContainingProjectsForNewSourceFile(solution, path).Count > 0))
+                                StaticAnalysisWorkspace.FindContainingProjectsForNewSourceFile(
+                                    solution,
+                                    path,
+                                    workspace.IncludeGenerated,
+                                    workspace.ProjectSourceRules).Count > 0))
                 .ToArray();
             if (matchingPaths.Length > 0)
             {
