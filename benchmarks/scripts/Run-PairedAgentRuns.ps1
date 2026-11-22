@@ -1473,11 +1473,7 @@ function Get-RoslynWorkspaceContextUsage {
 
                                 try {
                                     $innerPayload = $innerText | ConvertFrom-Json -ErrorAction Stop
-                                    if ($innerPayload.PSObject.Properties.Match("envelope").Count -gt 0) {
-                                        Add-WorkspaceModeFromEnvelope -Envelope $innerPayload.envelope -Modes $modes
-                                    } else {
-                                        Add-WorkspaceModeFromEnvelope -Envelope $innerPayload -Modes $modes
-                                    }
+                                    Add-WorkspaceModeFromEnvelope -Envelope $innerPayload -Modes $modes
                                 } catch {
                                     Add-WorkspaceModesFromText -Text $innerText -Modes $modes
                                 }

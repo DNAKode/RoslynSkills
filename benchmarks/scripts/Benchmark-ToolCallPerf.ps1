@@ -919,8 +919,8 @@ function Invoke-TransportToolSample {
 
         $responseText = [string]$responseLine
         $response = $responseText | ConvertFrom-Json -ErrorAction Stop
-        $envelope = Get-NestedValue -Object $response -Path @("envelope")
-        $responseOk = Get-NestedValue -Object $response -Path @("ok")
+        $envelope = $response
+        $responseOk = Get-NestedValue -Object $response -Path @("Ok")
         $exitCode = if ($responseOk -eq $true) { 0 } else { 1 }
     } catch {
         $timedOut = $_.Exception.Message.IndexOf("Timed out waiting for transport server response", [System.StringComparison]::OrdinalIgnoreCase) -ge 0

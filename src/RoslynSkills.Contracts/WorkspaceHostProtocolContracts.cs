@@ -5,7 +5,7 @@ namespace RoslynSkills.Contracts;
 
 public static class WorkspaceHostProtocol
 {
-    public const string ProtocolVersion = "1.0";
+    public const string ProtocolVersion = "2.0";
 
     public static class Method
     {
@@ -71,10 +71,15 @@ public sealed record WorkspaceHostResponse(
     [property: JsonPropertyName("protocol_version")] string ProtocolVersion,
     [property: JsonPropertyName("method")] string Method,
     [property: JsonPropertyName("elapsed_ms")] double ElapsedMs,
+    [property: JsonPropertyName("command_id")] string? CommandId = null,
+    [property: JsonPropertyName("version")] string? Version = null,
     [property: JsonPropertyName("workspace")] WorkspaceHostWorkspaceMetadata? Workspace = null,
-    [property: JsonPropertyName("envelope")] CommandEnvelope? Envelope = null,
     [property: JsonPropertyName("data")] object? Data = null,
-    [property: JsonPropertyName("errors")] IReadOnlyList<CommandError>? Errors = null);
+    [property: JsonPropertyName("telemetry")] object? Telemetry = null,
+    [property: JsonPropertyName("errors")] IReadOnlyList<CommandError>? Errors = null,
+    [property: JsonPropertyName("preview")] string? Preview = null,
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    [property: JsonPropertyName("trace_id")] string? TraceId = null);
 
 public sealed record WorkspaceHostWorkspaceMetadata(
     [property: JsonPropertyName("alias")] string? Alias,

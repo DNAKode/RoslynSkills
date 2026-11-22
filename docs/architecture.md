@@ -22,16 +22,16 @@ Cross-platform CLI host. Shell-agnostic launchers in `scripts/roscli(.cmd)`.
 - **Daemon routing**: Routes hot-capable commands to `RoslynSkills.WorkspaceHost` automatically when an alias is bound (`ROSCLI_DAEMON=auto` by default). Setting `ROSCLI_DAEMON=required` fails closed (`hot_workspace_unsupported` or `daemon_unavailable`) instead of reloading the solution in-process. `--no-daemon` or `ROSCLI_DAEMON=off` forces the in-process path.
 - **Invocation modes**: `dotnet run` (dev default), published DLL cache (`ROSCLI_USE_PUBLISHED=1` for high-volume agent loops), or installed global tool (`roscli`).
 - **Input modes**: direct shorthand (positional args), `--input @file.json`, `--input-stdin`.
-- **Output**: JSON envelopes with `Ok`, `CommandId`, `Data`, `Preview`, `Summary`, `Errors`.
+- **Output**: Unified flat JSON `CommandEnvelope` with `Ok`, `CommandId`, `Version`, `Preview`, `Data`, `Telemetry`, `Transport`, `Errors`, `TraceId`, `Summary`. The command's own payload always lives directly in top-level `Data` whether executed in-process or via the daemon; `Transport` reports the execution path (`mode`: `"in_process"` or `"daemon"`, plus `routed_alias`, `workspace_handle`, `cache_mode`, `refresh_policy`, `refresh_action`, `daemon_endpoint`, `timings`, and `workspace` metadata).
 
 ### `src/RoslynSkills.McpServer`
-JSON-RPC MCP server over stdio. Maps the command registry to MCP `tools/list` and `tools/call`. Emits newline-delimited responses; accepts both framed and newline-delimited inbound.
+JSON-RPC MCP server over stdio. Maps the command registry to MCP `tools/list`, `tools/call`, and `roslyn://command/...` resources, emitting the same flat `CommandEnvelope` directly with `Transport.mode = "mcp"`. Emits newline-delimited responses; accepts both framed and newline-delimited inbound.
 
 ### `src/RoslynSkills.TransportServer`
-Persistent transport server for low-latency warm-state tool calls (experimental lane).
+Persistent transport server for low-latency warm-state tool calls (experimental lane), returning the same flat `CommandEnvelope` directly with `Transport.mode = "transport_server"`.
 
 ### `src/RoslynSkills.WorkspaceHost`
-Daemon for hot-workspace reuse over named pipes (Windows) or Unix domain sockets.
+Daemon for hot-workspace reuse over named pipes (Windows) or Unix domain sockets (protocol `2.0`, flat response payload without nested `envelope`).
 
 - **Command coverage**: `workspace.use` / `workspace.preload` loads a solution once and binds an alias (default: `default`). Every command whose descriptor sets `RunsOnHotWorkspace` — all `nav.*` and `analyze.*` commands, all read-only `ctx.*`/`diag.*` semantic commands, `repair.propose_from_diagnostics`/`repair.apply_plan`, and exact/semantic `edit.*` commands (including `edit.apply_code_fix`) — runs directly against the in-memory solution without re-running MSBuild.
 - **Freshness before each routed call**: Before executing a routed command, `HotWorkspaceFreshness` reconciles the in-memory Roslyn solution against disk according to `refresh_policy` (`auto` default incrementally updates edited source files, adds new source files matching each loaded project's MSBuild include/exclude rules via `ProjectSourceRules`, removes deleted source files, and ignores non-source, output (`bin/`/`obj/`), directory, and `WatcherError` noise; `strict` also reloads when project or solution files change; `none` skips refresh). Structured hot edits (`edit.rename_symbol`, `edit.change_signature`, `edit.apply_code_fix`, `edit.transaction`, `edit.create_file`) refresh modified files in the host immediately after writing.

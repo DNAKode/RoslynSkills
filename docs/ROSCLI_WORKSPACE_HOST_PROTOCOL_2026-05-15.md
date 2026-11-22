@@ -2,11 +2,11 @@
 
 Date: 2026-05-15
 
-Status: initial contract for `RoslynSkills.WorkspaceHost`
+Status: v2.0 contract for `RoslynSkills.WorkspaceHost`
 
 ## Purpose
 
-This protocol lets short-lived `roscli` invocations talk to a long-running local host that keeps a Roslyn solution hot. The host owns workspace lifetime and freshness. Commands still return normal RoslynSkills command envelopes.
+This protocol lets short-lived `roscli` invocations talk to a long-running local host that keeps a Roslyn solution hot. The host owns workspace lifetime and freshness. Responses carry the command payload directly in top-level `data` (no nested `envelope` wrapper), and `roscli` emits the exact same top-level `CommandEnvelope` shape (`Data` directly at top level, plus `Transport`) whether a command ran in-process or via the daemon.
 
 The machine-readable contract lives in:
 
@@ -17,14 +17,14 @@ The machine-readable contract lives in:
 Current protocol version:
 
 ```text
-1.0
+2.0
 ```
 
 Clients and hosts must handshake before command execution.
 
 ```json
 {
-  "protocol_version": "1.0",
+  "protocol_version": "2.0",
   "cli_version": "1.0.0",
   "host_version": "1.0.0",
   "command_schema_version": "1.0",
@@ -88,6 +88,7 @@ workspace/preload
 workspace/status
 workspace/refresh
 workspace/close
+workspace/list
 daemon/status
 shutdown
 ```
@@ -112,9 +113,11 @@ strict
 {
   "id": "req-001",
   "ok": true,
-  "protocol_version": "1.0",
+  "protocol_version": "2.0",
   "method": "tool/call",
   "elapsed_ms": 12.5,
+  "command_id": "nav.find_symbol",
+  "version": "1.0",
   "workspace": {
     "alias": "default",
     "workspace_handle": "ws_abc",
@@ -135,21 +138,14 @@ strict
     ],
     "workspace_diagnostics": []
   },
-  "envelope": {
-    "Ok": true,
-    "CommandId": "nav.find_symbol",
-    "Version": "1.0",
-    "Data": {
-      "total_matches": 1
-    },
-    "Errors": [],
-    "TraceId": null
+  "data": {
+    "total_matches": 1
   },
   "errors": []
 }
 ```
 
-`workspace` metadata is required for any request that binds or attempts to bind a hot workspace.
+`workspace` metadata is populated for any request that binds or attempts to bind a hot workspace. `roscli` projects `data`, `errors`, and `telemetry` directly onto the top-level `CommandEnvelope` and records daemon execution metadata (`mode: "daemon"`, `routed_alias`, `workspace_handle`, `cache_mode`, `refresh_policy`, `refresh_action`, `daemon_endpoint`, `timings`, `workspace`) in the top-level `Transport` field.
 
 ## Refresh Actions
 

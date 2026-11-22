@@ -1,5 +1,6 @@
 #nullable enable
 using System.Buffers;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -440,15 +441,7 @@ internal static class Program
 
             CommandEnvelope envelope = await ExecuteCommandAsync(command, binding.CommandId, input).ConfigureAwait(false);
 
-            JsonObject payload = new()
-            {
-                ["commandId"] = binding.CommandId,
-                ["ok"] = envelope.Ok,
-                ["summary"] = BuildToolResultText(envelope),
-                ["envelope"] = ToJsonNode(envelope),
-            };
-
-            string text = JsonSerializer.Serialize(payload, JsonOptions);
+            string text = JsonSerializer.Serialize(envelope, JsonOptions);
             await WriteResourceTextResultAsync(output, idNode, uri.AbsoluteUri, "application/json", text).ConfigureAwait(false);
             return;
         }
@@ -466,11 +459,15 @@ internal static class Program
         string commandId,
         JsonElement input)
     {
+        Stopwatch totalTimer = Stopwatch.StartNew();
         try
         {
+            Stopwatch validateTimer = Stopwatch.StartNew();
             IReadOnlyList<CommandError> validationErrors = command.Validate(input);
+            validateTimer.Stop();
             if (validationErrors.Count > 0)
             {
+                totalTimer.Stop();
                 return new CommandEnvelope(
                     Ok: false,
                     CommandId: commandId,
@@ -479,10 +476,18 @@ internal static class Program
                     Errors: validationErrors,
                     TraceId: null,
                     Preview: null,
-                    Summary: "Command validation failed.");
+                    Summary: "Command validation failed.",
+                    Transport: new CommandTransportMetadata(
+                        Mode: "mcp",
+                        Timings: new CommandTransportTimings(
+                            ValidateMs: Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                            TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))));
             }
 
+            Stopwatch executeTimer = Stopwatch.StartNew();
             CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None).ConfigureAwait(false);
+            executeTimer.Stop();
+            totalTimer.Stop();
             return new CommandEnvelope(
                 Ok: result.Ok,
                 CommandId: commandId,
@@ -490,11 +495,19 @@ internal static class Program
                 Data: result.Data,
                 Errors: result.Errors,
                 TraceId: null,
+                Telemetry: result.Telemetry,
                 Preview: null,
-                Summary: result.Ok ? "Command executed successfully." : "Command returned one or more errors.");
+                Summary: result.Ok ? "Command executed successfully." : "Command returned one or more errors.",
+                Transport: new CommandTransportMetadata(
+                    Mode: "mcp",
+                    Timings: new CommandTransportTimings(
+                        ValidateMs: Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                        ExecuteMs: Math.Round(executeTimer.Elapsed.TotalMilliseconds, 3),
+                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))));
         }
         catch (Exception ex)
         {
+            totalTimer.Stop();
             return new CommandEnvelope(
                 Ok: false,
                 CommandId: commandId,
@@ -506,7 +519,11 @@ internal static class Program
                 },
                 TraceId: null,
                 Preview: null,
-                Summary: "Command execution threw an exception.");
+                Summary: "Command execution threw an exception.",
+                Transport: new CommandTransportMetadata(
+                    Mode: "mcp",
+                    Timings: new CommandTransportTimings(
+                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))));
         }
     }
 

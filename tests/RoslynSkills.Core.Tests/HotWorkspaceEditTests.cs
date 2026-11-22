@@ -140,8 +140,7 @@ public sealed class HotWorkspaceEditTests
                 workspace_alias = "default",
                 input = new { workspace_path = solutionPath, require_solution = true, max_files = 100 },
             }, timeoutSeconds: 120);
-            Assert.True(preload.GetProperty("ok").GetBoolean(), preload.GetRawText());
-            string handle = preload.GetProperty("envelope").GetProperty("Data").GetProperty("workspace_handle").GetString()!;
+            string handle = DataOf(preload).GetProperty("workspace_handle").GetString()!;
 
             // -----------------------------------------------------------------
             // 1. edit.rename_symbol across all 3 projects + <see cref>
@@ -371,7 +370,8 @@ public sealed class HotWorkspaceEditTests
                 },
             });
             Assert.False(ambiguousTx.GetProperty("ok").GetBoolean());
-            JsonElement ambiguousData = ambiguousTx.GetProperty("envelope").GetProperty("Data");
+            Assert.False(ambiguousTx.TryGetProperty("envelope", out _));
+            JsonElement ambiguousData = ambiguousTx.GetProperty("data");
             Assert.True(ambiguousData.GetProperty("skipped_apply_due_to_errors").GetBoolean());
             Assert.Equal(0, ambiguousData.GetProperty("wrote_file_count").GetInt32());
             Assert.Contains("old_text_ambiguous", ambiguousTx.GetRawText());
@@ -544,7 +544,8 @@ public sealed class HotWorkspaceEditTests
     private static JsonElement DataOf(JsonElement response)
     {
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
-        return response.GetProperty("envelope").GetProperty("Data");
+        Assert.False(response.TryGetProperty("envelope", out _), response.GetRawText());
+        return response.GetProperty("data");
     }
 
     private static Process StartHostProcess()

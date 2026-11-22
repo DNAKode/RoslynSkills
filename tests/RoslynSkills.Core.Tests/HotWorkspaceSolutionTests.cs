@@ -149,8 +149,7 @@ public sealed class HotWorkspaceSolutionTests
                 workspace_alias = "default",
                 input = new { workspace_path = solutionPath, require_solution = true, max_files = 100 },
             }, timeoutSeconds: 120);
-            Assert.True(preload.GetProperty("ok").GetBoolean(), preload.GetRawText());
-            string handle = preload.GetProperty("envelope").GetProperty("Data").GetProperty("workspace_handle").GetString()!;
+            string handle = DataOf(preload).GetProperty("workspace_handle").GetString()!;
 
             // nav.find_references anchored on Service.Run (Lib): declaration + callers in App and Consumer.
             JsonElement references = await host.CallAsync("nav.find_references", new
@@ -556,8 +555,7 @@ public sealed class HotWorkspaceSolutionTests
                 workspace_alias = "default",
                 input = new { workspace_path = solutionPath, require_solution = true, max_files = 100 },
             }, timeoutSeconds: 120);
-            Assert.True(preload.GetProperty("ok").GetBoolean(), preload.GetRawText());
-            string handle = preload.GetProperty("envelope").GetProperty("Data").GetProperty("workspace_handle").GetString()!;
+            string handle = DataOf(preload).GetProperty("workspace_handle").GetString()!;
 
             // 1. Object creations & constructors in nav.find_references and nav.find_invocations (including target-typed new & primary ctor).
             (int editFrameLine, int editFrameCol) = FindTokenPosition(libTypesSource, "class EditFrame", "EditFrame");
@@ -815,7 +813,8 @@ public sealed class HotWorkspaceSolutionTests
     private static JsonElement DataOf(JsonElement response)
     {
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
-        return response.GetProperty("envelope").GetProperty("Data");
+        Assert.False(response.TryGetProperty("envelope", out _), response.GetRawText());
+        return response.GetProperty("data");
     }
 
     private static Process StartHostProcess()

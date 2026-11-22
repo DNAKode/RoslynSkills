@@ -758,14 +758,11 @@ public sealed class WorkspaceHostDaemonManager
             ProtocolVersion: actualProtocolVersion ?? "unknown",
             Method: request.Method,
             ElapsedMs: 0,
+            CommandId: request.CommandId ?? request.Method,
+            Version: "1.0",
+            Data: null,
             Errors: new[] { error },
-            Envelope: new CommandEnvelope(
-                Ok: false,
-                CommandId: request.CommandId ?? request.Method,
-                Version: "1.0",
-                Data: null,
-                Errors: new[] { error },
-                TraceId: null));
+            Summary: error.Message);
     }
 
     private static WorkspaceHostDaemonManifest? TryReadManifest(string path)

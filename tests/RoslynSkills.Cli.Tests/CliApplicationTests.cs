@@ -2676,22 +2676,16 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
-    public void BuildDataSummary_UsesNestedHostEnvelopeDataForDaemonRoutedExactEdit()
+    public void BuildDataSummary_UsesFlatDataForExactEdit()
     {
         System.Reflection.MethodInfo method = typeof(CliApplication).GetMethod(
             "BuildDataSummary",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
         object data = new
         {
-            envelope = new
-            {
-                Data = new
-                {
-                    file_path = @"C:\Temp\Demo.cs",
-                    match_count = 1,
-                    wrote_file = true,
-                },
-            },
+            file_path = @"C:\Temp\Demo.cs",
+            match_count = 1,
+            wrote_file = true,
         };
 
         string? summary = (string?)method.Invoke(null, new object[] { "edit.replace_text", data });

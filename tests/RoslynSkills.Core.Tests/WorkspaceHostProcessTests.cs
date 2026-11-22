@@ -128,9 +128,9 @@ public sealed class WorkspaceHostProcessTests
             using JsonDocument preload = JsonDocument.Parse((await ReadLineWithTimeoutAsync(process, "preload", timeoutSeconds: 60))!);
             JsonElement preloadRoot = preload.RootElement;
             Assert.True(preloadRoot.GetProperty("ok").GetBoolean());
+            Assert.False(preloadRoot.TryGetProperty("envelope", out _));
             string handle = preloadRoot
-                .GetProperty("envelope")
-                .GetProperty("Data")
+                .GetProperty("data")
                 .GetProperty("workspace_handle")
                 .GetString()!;
 
@@ -175,9 +175,9 @@ public sealed class WorkspaceHostProcessTests
             using JsonDocument find = JsonDocument.Parse((await ReadLineWithTimeoutAsync(process, "find"))!);
             JsonElement findRoot = find.RootElement;
             Assert.True(findRoot.GetProperty("ok").GetBoolean());
+            Assert.False(findRoot.TryGetProperty("envelope", out _));
             Assert.True(findRoot
-                .GetProperty("envelope")
-                .GetProperty("Data")
+                .GetProperty("data")
                 .GetProperty("total_matches")
                 .GetInt32() >= 1);
 

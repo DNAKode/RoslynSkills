@@ -165,57 +165,94 @@ internal static class Program
 
         if (!registry.TryGet(commandId, out IAgentCommand? command) || command is null)
         {
-            await WriteErrorAsync(
-                requestId,
-                "command_not_found",
-                $"Command '{commandId}' was not found.",
-                stopwatch.Elapsed.TotalMilliseconds,
-                method,
-                commandId).ConfigureAwait(false);
+            double elapsedMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+            await WriteObjectAsync(new CommandEnvelope(
+                Ok: false,
+                CommandId: commandId,
+                Version: EnvelopeVersion,
+                Data: null,
+                Errors: new[] { new CommandError("command_not_found", $"Command '{commandId}' was not found.") },
+                TraceId: string.IsNullOrWhiteSpace(requestId) ? null : requestId,
+                Transport: new CommandTransportMetadata(
+                    Mode: "transport_server",
+                    Timings: new CommandTransportTimings(TotalMs: elapsedMs)))).ConfigureAwait(false);
             return;
         }
 
+        Stopwatch validateTimer = Stopwatch.StartNew();
         IReadOnlyList<CommandError> validationErrors = command.Validate(input);
+        validateTimer.Stop();
         if (validationErrors.Count > 0)
         {
+            double validateMs = Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3);
+            double totalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
             CommandEnvelope invalidEnvelope = new(
                 Ok: false,
                 CommandId: commandId,
                 Version: EnvelopeVersion,
                 Data: null,
                 Errors: validationErrors,
-                TraceId: null);
+                TraceId: string.IsNullOrWhiteSpace(requestId) ? null : requestId,
+                Telemetry: new
+                {
+                    timing = new
+                    {
+                        validate_ms = (int)validateTimer.ElapsedMilliseconds,
+                        execute_ms = (int?)null,
+                        total_ms = (int)stopwatch.ElapsedMilliseconds,
+                    },
+                    cache_context = new
+                    {
+                        binary_launch_mode = "transport_server",
+                    },
+                    command_telemetry = (object?)null,
+                },
+                Transport: new CommandTransportMetadata(
+                    Mode: "transport_server",
+                    Timings: new CommandTransportTimings(
+                        ValidateMs: validateMs,
+                        TotalMs: totalMs)));
 
-            await WriteObjectAsync(new
-            {
-                id = requestId,
-                ok = false,
-                method,
-                command_id = commandId,
-                elapsed_ms = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3),
-                envelope = invalidEnvelope,
-            }).ConfigureAwait(false);
+            await WriteObjectAsync(invalidEnvelope).ConfigureAwait(false);
             return;
         }
 
+        Stopwatch executeTimer = Stopwatch.StartNew();
         CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None).ConfigureAwait(false);
+        executeTimer.Stop();
+        stopwatch.Stop();
+        double execMs = Math.Round(executeTimer.Elapsed.TotalMilliseconds, 3);
+        double totalElapsedMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
         CommandEnvelope envelope = new(
             Ok: result.Ok,
             CommandId: commandId,
             Version: EnvelopeVersion,
             Data: result.Data,
             Errors: result.Errors,
-            TraceId: null);
+            TraceId: string.IsNullOrWhiteSpace(requestId) ? null : requestId,
+            Telemetry: new
+            {
+                timing = new
+                {
+                    validate_ms = (int)validateTimer.ElapsedMilliseconds,
+                    execute_ms = (int)executeTimer.ElapsedMilliseconds,
+                    total_ms = (int)stopwatch.ElapsedMilliseconds,
+                },
+                cache_context = new
+                {
+                    binary_launch_mode = "transport_server",
+                },
+                command_telemetry = result.Telemetry,
+            },
+            Transport: new CommandTransportMetadata(
+                Mode: "transport_server",
+                Timings: new CommandTransportTimings(
+                    ValidateMs: Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                    ExecuteMs: execMs,
+                    HostElapsedMs: execMs,
+                    TotalMs: totalElapsedMs)));
 
-        await WriteObjectAsync(new
-        {
-            id = requestId,
-            ok = result.Ok,
-            method,
-            command_id = commandId,
-            elapsed_ms = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3),
-            envelope,
-        }).ConfigureAwait(false);
+        await WriteObjectAsync(envelope).ConfigureAwait(false);
     }
 
     private static JsonElement GetInputElement(JsonElement root)

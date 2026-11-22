@@ -45,6 +45,8 @@ public sealed class WorkspaceHostProtocolContractTests
             ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
             Method: WorkspaceHostProtocol.Method.ToolCall,
             ElapsedMs: 12.5,
+            CommandId: "nav.find_symbol",
+            Version: "1.0",
             Workspace: new WorkspaceHostWorkspaceMetadata(
                 Alias: "default",
                 WorkspaceHandle: "ws_abc",
@@ -62,17 +64,12 @@ public sealed class WorkspaceHostProtocolContractTests
                 DocumentCount: 42,
                 InvalidatedPaths: new[] { "src/App/Foo.cs" },
                 WorkspaceDiagnostics: Array.Empty<string>()),
-            Envelope: new CommandEnvelope(
-                Ok: true,
-                CommandId: "nav.find_symbol",
-                Version: "1.0",
-                Data: new { total_matches = 1 },
-                Errors: Array.Empty<CommandError>(),
-                TraceId: null));
+            Data: new { total_matches = 1 },
+            Errors: Array.Empty<CommandError>());
 
         string json = JsonSerializer.Serialize(response);
 
-        Assert.Contains("\"protocol_version\":\"1.0\"", json);
+        Assert.Contains("\"protocol_version\":\"2.0\"", json);
         Assert.Contains("\"workspace_kind\":\"slnx\"", json);
         Assert.Contains("\"solution_scoped\":true", json);
         Assert.Contains("\"resolution_source\":\"workspace_handle\"", json);
@@ -81,13 +78,15 @@ public sealed class WorkspaceHostProtocolContractTests
         Assert.Contains("\"dirty_after\":false", json);
         Assert.Contains("\"requires_reload\":false", json);
         Assert.Contains("\"invalidated_paths\":[\"src/App/Foo.cs\"]", json);
-        Assert.Contains("\"CommandId\":\"nav.find_symbol\"", json);
+        Assert.Contains("\"command_id\":\"nav.find_symbol\"", json);
+        Assert.Contains("\"data\":{\"total_matches\":1}", json);
+        Assert.DoesNotContain("\"envelope\"", json);
     }
 
     [Fact]
     public void ProtocolConstants_CoverPlannedFailureModes()
     {
-        Assert.Equal("1.0", WorkspaceHostProtocol.ProtocolVersion);
+        Assert.Equal("2.0", WorkspaceHostProtocol.ProtocolVersion);
         Assert.Equal("workspace_handle_not_found", WorkspaceHostProtocol.ErrorCode.WorkspaceHandleNotFound);
         Assert.Equal("workspace_reload_required", WorkspaceHostProtocol.ErrorCode.WorkspaceReloadRequired);
         Assert.Equal("solution_required", WorkspaceHostProtocol.ErrorCode.SolutionRequired);

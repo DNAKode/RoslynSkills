@@ -223,7 +223,7 @@ function Invoke-TransportSample {
 
         $responseText = [string]$responseLine
         $response = $responseText | ConvertFrom-Json
-        $exitCode = if ($response.ok -eq $true) { 0 } else { 1 }
+        $exitCode = if ($response.Ok -eq $true) { 0 } else { 1 }
     } catch {
         $responseText = Convert-ToText $_
         $exitCode = if ($ServerProcess.HasExited) { [int]$ServerProcess.ExitCode } else { 1 }

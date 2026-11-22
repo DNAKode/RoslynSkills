@@ -63,9 +63,10 @@ Use this sequence to reduce retries and avoid tool-learning churn:
 1. In a fresh worktree, run `dotnet restore` before binding the workspace. (`workspace.use` also auto-restores projects missing `project.assets.json` or metadata references unless `ROSLYNSKILLS_AUTO_RESTORE=false`, and reports any unresolved projects in `unresolved_projects` and `workspace_diagnostics`.)
 2. Bind the solution once with `roscli workspace.use <solution.sln|.slnx> --require-solution true`. Subsequent read-only semantic commands and exact/semantic edits reuse the hot workspace automatically and re-read files modified on disk before each call.
 3. Set `ROSCLI_DAEMON=required` when you want calls that cannot use the hot workspace (or when the daemon is unavailable) to fail closed instead of reloading the solution in-process.
-4. Keep reads compact (`--brief true`, bounded `--max-results`) and check `workspace_context.mode` / `workspace_context.project_resolved` on file queries.
-5. Prefer direct semantic commands (`nav.*`, `ctx.*`, `analyze.*`, `edit.*`, `diag.*`) before exploratory `describe-command` or text search; batch read-only discovery with `query.batch` or `nav.find_symbol_batch`.
-6. Validate with diagnostics and build/tests before finalizing.
+4. Every command returns the same flat JSON envelope (`Ok`, `CommandId`, `Version`, `Preview`, `Data`, `Telemetry`, `Transport`, `Errors`, `TraceId`, `Summary`) whether it runs in-process or through the daemon: the command's own payload is always directly at top-level `Data`, and `Transport.mode` (`"daemon"` vs `"in_process"`) reports how it ran.
+5. Keep reads compact (`--brief true`, bounded `--max-results`) and check `Data.workspace_context.mode` / `Data.workspace_context.project_resolved` on file queries.
+6. Prefer direct semantic commands (`nav.*`, `ctx.*`, `analyze.*`, `edit.*`, `diag.*`) before exploratory `describe-command` or text search; batch read-only discovery with `query.batch` or `nav.find_symbol_batch`.
+7. Validate with diagnostics and build/tests before finalizing.
 
 High-call performance mode (from source checkout):
 

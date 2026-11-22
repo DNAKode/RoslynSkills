@@ -657,7 +657,8 @@ public sealed class HotWorkspaceSyncTests
     private static JsonElement DataOf(JsonElement response)
     {
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
-        return response.GetProperty("envelope").GetProperty("Data");
+        Assert.False(response.TryGetProperty("envelope", out _), response.GetRawText());
+        return response.GetProperty("data");
     }
 
     private sealed class HostSession(Process process)

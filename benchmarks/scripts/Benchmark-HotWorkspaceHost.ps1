@@ -79,24 +79,6 @@ function Get-WorkspaceContext {
         return $Json.Data.query.workspace_context
     }
 
-    if ((Test-ObjectProperty -Object $Json.Data -PropertyName "envelope") -and
-        $null -ne $Json.Data.envelope -and
-        (Test-ObjectProperty -Object $Json.Data.envelope -PropertyName "Data") -and
-        $null -ne $Json.Data.envelope.Data -and
-        (Test-ObjectProperty -Object $Json.Data.envelope.Data -PropertyName "workspace_context")) {
-        return $Json.Data.envelope.Data.workspace_context
-    }
-
-    if ((Test-ObjectProperty -Object $Json.Data -PropertyName "envelope") -and
-        $null -ne $Json.Data.envelope -and
-        (Test-ObjectProperty -Object $Json.Data.envelope -PropertyName "Data") -and
-        $null -ne $Json.Data.envelope.Data -and
-        (Test-ObjectProperty -Object $Json.Data.envelope.Data -PropertyName "query") -and
-        $null -ne $Json.Data.envelope.Data.query -and
-        (Test-ObjectProperty -Object $Json.Data.envelope.Data.query -PropertyName "workspace_context")) {
-        return $Json.Data.envelope.Data.query.workspace_context
-    }
-
     return $null
 }
 
@@ -117,8 +99,14 @@ function New-SampleRow {
     )
 
     $context = Get-WorkspaceContext -Json $Run.json
+    $transportMode = if ($null -ne $Run.json -and (Test-ObjectProperty -Object $Run.json -PropertyName "Transport") -and $null -ne $Run.json.Transport) {
+        $Run.json.Transport.mode
+    } else {
+        $null
+    }
     return [pscustomobject][ordered]@{
         mode = $Mode
+        transport_mode = $transportMode
         iteration = $Iteration
         exit_code = $Run.exit_code
         elapsed_ms = $Run.elapsed_ms

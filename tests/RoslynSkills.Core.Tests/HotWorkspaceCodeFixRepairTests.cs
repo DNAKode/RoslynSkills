@@ -168,8 +168,7 @@ public sealed class HotWorkspaceCodeFixRepairTests
                 workspace_alias = "default",
                 input = new { workspace_path = paths.Solution, require_solution = true, max_files = 100 },
             }, timeoutSeconds: 120);
-            Assert.True(preload.GetProperty("ok").GetBoolean(), preload.GetRawText());
-            string handle = preload.GetProperty("envelope").GetProperty("Data").GetProperty("workspace_handle").GetString()!;
+            string handle = DataOf(preload).GetProperty("workspace_handle").GetString()!;
 
             // -----------------------------------------------------------------
             // 1. Missing using across projects (CS0246 + CS0103 + CS1061):
@@ -246,9 +245,10 @@ public sealed class HotWorkspaceCodeFixRepairTests
                 require_workspace = true,
             });
             Assert.False(ambigFailResp.GetProperty("ok").GetBoolean(), ambigFailResp.GetRawText());
-            string ambigErrorCode = ambigFailResp.GetProperty("envelope").GetProperty("Errors")[0].GetProperty("Code").GetString()!;
+            Assert.False(ambigFailResp.TryGetProperty("envelope", out _), ambigFailResp.GetRawText());
+            string ambigErrorCode = ambigFailResp.GetProperty("errors")[0].GetProperty("Code").GetString()!;
             Assert.Equal("ambiguous_code_fix", ambigErrorCode);
-            string[] ambigTitles = ambigFailResp.GetProperty("envelope").GetProperty("Data").GetProperty("offered_fixes")
+            string[] ambigTitles = ambigFailResp.GetProperty("data").GetProperty("offered_fixes")
                 .EnumerateArray()
                 .Select(f => f.GetProperty("title").GetString()!)
                 .ToArray();
@@ -356,8 +356,9 @@ public sealed class HotWorkspaceCodeFixRepairTests
                 require_workspace = true,
             });
             Assert.False(cs7036Resp.GetProperty("ok").GetBoolean(), cs7036Resp.GetRawText());
-            Assert.Equal("no_fix_available", cs7036Resp.GetProperty("envelope").GetProperty("Errors")[0].GetProperty("Code").GetString());
-            Assert.Empty(cs7036Resp.GetProperty("envelope").GetProperty("Data").GetProperty("offered_fixes").EnumerateArray());
+            Assert.False(cs7036Resp.TryGetProperty("envelope", out _), cs7036Resp.GetRawText());
+            Assert.Equal("no_fix_available", cs7036Resp.GetProperty("errors")[0].GetProperty("Code").GetString());
+            Assert.Empty(cs7036Resp.GetProperty("data").GetProperty("offered_fixes").EnumerateArray());
 
             JsonElement cs0029Resp = await host.CallAsync("edit.apply_code_fix", new
             {
@@ -369,7 +370,8 @@ public sealed class HotWorkspaceCodeFixRepairTests
                 require_workspace = true,
             });
             Assert.False(cs0029Resp.GetProperty("ok").GetBoolean(), cs0029Resp.GetRawText());
-            Assert.Equal("no_fix_available", cs0029Resp.GetProperty("envelope").GetProperty("Errors")[0].GetProperty("Code").GetString());
+            Assert.False(cs0029Resp.TryGetProperty("envelope", out _), cs0029Resp.GetRawText());
+            Assert.Equal("no_fix_available", cs0029Resp.GetProperty("errors")[0].GetProperty("Code").GetString());
             Assert.Equal(unfixableBefore, await File.ReadAllTextAsync(paths.ConsumerUnfixable));
 
             JsonElement proposeUnfixableResp = await host.CallAsync("repair.propose_from_diagnostics", new
@@ -537,7 +539,8 @@ public sealed class HotWorkspaceCodeFixRepairTests
     private static JsonElement DataOf(JsonElement response)
     {
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
-        return response.GetProperty("envelope").GetProperty("Data");
+        Assert.False(response.TryGetProperty("envelope", out _), response.GetRawText());
+        return response.GetProperty("data");
     }
 
     private static Process StartHostProcess()

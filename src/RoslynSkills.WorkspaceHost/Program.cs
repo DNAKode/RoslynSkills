@@ -815,23 +815,17 @@ internal static class Program
         IReadOnlyList<CommandError> validationErrors = command.Validate(input);
         if (validationErrors.Count > 0)
         {
-            CommandEnvelope invalidEnvelope = new(
-                Ok: false,
-                CommandId: commandId,
-                Version: EnvelopeVersion,
-                Data: null,
-                Errors: validationErrors,
-                TraceId: null,
-                Summary: $"Validation failed for {commandId}.");
-
             await WriteResponseAsync(writer, new WorkspaceHostResponse(
                 Id: requestId,
                 Ok: false,
                 ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
                 Method: method,
                 ElapsedMs: ElapsedMilliseconds(stopwatch),
-                Envelope: invalidEnvelope,
-                Errors: validationErrors)).ConfigureAwait(false);
+                CommandId: commandId,
+                Version: EnvelopeVersion,
+                Data: null,
+                Errors: validationErrors,
+                Summary: $"Validation failed for {commandId}.")).ConfigureAwait(false);
             return;
         }
 
@@ -850,14 +844,6 @@ internal static class Program
             method,
             responseData,
             result.Ok) ?? BuildFreshnessMetadata(root, freshness);
-        CommandEnvelope envelope = new(
-            Ok: result.Ok,
-            CommandId: commandId,
-            Version: EnvelopeVersion,
-            Data: responseData,
-            Errors: result.Errors,
-            TraceId: null,
-            Telemetry: result.Telemetry);
 
         await WriteResponseAsync(writer, new WorkspaceHostResponse(
             Id: requestId,
@@ -865,9 +851,12 @@ internal static class Program
             ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
             Method: method,
             ElapsedMs: ElapsedMilliseconds(stopwatch),
+            CommandId: commandId,
+            Version: EnvelopeVersion,
             Workspace: workspaceMetadata,
-            Envelope: envelope,
-            Errors: result.Ok ? null : result.Errors)).ConfigureAwait(false);
+            Data: responseData,
+            Telemetry: result.Telemetry,
+            Errors: result.Errors)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -942,17 +931,24 @@ internal static class Program
             return data;
         }
 
-        return new
+        JsonElement dataElement = JsonSerializer.SerializeToElement(data, JsonOptions);
+        Dictionary<string, object?> flattened = new(StringComparer.Ordinal);
+        if (dataElement.ValueKind == JsonValueKind.Object)
         {
-            result = data,
-            aliases = SnapshotAliases()
-                .Select(pair => new
-                {
-                    alias = pair.Key,
-                    workspace_handle = pair.Value,
-                })
-                .ToArray(),
-        };
+            foreach (JsonProperty property in dataElement.EnumerateObject())
+            {
+                flattened[property.Name] = property.Value.Clone();
+            }
+        }
+
+        flattened["aliases"] = SnapshotAliases()
+            .Select(pair => new
+            {
+                alias = pair.Key,
+                workspace_handle = pair.Value,
+            })
+            .ToArray();
+        return flattened;
     }
 
     private static IReadOnlyList<KeyValuePair<string, string>> SnapshotAliases()
@@ -1286,25 +1282,17 @@ internal static class Program
                 next_command = nextCommand,
             });
 
-        CommandEnvelope? envelope = commandId is null
-            ? null
-            : new CommandEnvelope(
-                Ok: false,
-                CommandId: commandId,
-                Version: EnvelopeVersion,
-                Data: null,
-                Errors: new[] { error },
-                TraceId: null,
-                Summary: message);
-
         return WriteResponseAsync(writer, new WorkspaceHostResponse(
             Id: requestId,
             Ok: false,
             ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
             Method: method,
             ElapsedMs: ElapsedMilliseconds(stopwatch),
-            Envelope: envelope,
-            Errors: new[] { error }));
+            CommandId: commandId,
+            Version: commandId is null ? null : EnvelopeVersion,
+            Data: null,
+            Errors: new[] { error },
+            Summary: commandId is null ? null : message));
     }
 
     private static async Task WriteResponseAsync(TextWriter writer, WorkspaceHostResponse response)

@@ -35,6 +35,7 @@ public sealed class CliApplication
         stdin ??= Console.In;
 
         bool noDaemon = StripFlag(args, "--no-daemon", out string[] effectiveArgs);
+        bool daemonOff = noDaemon || string.Equals(GetDaemonRoutingMode(), "off", StringComparison.OrdinalIgnoreCase);
         args = effectiveArgs;
 
         if (args.Length == 0 || IsHelp(args[0]))
@@ -58,26 +59,28 @@ public sealed class CliApplication
             "quickstart" => await HandleQuickstartAsync(stdout).ConfigureAwait(false),
             "csharp-start" => await HandleCSharpStartAsync(remainder, stdout).ConfigureAwait(false),
             "agent-start" => await HandleAgentStartAsync(remainder, stdout).ConfigureAwait(false),
-            "agent-begin" => await HandleAgentBeginAsync(remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            "agent-begin" => await HandleAgentBeginAsync(remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "text.measure" => await HandleTextMeasureAsync(remainder, stdout, stdin).ConfigureAwait(false),
             "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
             "daemon.start" => await HandleDaemonStartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.stop" => await HandleDaemonStopAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.restart" => await HandleDaemonRestartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
-            "workspace.use" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            "workspace.use" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "workspace.use" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
-            "workspace.preload" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            "workspace.preload" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "workspace.preload" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
-            "workspace.status" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            "workspace.status" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "workspace.status" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
-            "workspace.refresh" when noDaemon => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            "workspace.refresh" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "workspace.refresh" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.close" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "workspace.close" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "workspace.list" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "workspace.list" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
             "validate-input" => await HandleValidateInputAsync(remainder, stdout, cancellationToken, stdin).ConfigureAwait(false),
-            "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
-            _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, noDaemon).ConfigureAwait(false),
+            "run" => await HandleRunAsync(remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
+            _ when _registry.TryGet(verb, out _) => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             _ => await HandleUnknownCommandAsync(verb, stdout, stderr).ConfigureAwait(false),
         };
     }
@@ -699,6 +702,7 @@ Workflow:
         TextWriter stdout,
         CancellationToken cancellationToken)
     {
+        Stopwatch totalTimer = Stopwatch.StartNew();
         if (args.Any(a => IsHelp(a)))
         {
             await WriteEnvelopeAsync(stdout, new CommandEnvelope(
@@ -733,31 +737,63 @@ Workflow:
         TimeSpan requestTimeout = verb is "workspace.use" or "workspace.preload" or "workspace.refresh"
             ? TimeSpan.FromMinutes(5)
             : TimeSpan.FromSeconds(30);
+        Stopwatch roundtripTimer = Stopwatch.StartNew();
         WorkspaceHostResponse? response = await manager.SendRequestAsync(
             repoRoot,
             request!,
             requestTimeout,
             cancellationToken).ConfigureAwait(false);
+        roundtripTimer.Stop();
         if (response is null)
         {
+            totalTimer.Stop();
             await WriteEnvelopeAsync(stdout, ErrorEnvelope(
                 commandId: verb,
                 code: WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
-                message: "Workspace daemon is unavailable. Run 'roscli daemon.start' or use workspace.use/preload to start it.")).ConfigureAwait(false);
+                message: "Workspace daemon is unavailable. Run 'roscli daemon.start' or use workspace.use/preload to start it.") with
+            {
+                Telemetry = BuildCliTelemetry(
+                    validateMs: 0,
+                    executeMs: null,
+                    totalMs: (int)totalTimer.ElapsedMilliseconds,
+                    commandTelemetry: null),
+                Transport = new CommandTransportMetadata(
+                    Mode: "daemon",
+                    RoutedAlias: request!.WorkspaceAlias,
+                    WorkspaceHandle: request.WorkspaceHandle,
+                    RefreshPolicy: request.RefreshPolicy,
+                    DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
+                    Timings: new CommandTransportTimings(
+                        RoundtripMs: Math.Round(roundtripTimer.Elapsed.TotalMilliseconds, 3),
+                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+            }).ConfigureAwait(false);
             return 1;
         }
 
         UpdatePersistedWorkspaceAlias(verb, request!, response, manager, endpoint);
-        IReadOnlyList<CommandError> errors = response.Errors ??
-                                             response.Envelope?.Errors ??
-                                             Array.Empty<CommandError>();
+        totalTimer.Stop();
+        IReadOnlyList<CommandError> errors = response.Errors ?? Array.Empty<CommandError>();
         await WriteEnvelopeAsync(stdout, new CommandEnvelope(
             Ok: response.Ok,
             CommandId: verb,
-            Version: EnvelopeVersion,
-            Data: response,
+            Version: response.Version ?? EnvelopeVersion,
+            Data: response.Data,
             Errors: errors,
-            TraceId: null)).ConfigureAwait(false);
+            TraceId: response.TraceId,
+            Telemetry: BuildCliTelemetry(
+                validateMs: 0,
+                executeMs: (int)Math.Round(response.ElapsedMs),
+                totalMs: (int)totalTimer.ElapsedMilliseconds,
+                commandTelemetry: response.Telemetry),
+            Transport: BuildDaemonTransport(
+                request!,
+                response,
+                endpoint,
+                routedAlias: request!.WorkspaceAlias,
+                routedHandle: request.WorkspaceHandle,
+                validateTimer: null,
+                roundtripTimer: roundtripTimer,
+                totalTimer: totalTimer))).ConfigureAwait(false);
         return response.Ok ? 0 : 1;
     }
 
@@ -805,16 +841,16 @@ Workflow:
             return;
         }
 
-        string? workspaceHandle = response.Workspace?.WorkspaceHandle ?? TryGetStringProperty(response.Envelope?.Data, "workspace_handle");
+        string? workspaceHandle = response.Workspace?.WorkspaceHandle ?? TryGetStringProperty(response.Data, "workspace_handle");
         if (string.IsNullOrWhiteSpace(workspaceHandle))
         {
             return;
         }
 
         string? workspacePath =
-            TryGetStringProperty(response.Envelope?.Data, "resolved_workspace_path") ??
-            TryGetStringProperty(response.Envelope?.Data, "requested_workspace_path");
-        string? fingerprint = response.Workspace?.WorkspaceFingerprint ?? TryGetStringProperty(response.Envelope?.Data, "workspace_fingerprint");
+            TryGetStringProperty(response.Data, "resolved_workspace_path") ??
+            TryGetStringProperty(response.Data, "requested_workspace_path");
+        string? fingerprint = response.Workspace?.WorkspaceFingerprint ?? TryGetStringProperty(response.Data, "workspace_fingerprint");
         WorkspaceAliasRecord record = new(
             WorkspacePath: workspacePath,
             WorkspaceHandle: workspaceHandle,
@@ -889,16 +925,27 @@ Workflow:
         bool requireHotWorkspace,
         out JsonElement routedInput,
         out bool resolvedHotWorkspace,
+        out string? routedAlias,
+        out string? routedHandle,
         out CommandEnvelope? error)
     {
         routedInput = input;
         resolvedHotWorkspace = false;
+        routedAlias = null;
+        routedHandle = null;
         error = null;
         if (TryGetString(input, "workspace_handle", out string existingHandle) &&
             !string.IsNullOrWhiteSpace(existingHandle))
         {
             routedInput = ResolveRelativePathsForDaemon(input);
             resolvedHotWorkspace = true;
+            routedHandle = existingHandle;
+            if (TryGetString(input, "workspace_alias", out string existingAlias) &&
+                !string.IsNullOrWhiteSpace(existingAlias))
+            {
+                routedAlias = existingAlias;
+            }
+
             return true;
         }
 
@@ -926,6 +973,8 @@ Workflow:
 
         augmentedInput["workspace_handle"] = record.WorkspaceHandle;
         resolvedHotWorkspace = true;
+        routedAlias = alias;
+        routedHandle = record.WorkspaceHandle;
         if (requireHotWorkspace && !augmentedInput.ContainsKey("require_workspace"))
         {
             augmentedInput["require_workspace"] = true;
@@ -1091,7 +1140,12 @@ Workflow:
                         validateMs: (int)validateTimer.ElapsedMilliseconds,
                         executeMs: null,
                         totalMs: (int)totalTimer.ElapsedMilliseconds,
-                        commandTelemetry: null))).ConfigureAwait(false);
+                        commandTelemetry: null),
+                    Transport: BuildInProcessTransport(
+                        data: null,
+                        validateTimer: validateTimer,
+                        executeTimer: null,
+                        totalTimer: totalTimer))).ConfigureAwait(false);
             return 1;
         }
 
@@ -1101,7 +1155,9 @@ Workflow:
             input,
             stdout,
             cancellationToken,
-            noDaemon).ConfigureAwait(false);
+            noDaemon,
+            validateTimer,
+            totalTimer).ConfigureAwait(false);
         if (daemonExitCode.HasValue)
         {
             return daemonExitCode.Value;
@@ -1124,7 +1180,12 @@ Workflow:
                     validateMs: (int)validateTimer.ElapsedMilliseconds,
                     executeMs: (int)executeTimer.ElapsedMilliseconds,
                     totalMs: (int)totalTimer.ElapsedMilliseconds,
-                    commandTelemetry: result.Telemetry))).ConfigureAwait(false);
+                    commandTelemetry: result.Telemetry),
+                Transport: BuildInProcessTransport(
+                    data: result.Data,
+                    validateTimer: validateTimer,
+                    executeTimer: executeTimer,
+                    totalTimer: totalTimer))).ConfigureAwait(false);
 
         return result.Ok ? 0 : 1;
     }
@@ -1135,7 +1196,9 @@ Workflow:
         JsonElement input,
         TextWriter stdout,
         CancellationToken cancellationToken,
-        bool noDaemon)
+        bool noDaemon,
+        Stopwatch validateTimer,
+        Stopwatch totalTimer)
     {
         if (noDaemon)
         {
@@ -1159,15 +1222,29 @@ Workflow:
             // cannot use the hot workspace must say so, not silently reload.
             if (requireHotWorkspace && IsWorkspaceSemanticFamily(commandId))
             {
+                totalTimer.Stop();
                 await WriteEnvelopeAsync(stdout, ErrorEnvelope(
                     commandId,
                     "hot_workspace_unsupported",
-                    $"Command '{commandId}' cannot run on the hot workspace and would load the solution in-process. Pass --no-daemon to run it that way, or unset ROSCLI_DAEMON=required.")).ConfigureAwait(false);
+                    $"Command '{commandId}' cannot run on the hot workspace and would load the solution in-process. Pass --no-daemon to run it that way, or unset ROSCLI_DAEMON=required.") with
+                {
+                    Telemetry = BuildCliTelemetry(
+                        validateMs: (int)validateTimer.ElapsedMilliseconds,
+                        executeMs: null,
+                        totalMs: (int)totalTimer.ElapsedMilliseconds,
+                        commandTelemetry: null),
+                    Transport = new CommandTransportMetadata(
+                        Mode: "daemon",
+                        Timings: new CommandTransportTimings(
+                            ValidateMs: Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                            TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+                }).ConfigureAwait(false);
                 return 1;
             }
 
             return null;
         }
+
         WorkspaceHostDaemonManager manager = new();
         string? repoRoot = InferToolCallDaemonRepoRoot(input);
         WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
@@ -1177,11 +1254,27 @@ Workflow:
                 requireHotWorkspace,
                 out JsonElement routedInput,
                 out bool resolvedHotWorkspace,
+                out string? routedAlias,
+                out string? routedHandle,
                 out CommandEnvelope? aliasError))
         {
             if (requireHotWorkspace)
             {
-                await WriteEnvelopeAsync(stdout, aliasError!).ConfigureAwait(false);
+                totalTimer.Stop();
+                await WriteEnvelopeAsync(stdout, aliasError! with
+                {
+                    Telemetry = BuildCliTelemetry(
+                        validateMs: (int)validateTimer.ElapsedMilliseconds,
+                        executeMs: null,
+                        totalMs: (int)totalTimer.ElapsedMilliseconds,
+                        commandTelemetry: null),
+                    Transport = new CommandTransportMetadata(
+                        Mode: "daemon",
+                        DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
+                        Timings: new CommandTransportTimings(
+                            ValidateMs: Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                            TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+                }).ConfigureAwait(false);
                 return 1;
             }
 
@@ -1191,14 +1284,18 @@ Workflow:
         WorkspaceHostRequest request = new(
             Id: Guid.NewGuid().ToString("N"),
             Method: WorkspaceHostProtocol.Method.ToolCall,
+            WorkspaceAlias: routedAlias,
+            WorkspaceHandle: routedHandle,
             RefreshPolicy: Environment.GetEnvironmentVariable("ROSCLI_REFRESH_POLICY"),
             CommandId: commandId,
             Input: routedInput);
+        Stopwatch roundtripTimer = Stopwatch.StartNew();
         WorkspaceHostResponse? response = await manager.SendRequestAsync(
             endpoint.RepoRoot,
             request,
             TimeSpan.FromMinutes(5),
             cancellationToken).ConfigureAwait(false);
+        roundtripTimer.Stop();
         if (response is null)
         {
             if (!requireHotWorkspace && !resolvedHotWorkspace)
@@ -1206,16 +1303,32 @@ Workflow:
                 return null;
             }
 
+            totalTimer.Stop();
             await WriteEnvelopeAsync(stdout, ErrorEnvelope(
                 commandId,
                 WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
-                "Workspace daemon is unavailable for a required hot-workspace command. Run 'roscli workspace.use <solution>' first.")).ConfigureAwait(false);
+                "Workspace daemon is unavailable for a required hot-workspace command. Run 'roscli workspace.use <solution>' first.") with
+            {
+                Telemetry = BuildCliTelemetry(
+                    validateMs: (int)validateTimer.ElapsedMilliseconds,
+                    executeMs: null,
+                    totalMs: (int)totalTimer.ElapsedMilliseconds,
+                    commandTelemetry: null),
+                Transport = new CommandTransportMetadata(
+                    Mode: "daemon",
+                    RoutedAlias: routedAlias,
+                    WorkspaceHandle: routedHandle,
+                    RefreshPolicy: request.RefreshPolicy,
+                    DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
+                    Timings: new CommandTransportTimings(
+                        ValidateMs: Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                        RoundtripMs: Math.Round(roundtripTimer.Elapsed.TotalMilliseconds, 3),
+                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+            }).ConfigureAwait(false);
             return 1;
         }
 
-        IReadOnlyList<CommandError> errors = response.Errors ??
-                                             response.Envelope?.Errors ??
-                                             Array.Empty<CommandError>();
+        IReadOnlyList<CommandError> errors = response.Errors ?? Array.Empty<CommandError>();
         if (!response.Ok &&
             !requireHotWorkspace &&
             HasErrorCode(errors, WorkspaceHostProtocol.ErrorCode.ProtocolMismatch))
@@ -1223,15 +1336,122 @@ Workflow:
             return null;
         }
 
+        totalTimer.Stop();
         await WriteEnvelopeAsync(stdout, new CommandEnvelope(
             Ok: response.Ok,
             CommandId: commandId,
-            Version: EnvelopeVersion,
-            Data: response,
+            Version: response.Version ?? EnvelopeVersion,
+            Data: response.Data,
             Errors: errors,
-            TraceId: null)).ConfigureAwait(false);
+            TraceId: response.TraceId,
+            Telemetry: BuildCliTelemetry(
+                validateMs: (int)validateTimer.ElapsedMilliseconds,
+                executeMs: (int)Math.Round(response.ElapsedMs),
+                totalMs: (int)totalTimer.ElapsedMilliseconds,
+                commandTelemetry: response.Telemetry),
+            Transport: BuildDaemonTransport(
+                request,
+                response,
+                endpoint,
+                routedAlias,
+                routedHandle,
+                validateTimer,
+                roundtripTimer,
+                totalTimer))).ConfigureAwait(false);
         return response.Ok ? 0 : 1;
     }
+
+    private static CommandTransportMetadata BuildInProcessTransport(
+        object? data,
+        Stopwatch? validateTimer,
+        Stopwatch? executeTimer,
+        Stopwatch totalTimer)
+    {
+        (string? workspaceHandle, string? cacheMode, string? refreshAction) = ExtractTransportFieldsFromData(data);
+        return new CommandTransportMetadata(
+            Mode: "in_process",
+            WorkspaceHandle: workspaceHandle,
+            CacheMode: cacheMode,
+            RefreshAction: refreshAction,
+            Timings: new CommandTransportTimings(
+                ValidateMs: validateTimer is null ? null : Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                ExecuteMs: executeTimer is null ? null : Math.Round(executeTimer.Elapsed.TotalMilliseconds, 3),
+                TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3)));
+    }
+
+    private static CommandTransportMetadata BuildDaemonTransport(
+        WorkspaceHostRequest request,
+        WorkspaceHostResponse response,
+        WorkspaceHostDaemonEndpoint endpoint,
+        string? routedAlias,
+        string? routedHandle,
+        Stopwatch? validateTimer,
+        Stopwatch roundtripTimer,
+        Stopwatch totalTimer)
+    {
+        (string? dataHandle, string? dataCacheMode, string? dataRefreshAction) = ExtractTransportFieldsFromData(response.Data);
+        string? workspaceHandle = response.Workspace?.WorkspaceHandle ?? routedHandle ?? request.WorkspaceHandle ?? dataHandle;
+        string? alias = routedAlias ?? request.WorkspaceAlias ?? response.Workspace?.Alias;
+        string? refreshAction = response.Workspace?.RefreshAction ?? dataRefreshAction;
+        return new CommandTransportMetadata(
+            Mode: "daemon",
+            RoutedAlias: alias,
+            WorkspaceHandle: workspaceHandle,
+            CacheMode: dataCacheMode,
+            RefreshPolicy: request.RefreshPolicy ?? Environment.GetEnvironmentVariable("ROSCLI_REFRESH_POLICY"),
+            RefreshAction: refreshAction,
+            DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
+            Timings: new CommandTransportTimings(
+                ValidateMs: validateTimer is null ? null : Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
+                HostElapsedMs: response.ElapsedMs,
+                RoundtripMs: Math.Round(roundtripTimer.Elapsed.TotalMilliseconds, 3),
+                TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3)),
+            Workspace: response.Workspace);
+    }
+
+    private static (string? WorkspaceHandle, string? CacheMode, string? RefreshAction) ExtractTransportFieldsFromData(object? data)
+    {
+        if (data is null)
+        {
+            return (null, null, null);
+        }
+
+        JsonElement element = data is JsonElement existingElement
+            ? existingElement
+            : JsonSerializer.SerializeToElement(data);
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return (null, null, null);
+        }
+
+        string? handle = TryGetNonEmptyString(element, "workspace_handle");
+        string? cacheMode = TryGetNonEmptyString(element, "workspace_cache_mode") ??
+                            TryGetNonEmptyString(element, "cache_mode");
+        string? refreshAction = TryGetNonEmptyString(element, "refresh_action");
+
+        JsonElement workspaceContext = default;
+        bool hasWorkspaceContext = TryGetObject(element, "workspace_context", out workspaceContext) ||
+                                   (TryGetObject(element, "query", out JsonElement queryElement) &&
+                                    TryGetObject(queryElement, "workspace_context", out workspaceContext));
+        if (hasWorkspaceContext)
+        {
+            handle ??= TryGetNonEmptyString(workspaceContext, "workspace_handle");
+            cacheMode ??= TryGetNonEmptyString(workspaceContext, "workspace_cache_mode") ??
+                          TryGetNonEmptyString(workspaceContext, "mode");
+            if (refreshAction is null &&
+                TryGetObject(workspaceContext, "hot_workspace_refresh", out JsonElement refreshElement))
+            {
+                refreshAction = TryGetNonEmptyString(refreshElement, "action");
+            }
+        }
+
+        return (handle, cacheMode, refreshAction);
+    }
+
+    private static string? TryGetNonEmptyString(JsonElement element, string propertyName)
+        => TryGetString(element, propertyName, out string value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
 
     private static bool HasErrorCode(IEnumerable<CommandError> errors, string code)
         => errors.Any(error => string.Equals(error.Code, code, StringComparison.OrdinalIgnoreCase));
@@ -2589,6 +2809,7 @@ Workflow:
                 break;
 
             case "workspace.status":
+            case "workspace.refresh":
             case "workspace.close":
                 if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
                 {
@@ -2600,6 +2821,18 @@ Workflow:
                 }
 
                 input["workspace_handle"] = positionalArgs[0];
+                break;
+
+            case "workspace.list":
+                if (positionalArgs.Length != 0)
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "workspace.list"));
+                    return false;
+                }
+
                 break;
 
             default:
@@ -2699,7 +2932,9 @@ Workflow:
             "session.close" => true,
             "workspace.preload" => true,
             "workspace.status" => true,
+            "workspace.refresh" => true,
             "workspace.close" => true,
+            "workspace.list" => true,
             _ => false,
         };
 
@@ -3218,6 +3453,7 @@ Workflow:
         {
             Preview = preview,
             Summary = summary,
+            Transport = envelope.Transport ?? new CommandTransportMetadata(Mode: "in_process"),
         };
         string json = JsonSerializer.Serialize(envelopeWithHints, _jsonOptions);
         await writer.WriteLineAsync(json).ConfigureAwait(false);
@@ -3253,12 +3489,6 @@ Workflow:
         }
 
         JsonElement element = JsonSerializer.SerializeToElement(data);
-        if (TryGetObject(element, "envelope", out JsonElement hostEnvelope) &&
-            (TryGetObject(hostEnvelope, "Data", out JsonElement nestedData) ||
-             TryGetObject(hostEnvelope, "data", out nestedData)))
-        {
-            element = nestedData;
-        }
 
         if (string.Equals(commandId, "cli.list_commands", StringComparison.OrdinalIgnoreCase))
         {

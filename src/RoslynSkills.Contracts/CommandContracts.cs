@@ -33,6 +33,24 @@ public sealed record CommandError(
     string Message,
     object? Details = null);
 
+public sealed record CommandTransportTimings(
+    [property: JsonPropertyName("validate_ms")] double? ValidateMs = null,
+    [property: JsonPropertyName("execute_ms")] double? ExecuteMs = null,
+    [property: JsonPropertyName("host_elapsed_ms")] double? HostElapsedMs = null,
+    [property: JsonPropertyName("roundtrip_ms")] double? RoundtripMs = null,
+    [property: JsonPropertyName("total_ms")] double? TotalMs = null);
+
+public sealed record CommandTransportMetadata(
+    [property: JsonPropertyName("mode")] string Mode,
+    [property: JsonPropertyName("routed_alias")] string? RoutedAlias = null,
+    [property: JsonPropertyName("workspace_handle")] string? WorkspaceHandle = null,
+    [property: JsonPropertyName("cache_mode")] string? CacheMode = null,
+    [property: JsonPropertyName("refresh_policy")] string? RefreshPolicy = null,
+    [property: JsonPropertyName("refresh_action")] string? RefreshAction = null,
+    [property: JsonPropertyName("daemon_endpoint")] string? DaemonEndpoint = null,
+    [property: JsonPropertyName("timings")] CommandTransportTimings? Timings = null,
+    [property: JsonPropertyName("workspace")] WorkspaceHostWorkspaceMetadata? Workspace = null);
+
 public sealed record CommandEnvelope(
     [property: JsonPropertyOrder(-100)] bool Ok,
     [property: JsonPropertyOrder(-90)] string CommandId,
@@ -42,7 +60,8 @@ public sealed record CommandEnvelope(
     [property: JsonPropertyOrder(90)] string? TraceId,
     [property: JsonPropertyOrder(-50)] object? Telemetry = null,
     [property: JsonPropertyOrder(-70)] string? Preview = null,
-    [property: JsonPropertyOrder(100)] string? Summary = null);
+    [property: JsonPropertyOrder(100)] string? Summary = null,
+    [property: JsonPropertyOrder(-45)] CommandTransportMetadata? Transport = null);
 
 public sealed record CommandExecutionResult(
     object? Data,

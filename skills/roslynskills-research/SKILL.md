@@ -53,6 +53,7 @@ Pit-of-success contract:
 - Start stable-first: use `list-commands --stable-only --ids-only`; only step into `advanced`/`experimental` commands when needed
 - Verify workspace binding: use `--workspace-path ... --require-workspace true` on project code
 - Prefer `.sln`/`.slnx` for repo-wide or hot-workspace context; use `.csproj` only when intentionally project-scoped
+- Read payloads directly from top-level `Data` in both daemon and in-process runs (`Transport.mode` reports `daemon` vs `in_process`)
 - Verify before finalize: diagnostics + build/tests
 
 Cached invocation guidance (throughput vs freshness):

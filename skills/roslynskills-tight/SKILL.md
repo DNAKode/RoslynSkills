@@ -28,6 +28,7 @@ This skill is optimized for low-churn, "just enough Roslyn" workflows.
 - For project code, require a workspace: add `--workspace-path <.sln|.slnx|.csproj|dir> --require-workspace true`.
 - Prefer `.sln`/`.slnx` for repo-wide or hot-workspace context; use `.csproj` only when intentionally project-scoped.
 - Treat `workspace_context.mode=ad_hoc` as "not safe enough" for refactors.
+- Command output always puts the payload directly in top-level `Data` (whether via daemon or in-process); check `Transport.mode` (`daemon` vs `in_process`) for routing info.
 - If using Claude Code's `Bash` tool (common even on Windows), always run RoslynSkills as `bash scripts/roscli ...` (no backslashes, do not call `scripts\roscli.cmd`).
 - Never claim you used RoslynSkills unless you actually ran `roscli` / `scripts/roscli` commands; otherwise state the fallback explicitly.
 - For high-call loops, use cached published wrappers (`ROSCLI_USE_PUBLISHED=1`); after editing roscli itself, force one refresh (`ROSCLI_REFRESH_PUBLISHED=1`).

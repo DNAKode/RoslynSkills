@@ -238,10 +238,9 @@ public sealed class GitWorktreeTests
                 Assert.True(editExit == 0, $"edit.replace_in_member failed from worktree subdir.\nSTDOUT:\n{editOut}\nSTDERR:\n{editErr}");
                 using (JsonDocument editDoc = JsonDocument.Parse(editOut))
                 {
-                    JsonElement innerData = editDoc.RootElement
-                        .GetProperty("Data")
-                        .GetProperty("envelope")
-                        .GetProperty("Data");
+                    Assert.Equal("daemon", editDoc.RootElement.GetProperty("Transport").GetProperty("mode").GetString());
+                    JsonElement innerData = editDoc.RootElement.GetProperty("Data");
+                    Assert.False(innerData.TryGetProperty("envelope", out _));
                     JsonElement claimStatus = innerData.GetProperty("claim_status");
                     Assert.Equal(expectedWorktreeRoot, claimStatus.GetProperty("repo_root").GetString());
                     Assert.True(claimStatus.GetProperty("claimed").GetBoolean());

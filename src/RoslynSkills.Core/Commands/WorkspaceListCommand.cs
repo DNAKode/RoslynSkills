@@ -61,6 +61,7 @@ public sealed class WorkspaceListCommand : IAgentCommand
             total = workspaces.Length,
             workspaces,
             store_workspace_count = workspaceStore.Count,
+            aliases = Array.Empty<object>(),
         };
 
         return Task.FromResult(new CommandExecutionResult(data, Array.Empty<CommandError>()));

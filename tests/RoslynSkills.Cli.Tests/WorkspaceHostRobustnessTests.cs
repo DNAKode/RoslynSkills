@@ -59,10 +59,9 @@ public sealed class WorkspaceHostRobustnessTests
             using (JsonDocument reloadDoc = JsonDocument.Parse(reloadOut))
             {
                 Assert.True(reloadDoc.RootElement.GetProperty("Ok").GetBoolean());
-                JsonElement innerData = reloadDoc.RootElement
-                    .GetProperty("Data")
-                    .GetProperty("envelope")
-                    .GetProperty("Data");
+                Assert.Equal("daemon", reloadDoc.RootElement.GetProperty("Transport").GetProperty("mode").GetString());
+                JsonElement innerData = reloadDoc.RootElement.GetProperty("Data");
+                Assert.False(innerData.TryGetProperty("envelope", out _));
                 Assert.Equal("reload", innerData.GetProperty("refresh_action").GetString());
             }
 
@@ -79,10 +78,9 @@ public sealed class WorkspaceHostRobustnessTests
             using (JsonDocument strictDoc = JsonDocument.Parse(strictOut))
             {
                 Assert.True(strictDoc.RootElement.GetProperty("Ok").GetBoolean());
-                JsonElement innerData = strictDoc.RootElement
-                    .GetProperty("Data")
-                    .GetProperty("envelope")
-                    .GetProperty("Data");
+                Assert.Equal("daemon", strictDoc.RootElement.GetProperty("Transport").GetProperty("mode").GetString());
+                JsonElement innerData = strictDoc.RootElement.GetProperty("Data");
+                Assert.False(innerData.TryGetProperty("envelope", out _));
                 Assert.Equal("reload", innerData.GetProperty("refresh_action").GetString());
             }
 
