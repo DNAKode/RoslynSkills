@@ -641,6 +641,49 @@ internal static class Program
             return;
         }
 
+        if (string.Equals(commandId, "edit.apply_code_fix", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# source file.");
+            properties["diagnostic_id"] = StringProperty("Optional Roslyn diagnostic id (for example CS0103, CS0246, CS1061, CS0535). Required when line is omitted.");
+            properties["line"] = IntProperty("Optional 1-based line number of the diagnostic.", 1);
+            properties["column"] = IntProperty("Optional 1-based column number of the diagnostic.", 1);
+            properties["fix_title"] = StringProperty("Optional exact Roslyn code-fix title to apply (for example 'using System.Diagnostics;' or 'Implement interface').");
+            properties["apply"] = BoolProperty("When false, inspect offered fixes and preview changes without writing files.");
+            properties["max_diagnostics"] = IntProperty("Maximum post-edit diagnostics returned.", 1);
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path for workspace context.");
+            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "repair.propose_from_diagnostics", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# source file.");
+            properties["max_proposals"] = IntProperty("Maximum repair proposals returned.", 1);
+            properties["max_diagnostics"] = IntProperty("Maximum diagnostics inspected.", 1);
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path for workspace context.");
+            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "repair.apply_plan", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["steps"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["description"] = "Sequence of repair steps ({ operation_id, input }). Can also be supplied inside 'plan.steps'.",
+            };
+            properties["file_path"] = StringProperty("Optional default file path inherited by steps omitting file_path.");
+            properties["stop_on_error"] = BoolProperty("Stop executing remaining steps after the first failure (default true).");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path inherited by steps.");
+            properties["workspace_handle"] = StringProperty("Optional hot workspace handle inherited by steps.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            return;
+        }
+
         if (string.Equals(commandId, "nav.find_symbol", StringComparison.OrdinalIgnoreCase))
         {
             properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");

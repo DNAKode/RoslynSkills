@@ -2643,6 +2643,9 @@ public sealed class CliApplicationTests
     [InlineData("edit.replace_text")]
     [InlineData("edit.insert_text")]
     [InlineData("edit.batch_exact")]
+    [InlineData("edit.apply_code_fix")]
+    [InlineData("repair.propose_from_diagnostics")]
+    [InlineData("repair.apply_plan")]
     [InlineData("nav.find_references")]
     [InlineData("nav.find_invocations")]
     [InlineData("nav.call_hierarchy")]
@@ -3892,6 +3895,66 @@ public sealed class CliApplicationTests
         finally
         {
             try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EditApplyCodeFix_DirectShorthand_AndDescribeCommands_Work()
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+
+        foreach (string commandId in new[] { "edit.apply_code_fix", "repair.propose_from_diagnostics", "repair.apply_plan" })
+        {
+            StringWriter descOut = new();
+            int descExit = await app.RunAsync(
+                new[] { "describe-command", commandId },
+                descOut,
+                new StringWriter(),
+                CancellationToken.None);
+            Assert.Equal(0, descExit);
+            Assert.Contains(commandId, descOut.ToString());
+        }
+
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-codefix-cli-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            string filePath = Path.Combine(tempDir, "Demo.cs");
+            await File.WriteAllTextAsync(
+                filePath,
+                "namespace Demo;\n" +
+                "public static class Sample\n" +
+                "{\n" +
+                "    public static long Elapsed() => Stopwatch.GetTimestamp();\n" +
+                "}\n");
+
+            StringWriter dryOut = new();
+            int dryExit = await app.RunAsync(
+                new[] { "edit.apply_code_fix", filePath, "CS0103", "--apply", "false" },
+                dryOut,
+                new StringWriter(),
+                CancellationToken.None);
+            Assert.Equal(0, dryExit);
+            using (JsonDocument dryDoc = JsonDocument.Parse(dryOut.ToString()))
+            {
+                JsonElement data = dryDoc.RootElement.GetProperty("Data");
+                Assert.Equal("using System.Diagnostics;", data.GetProperty("selected_fix").GetProperty("title").GetString());
+                Assert.False(data.GetProperty("wrote_file").GetBoolean());
+            }
+
+            StringWriter applyOut = new();
+            int applyExit = await app.RunAsync(
+                new[] { "edit.apply_code_fix", filePath, "CS0103" },
+                applyOut,
+                new StringWriter(),
+                CancellationToken.None);
+            Assert.Equal(0, applyExit);
+            string updated = await File.ReadAllTextAsync(filePath);
+            Assert.Contains("using System.Diagnostics;", updated);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
     }
 

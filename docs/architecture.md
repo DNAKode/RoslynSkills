@@ -33,8 +33,8 @@ Persistent transport server for low-latency warm-state tool calls (experimental 
 ### `src/RoslynSkills.WorkspaceHost`
 Daemon for hot-workspace reuse over named pipes (Windows) or Unix domain sockets.
 
-- **Command coverage**: `workspace.use` / `workspace.preload` loads a solution once and binds an alias (default: `default`). Every command whose descriptor sets `RunsOnHotWorkspace` — all `nav.*` and `analyze.*` commands, all read-only `ctx.*`/`diag.*`/`repair.propose_*` semantic commands, and exact/semantic `edit.*` commands — runs directly against the in-memory solution without re-running MSBuild.
-- **Freshness before each routed call**: Before executing a routed command, `HotWorkspaceFreshness` reconciles the in-memory Roslyn solution against disk according to `refresh_policy` (`auto` default incrementally updates edited source files, adds new source files matching each loaded project's MSBuild include/exclude rules via `ProjectSourceRules`, removes deleted source files, and ignores non-source, output (`bin/`/`obj/`), directory, and `WatcherError` noise; `strict` also reloads when project or solution files change; `none` skips refresh). Structured hot edits (`edit.rename_symbol`, `edit.change_signature`, `edit.transaction`, `edit.create_file`) refresh modified files in the host immediately after writing.
+- **Command coverage**: `workspace.use` / `workspace.preload` loads a solution once and binds an alias (default: `default`). Every command whose descriptor sets `RunsOnHotWorkspace` — all `nav.*` and `analyze.*` commands, all read-only `ctx.*`/`diag.*` semantic commands, `repair.propose_from_diagnostics`/`repair.apply_plan`, and exact/semantic `edit.*` commands (including `edit.apply_code_fix`) — runs directly against the in-memory solution without re-running MSBuild.
+- **Freshness before each routed call**: Before executing a routed command, `HotWorkspaceFreshness` reconciles the in-memory Roslyn solution against disk according to `refresh_policy` (`auto` default incrementally updates edited source files, adds new source files matching each loaded project's MSBuild include/exclude rules via `ProjectSourceRules`, removes deleted source files, and ignores non-source, output (`bin/`/`obj/`), directory, and `WatcherError` noise; `strict` also reloads when project or solution files change; `none` skips refresh). Structured hot edits (`edit.rename_symbol`, `edit.change_signature`, `edit.apply_code_fix`, `edit.transaction`, `edit.create_file`) refresh modified files in the host immediately after writing.
 - **Solution-wide semantic searches**: Navigation and hierarchy queries (`nav.go_to_definition`, `nav.find_references`, `nav.find_implementations`, `nav.find_overrides`, `nav.find_invocations`, `nav.call_hierarchy`, `nav.call_path`, `analyze.impact_slice`) span every project in the loaded solution. Type reference and invocation queries include explicit and target-typed `new(...)` object creations and primary constructors; call hierarchy follows lambdas (attributing calls to the enclosing member) and method-group initializers; `nav.find_implementations`/`nav.find_overrides` return declaration identifier coordinates; `diag.get_workspace_snapshot` covers every project under a directory or solution (per project, summed).
 
 ### `src/XmlSkills.*`
@@ -46,10 +46,10 @@ In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monor
 |---|---|---|
 | `nav.*` | Solution-wide go-to-definition, symbol, references, implementations, overrides, invocations, call hierarchy/path | 51 stable |
 | `ctx.*` | File outline, member source, text search, changed files, symbol envelope | + 11 advanced |
-| `edit.*` | Semantic renames/signature changes, batch-exact edits, replace-in-member, insert/claim/create | + 3 experimental |
+| `edit.*` | Semantic renames/signature changes, Roslyn code fixes (`edit.apply_code_fix`), batch-exact edits, replace-in-member, insert/claim/create | + 3 experimental |
 | `diag.*` | File, multi-project workspace/directory, and solution diagnostics snapshots and diffs | = 65 total |
 | `analyze.*` | Control flow, dataflow, impact slice, async risk, dependency violations, unused symbols | |
-| `repair.*` | Diagnostics-driven repair planning and application | |
+| `repair.*` | Hot-workspace Roslyn code-fix planning (`repair.propose_from_diagnostics`) and execution (`repair.apply_plan`), never TODO stubs | |
 | `session.*` | Non-destructive .cs/.csx edit loop with diff/commit | |
 | `workspace.*` / `daemon.*` | Hot-workspace bind (`workspace.use`), preload, status, refresh, lifecycle | |
 | `agent-begin` / `csharp-start` | Supervised first-command onboarding for fresh agent sessions | |
@@ -84,6 +84,7 @@ Key rules:
 |---|---|---|
 | `edit.rename_symbol` | Symbol-anchored rename | Solution-wide symbol renames with XML doc crefs and workspace diagnostics |
 | `edit.change_signature` | Symbol-anchored signature edit | Solution-wide parameter/name updates and call-site rewrites |
+| `edit.apply_code_fix` | Diagnostic-anchored Roslyn fix | Hot-workspace MEF-discovered Roslyn `CodeFixProvider` fixes (add-import, implement interface/abstract class, deterministic compiler fixes) with encoding/line-ending preservation and updated-solution diagnostics |
 | `edit.transaction` | Multi-file atomic transaction (`replace_text`, `insert_text`, `replace_span` [1-based line/col or 0-based offset], `set_content`) | Cross-file exact/span/content edits on the hot workspace with unified solution diagnostics and line-ending/BOM preservation |
 | `edit.batch_exact` | Thin alias of `edit.transaction` | Delegates directly to `edit.transaction` (identical behavior and schema) |
 | `edit.replace_in_member` | Scoped to a unique member/body | Small assertion/property edits with claim-first |

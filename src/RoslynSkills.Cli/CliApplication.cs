@@ -2436,6 +2436,72 @@ Workflow:
                 input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
                 break;
 
+            case "edit.apply_code_fix":
+                if (positionalArgs.Length < 1 ||
+                    positionalArgs.Length > 4 ||
+                    string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "edit.apply_code_fix <file-path> [diagnostic-id] [line] [column] [--fix-title <title>] [--apply true|false] [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                if (positionalArgs.Length >= 2)
+                {
+                    if (int.TryParse(positionalArgs[1], out int posLineOnly) && posLineOnly > 0)
+                    {
+                        input["line"] = posLineOnly;
+                        if (positionalArgs.Length >= 3)
+                        {
+                            if (!int.TryParse(positionalArgs[2], out int posColOnly) || posColOnly <= 0 || positionalArgs.Length > 3)
+                            {
+                                error = ErrorEnvelope(
+                                    commandId: "cli",
+                                    code: "invalid_args",
+                                    message: BuildUsageMessage(commandId, "edit.apply_code_fix <file-path> [diagnostic-id] [line] [column] [--fix-title <title>] [--apply true|false]"));
+                                return false;
+                            }
+
+                            input["column"] = posColOnly;
+                        }
+                    }
+                    else
+                    {
+                        input["diagnostic_id"] = positionalArgs[1];
+                        if (positionalArgs.Length >= 3)
+                        {
+                            if (!int.TryParse(positionalArgs[2], out int fixLine) || fixLine <= 0)
+                            {
+                                error = ErrorEnvelope(
+                                    commandId: "cli",
+                                    code: "invalid_args",
+                                    message: BuildUsageMessage(commandId, "edit.apply_code_fix <file-path> [diagnostic-id] [line] [column] [--fix-title <title>] [--apply true|false]"));
+                                return false;
+                            }
+
+                            input["line"] = fixLine;
+                        }
+
+                        if (positionalArgs.Length == 4)
+                        {
+                            if (!int.TryParse(positionalArgs[3], out int fixCol) || fixCol <= 0)
+                            {
+                                error = ErrorEnvelope(
+                                    commandId: "cli",
+                                    code: "invalid_args",
+                                    message: BuildUsageMessage(commandId, "edit.apply_code_fix <file-path> [diagnostic-id] [line] [column] [--fix-title <title>] [--apply true|false]"));
+                                return false;
+                            }
+
+                            input["column"] = fixCol;
+                        }
+                    }
+                }
+                break;
+
             case "edit.claim":
                 if (positionalArgs.Length < 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
                 {
@@ -2623,6 +2689,7 @@ Workflow:
             "edit.replace_text" => true,
             "edit.replace_in_member" => true,
             "edit.insert_text" => true,
+            "edit.apply_code_fix" => true,
             "edit.claim" => true,
             "session.open" => true,
             "session.get_diagnostics" => true,
@@ -3515,6 +3582,48 @@ Workflow:
             }
         }
 
+        if (string.Equals(commandId, "edit.apply_code_fix", StringComparison.OrdinalIgnoreCase))
+        {
+            string file = TryGetString(element, "file_path", out string filePath)
+                ? GetDisplayFileName(filePath)
+                : "<unknown>";
+            string diagId = TryGetString(element, "diagnostic_id", out string id) ? id : string.Empty;
+            string? fixTitle = TryGetObject(element, "selected_fix", out JsonElement selectedFix) &&
+                               TryGetString(selectedFix, "title", out string title)
+                ? title
+                : null;
+            bool wrote = TryGetBool(element, "wrote_file", out bool wroteFile) && wroteFile;
+            int offeredCount = TryGetArrayLength(element, "offered_fixes", out int count) ? count : 0;
+            string action = wrote ? "written" : "preview";
+            string claimSuffix = BuildClaimStatusSuffix(element, wrote);
+            string label = !string.IsNullOrWhiteSpace(fixTitle)
+                ? $"{file}, {diagId}, fix='{fixTitle}', {action}{claimSuffix}"
+                : $"{file}, {diagId}, offered={offeredCount}, {action}";
+            return label;
+        }
+
+        if (string.Equals(commandId, "repair.propose_from_diagnostics", StringComparison.OrdinalIgnoreCase))
+        {
+            string file = TryGetString(element, "file_path", out string filePath)
+                ? GetDisplayFileName(filePath)
+                : "<unknown>";
+            int diagCount = TryGetInt(element, "diagnostic_count", out int dc) ? dc : 0;
+            int proposalCount = TryGetInt(element, "proposal_count", out int pc) ? pc : 0;
+            int unfixableCount = TryGetInt(element, "unfixable_count", out int uc) ? uc : 0;
+            return $"{file}, diagnostics={diagCount}, proposals={proposalCount}, unfixable={unfixableCount}";
+        }
+
+        if (string.Equals(commandId, "repair.apply_plan", StringComparison.OrdinalIgnoreCase))
+        {
+            int total = TryGetInt(element, "total_steps", out int ts) ? ts : -1;
+            int okCount = TryGetInt(element, "succeeded_steps", out int ss) ? ss : 0;
+            int failCount = TryGetInt(element, "failed_steps", out int fs) ? fs : 0;
+            if (total >= 0)
+            {
+                return $"steps={okCount}/{total} ok, failed={failCount}";
+            }
+        }
+
         if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
         {
             int total = TryGetInt(element, "total", out int totalDiagnostics) ? totalDiagnostics : -1;
@@ -3946,6 +4055,58 @@ Workflow:
                 {
                     "For repo-wide rename context, prefer workspace_path=.sln/.slnx; use .csproj only for intentional project scope.",
                     "Set require_workspace=true for project-backed files when ad_hoc fallback should fail closed.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "edit.apply_code_fix", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "edit.apply_code_fix <file-path> [diagnostic-id] [line] [column] [--fix-title <title>] [--apply true|false] [--option value ...]",
+                run = "run edit.apply_code_fix --input '{\"file_path\":\"src/MyFile.cs\",\"diagnostic_id\":\"CS0103\",\"line\":12,\"column\":9,\"fix_title\":\"using System.Diagnostics;\",\"apply\":true}'",
+                required_properties = new[] { "file_path" },
+                optional_properties = new[] { "diagnostic_id", "line", "column", "fix_title", "apply", "max_diagnostics", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Runs on the hot workspace daemon using Roslyn's built-in C# code-fix providers (AddImport for CS0103/CS0246/CS1061, ImplementInterface for CS0535, ImplementAbstractClass for CS0534, and deterministic compiler fixes).",
+                    "Provide at least diagnostic_id or line. Reports all offered Roslyn fix titles in offered_fixes and applies fix_title (or the single unambiguous primary fix when fix_title is omitted).",
+                    "Diagnostics with no safe Roslyn fix (including CS7036 missing required argument) return error code no_fix_available instead of guessing.",
+                    "Preserves original file encoding/BOM and line endings, formats changed spans using document options, refreshes the hot workspace, and reports diagnostics_after_edit from the updated solution.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "repair.propose_from_diagnostics", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "repair.propose_from_diagnostics <file-path> [--option value ...]",
+                run = "run repair.propose_from_diagnostics --input '{\"file_path\":\"src/MyFile.cs\",\"require_workspace\":true}'",
+                required_properties = new[] { "file_path" },
+                optional_properties = new[] { "max_proposals", "max_diagnostics", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Runs on the hot workspace and proposes real Roslyn code fixes (title, diagnostic_id, file_path, line, column) via edit.apply_code_fix; never invents TODO stubs.",
+                    "Diagnostics with no safe Roslyn fix (such as CS7036) are reported in unfixable_diagnostics with reason no_fix_available.",
+                    "Pass the returned plan object directly to repair.apply_plan.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "repair.apply_plan", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "run repair.apply_plan --input-stdin",
+                run = "run repair.apply_plan --input '{\"file_path\":\"src/MyFile.cs\",\"steps\":[{\"operation_id\":\"edit.apply_code_fix\",\"input\":{\"diagnostic_id\":\"CS0103\",\"fix_title\":\"using System.Diagnostics;\",\"apply\":true}}],\"stop_on_error\":true}'",
+                required_properties = new[] { "steps" },
+                optional_properties = new[] { "plan", "file_path", "stop_on_error", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Runs on the hot workspace daemon and forwards workspace_handle/workspace_path/require_workspace to every step.",
+                    "Accepts either top-level steps or a plan wrapper returned by repair.propose_from_diagnostics.",
+                    "Refreshes the hot workspace after each writing step and reports step_results plus diagnostics_after_plan.",
                 },
             };
         }

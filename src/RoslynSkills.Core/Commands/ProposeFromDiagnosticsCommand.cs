@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -8,7 +8,7 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "repair.propose_from_diagnostics",
-        Summary: "Propose a structured repair plan from current diagnostics.",
+        Summary: "Propose Roslyn-backed repair steps (AddImport, ImplementInterface, compiler fixes) from current diagnostics.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -44,40 +44,181 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
 
         string filePath = input.GetProperty("file_path").GetString()!;
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         int maxProposals = InputParsing.GetOptionalInt(input, "max_proposals", defaultValue: 25, minValue: 1, maxValue: 500);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 200, minValue: 1, maxValue: 2_000);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
+                filePath,
+                cancellationToken,
+                workspacePath,
+                workspaceHandle)
+            .ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {
             return workspaceError;
         }
 
-        IReadOnlyList<Diagnostic> diagnostics = WorkspaceDiagnostics.GetDiagnosticsForCurrentFile(analysis, cancellationToken);
-        NormalizedDiagnostic[] normalized = CompilationDiagnostics.Normalize(diagnostics).Take(maxDiagnostics).ToArray();
+        Diagnostic[] diagnostics = WorkspaceDiagnostics.GetDiagnosticsForCurrentFile(analysis, cancellationToken)
+            .Where(d => !d.IsSuppressed && d.Severity != DiagnosticSeverity.Hidden)
+            .OrderByDescending(d => d.Severity)
+            .ThenBy(d => d.Location.GetLineSpan().StartLinePosition.Line)
+            .ThenBy(d => d.Location.GetLineSpan().StartLinePosition.Character)
+            .Take(maxDiagnostics)
+            .ToArray();
 
-        List<RepairProposal> proposals = new();
-        foreach (NormalizedDiagnostic diagnostic in normalized)
+        List<ProposalBucket> proposals = new();
+        Dictionary<string, ProposalBucket> dedupeMap = new(StringComparer.OrdinalIgnoreCase);
+        List<object> unfixableDiagnostics = new();
+
+        if (diagnostics.Length > 0 && string.Equals(analysis.Language, LanguageNames.CSharp, StringComparison.Ordinal))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            RepairProposal? proposal = CreateProposal(analysis.FilePath, diagnostic);
-            if (proposal is null)
-            {
-                continue;
-            }
+            (Document preparedDocument, Diagnostic firstDiagnostic, IDisposable? ownedWorkspace) =
+                await RoslynCodeFixService.PrepareDocumentAndDiagnosticAsync(analysis, diagnostics[0], cancellationToken)
+                    .ConfigureAwait(false);
 
-            proposals.Add(proposal);
-            if (proposals.Count >= maxProposals)
+            using (ownedWorkspace)
             {
-                break;
+                SemanticModel? preparedModel = analysis.Document is null
+                    ? await preparedDocument.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false)
+                    : null;
+                IReadOnlyList<Diagnostic>? preparedDocDiagnostics = preparedModel?.GetDiagnostics(cancellationToken: cancellationToken);
+
+                for (int i = 0; i < diagnostics.Length; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Diagnostic diagnostic = i == 0
+                        ? firstDiagnostic
+                        : RebindDiagnostic(diagnostics[i], preparedDocDiagnostics);
+
+                    FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
+                    int line = span.StartLinePosition.Line + 1;
+                    int column = span.StartLinePosition.Character + 1;
+
+                    IReadOnlyList<RoslynCodeFixCandidate> candidates = await RoslynCodeFixService.GetCodeFixesAsync(
+                            preparedDocument,
+                            diagnostic,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    RoslynCodeFixCandidate[] primaryFixes = candidates
+                        .Where(c => c.Tier == CodeFixTier.Primary)
+                        .ToArray();
+
+                    if (primaryFixes.Length == 0)
+                    {
+                        unfixableDiagnostics.Add(new
+                        {
+                            diagnostic_id = diagnostic.Id,
+                            severity = diagnostic.Severity.ToString(),
+                            message = diagnostic.GetMessage(),
+                            file_path = analysis.FilePath,
+                            line,
+                            column,
+                            reason = "no_fix_available",
+                        });
+                        continue;
+                    }
+
+                    (RoslynCodeFixCandidate? selectedFix, bool ambiguous) = SelectProposalFix(primaryFixes);
+                    string[] offeredTitles = candidates
+                        .Where(c => c.Tier != CodeFixTier.ExplicitOnly)
+                        .Select(c => c.Title)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+
+                    string dedupeKey = BuildDedupeKey(analysis.FilePath, diagnostic, selectedFix, line, column, offeredTitles);
+                    if (dedupeMap.TryGetValue(dedupeKey, out ProposalBucket? existing))
+                    {
+                        existing.CoveredDiagnosticCount++;
+                        existing.CoveredLines.Add(line);
+                        continue;
+                    }
+
+                    if (proposals.Count >= maxProposals)
+                    {
+                        continue;
+                    }
+
+                    RepairPlanStep? step = selectedFix is not null && !ambiguous
+                        ? new RepairPlanStep(
+                            operation_id: "edit.apply_code_fix",
+                            input: new
+                            {
+                                file_path = analysis.FilePath,
+                                diagnostic_id = diagnostic.Id,
+                                line,
+                                column,
+                                fix_title = selectedFix.Title,
+                                apply = true,
+                            })
+                        : null;
+
+                    ProposalBucket bucket = new(
+                        DiagnosticId: diagnostic.Id,
+                        Severity: diagnostic.Severity.ToString(),
+                        Message: diagnostic.GetMessage(),
+                        FilePath: analysis.FilePath,
+                        Line: line,
+                        Column: column,
+                        FixTitle: selectedFix?.Title,
+                        Provider: selectedFix?.ProviderName ?? primaryFixes[0].ProviderName,
+                        OfferedFixes: offeredTitles,
+                        Ambiguous: ambiguous,
+                        Step: step);
+                    bucket.CoveredLines.Add(line);
+
+                    dedupeMap[dedupeKey] = bucket;
+                    proposals.Add(bucket);
+                }
+            }
+        }
+        else
+        {
+            foreach (Diagnostic diagnostic in diagnostics)
+            {
+                FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
+                unfixableDiagnostics.Add(new
+                {
+                    diagnostic_id = diagnostic.Id,
+                    severity = diagnostic.Severity.ToString(),
+                    message = diagnostic.GetMessage(),
+                    file_path = analysis.FilePath,
+                    line = span.StartLinePosition.Line + 1,
+                    column = span.StartLinePosition.Character + 1,
+                    reason = "no_fix_available",
+                });
             }
         }
 
         RepairPlanStep[] planSteps = proposals
-            .Select(p => p.step)
+            .Where(p => p.Step is not null)
+            .Select(p => p.Step!)
             .ToArray();
+
+        object[] proposalPayloads = proposals
+            .Select(p => (object)new
+            {
+                diagnostic_id = p.DiagnosticId,
+                severity = p.Severity,
+                message = p.Message,
+                file_path = p.FilePath,
+                line = p.Line,
+                column = p.Column,
+                fix_title = p.FixTitle,
+                provider = p.Provider,
+                offered_fixes = p.OfferedFixes,
+                ambiguous = p.Ambiguous,
+                requires_selection = p.Ambiguous,
+                covered_diagnostic_count = p.CoveredDiagnosticCount,
+                covered_lines = p.CoveredLines.OrderBy(l => l).ToArray(),
+                suggested_operation = "edit.apply_code_fix",
+            })
+            .ToArray();
+
+        bool noFixAvailable = diagnostics.Length > 0 && proposals.Count == 0;
 
         object data = new
         {
@@ -85,11 +226,15 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
             workspace_path = workspacePath,
             require_workspace = requireWorkspace,
             workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
-            diagnostic_count = normalized.Length,
+            diagnostic_count = diagnostics.Length,
             proposal_count = proposals.Count,
-            proposals = proposals.Select(p => p.proposal).ToArray(),
+            unfixable_count = unfixableDiagnostics.Count,
+            no_fix_available = noFixAvailable,
+            proposals = proposalPayloads,
+            unfixable_diagnostics = unfixableDiagnostics.ToArray(),
             plan = new
             {
+                file_path = analysis.FilePath,
                 steps = planSteps,
                 stop_on_error = true,
             },
@@ -98,61 +243,104 @@ public sealed class ProposeFromDiagnosticsCommand : IAgentCommand
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 
-    private static RepairProposal? CreateProposal(string filePath, NormalizedDiagnostic diagnostic)
+    private static (RoslynCodeFixCandidate? Selected, bool Ambiguous) SelectProposalFix(
+        RoslynCodeFixCandidate[] primaryFixes)
     {
-        if (string.Equals(diagnostic.id, "CS8019", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(diagnostic.id, "IDE0005", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(diagnostic.id, "CS0105", StringComparison.OrdinalIgnoreCase))
+        if (primaryFixes.Length == 1)
         {
-            return new RepairProposal(
-                proposal: new
-                {
-                    diagnostic_id = diagnostic.id,
-                    severity = diagnostic.severity,
-                    message = diagnostic.message,
-                    suggested_operation = "edit.apply_code_fix",
-                    confidence = 0.95,
-                    rationale = "Diagnostic maps to a supported deterministic using-directive code fix.",
-                },
-                step: new RepairPlanStep(
-                    operation_id: "edit.apply_code_fix",
-                    input: new
-                    {
-                        file_path = filePath,
-                        diagnostic_id = diagnostic.id,
-                        line = diagnostic.line,
-                        apply = true,
-                    }));
+            return (primaryFixes[0], false);
         }
 
-        if (string.Equals(diagnostic.id, "CS0103", StringComparison.OrdinalIgnoreCase))
+        // ImplementInterface offers implicit ("Implement interface") and explicit ("Implement all members explicitly").
+        // Propose the standard implicit Roslyn fix while exposing all offered titles in offered_fixes.
+        if (primaryFixes.All(f => RoslynCodeFixService.IsImplementInterfaceProvider(f.ProviderName)))
         {
-            return new RepairProposal(
-                proposal: new
-                {
-                    diagnostic_id = diagnostic.id,
-                    severity = diagnostic.severity,
-                    message = diagnostic.message,
-                    suggested_operation = "edit.add_member",
-                    confidence = 0.35,
-                    rationale = "Potential missing member reference; add_member may resolve after human-guided input.",
-                },
-                step: new RepairPlanStep(
-                    operation_id: "edit.add_member",
-                    input: new
-                    {
-                        file_path = filePath,
-                        member_declaration = "private void TODO_ResolveMissingSymbol() { }",
-                        apply = false,
-                    }));
+            RoslynCodeFixCandidate preferred = primaryFixes.FirstOrDefault(f =>
+                string.Equals(f.Title, "Implement interface", StringComparison.OrdinalIgnoreCase))
+                ?? primaryFixes[0];
+            return (preferred, false);
         }
 
-        return null;
+        return (null, true);
     }
 
-    private sealed record RepairProposal(
-        object proposal,
-        RepairPlanStep step);
+    private static string BuildDedupeKey(
+        string filePath,
+        Diagnostic diagnostic,
+        RoslynCodeFixCandidate? selectedFix,
+        int line,
+        int column,
+        string[] offeredTitles)
+    {
+        if (selectedFix is not null)
+        {
+            // File-wide using imports collapse across all diagnostics in the file that need the same using.
+            if (RoslynCodeFixService.IsAddImportProvider(selectedFix.ProviderName))
+            {
+                return $"{filePath}::AddImport::{selectedFix.Title}";
+            }
+
+            return $"{filePath}::{selectedFix.ProviderName}::{selectedFix.Title}::{line}:{column}";
+        }
+
+        return $"{filePath}::ambiguous::{diagnostic.Id}::{line}:{column}::{string.Join("|", offeredTitles)}";
+    }
+
+    private static Diagnostic RebindDiagnostic(Diagnostic diagnostic, IReadOnlyList<Diagnostic>? preparedDiagnostics)
+    {
+        if (preparedDiagnostics is null)
+        {
+            return diagnostic;
+        }
+
+        return preparedDiagnostics.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, diagnostic.Id, StringComparison.OrdinalIgnoreCase) &&
+            candidate.Location.SourceSpan == diagnostic.Location.SourceSpan)
+            ?? diagnostic;
+    }
+
+    private sealed class ProposalBucket
+    {
+        public string DiagnosticId { get; }
+        public string Severity { get; }
+        public string Message { get; }
+        public string FilePath { get; }
+        public int Line { get; }
+        public int Column { get; }
+        public string? FixTitle { get; }
+        public string Provider { get; }
+        public string[] OfferedFixes { get; }
+        public bool Ambiguous { get; }
+        public RepairPlanStep? Step { get; }
+        public int CoveredDiagnosticCount { get; set; } = 1;
+        public HashSet<int> CoveredLines { get; } = new();
+
+        public ProposalBucket(
+            string DiagnosticId,
+            string Severity,
+            string Message,
+            string FilePath,
+            int Line,
+            int Column,
+            string? FixTitle,
+            string Provider,
+            string[] OfferedFixes,
+            bool Ambiguous,
+            RepairPlanStep? Step)
+        {
+            this.DiagnosticId = DiagnosticId;
+            this.Severity = Severity;
+            this.Message = Message;
+            this.FilePath = FilePath;
+            this.Line = Line;
+            this.Column = Column;
+            this.FixTitle = FixTitle;
+            this.Provider = Provider;
+            this.OfferedFixes = OfferedFixes;
+            this.Ambiguous = Ambiguous;
+            this.Step = Step;
+        }
+    }
 
     private sealed record RepairPlanStep(
         string operation_id,

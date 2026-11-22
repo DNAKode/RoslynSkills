@@ -111,6 +111,9 @@ public sealed class HotWorkspaceEditTests
             "edit.transaction",
             "edit.create_file",
             "edit.replace_in_member",
+            "edit.apply_code_fix",
+            "repair.propose_from_diagnostics",
+            "repair.apply_plan",
         };
         foreach (string id in expectedHotEdits)
         {
