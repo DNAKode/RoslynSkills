@@ -20,9 +20,9 @@ internal static class Program
         WriteIndented = false,
     };
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-    private static TextWriter ResponseWriter = Console.Out;
     private static string CurrentTransportName = "stdio-jsonl";
     private static string? ExpectedAuthToken;
+    private static int ActiveRequestCount;
     private static readonly Dictionary<string, string> WorkspaceAliases = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object AliasGate = new();
 
@@ -58,7 +58,9 @@ internal static class Program
 
     private static async Task<int> RunStdioAsync(ICommandRegistry registry)
     {
-        _ = await RunJsonLinesAsync(registry, Console.In, Console.Out, "stdio-jsonl").ConfigureAwait(false);
+        CurrentTransportName = "stdio-jsonl";
+        using CancellationTokenSource shutdownCts = new();
+        _ = await RunJsonLinesAsync(registry, Console.In, Console.Out, shutdownCts, singleRequest: false).ConfigureAwait(false);
         return 0;
     }
 
@@ -66,20 +68,25 @@ internal static class Program
         ICommandRegistry registry,
         TextReader input,
         TextWriter output,
-        string transportName,
+        CancellationTokenSource shutdownCts,
         bool singleRequest = false)
     {
-        ResponseWriter = output;
-        CurrentTransportName = transportName;
-
-        while (true)
+        while (!shutdownCts.IsCancellationRequested)
         {
             string? line;
             try
             {
-                line = await input.ReadLineAsync().ConfigureAwait(false);
+                line = await input.ReadLineAsync(shutdownCts.Token).ConfigureAwait(false);
             }
             catch (IOException)
+            {
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            catch (OperationCanceledException)
             {
                 return false;
             }
@@ -94,10 +101,15 @@ internal static class Program
                 continue;
             }
 
-            bool shouldExit = await HandleRequestLineAsync(registry, line).ConfigureAwait(false);
-            if (shouldExit || singleRequest)
+            bool shouldExit = await HandleRequestLineAsync(registry, output, line, shutdownCts.Token).ConfigureAwait(false);
+            if (shouldExit)
             {
-                return shouldExit;
+                return true;
+            }
+
+            if (singleRequest)
+            {
+                return false;
             }
         }
 
@@ -106,37 +118,156 @@ internal static class Program
 
     private static async Task<int> RunNamedPipeAsync(ICommandRegistry registry, string pipeName)
     {
-        while (true)
+        CurrentTransportName = "named-pipe-jsonl";
+        await using NamedPipeServerStream? instanceLock = await TryAcquireNamedPipeLockAsync(pipeName).ConfigureAwait(false);
+        if (instanceLock is null)
         {
-            using NamedPipeServerStream pipe = new(
+            await Console.Error.WriteLineAsync($"Another workspace host already owns pipe '{pipeName}'.").ConfigureAwait(false);
+            return 3;
+        }
+
+        using CancellationTokenSource shutdownCts = new();
+        TaskCompletionSource shutdownResponseSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        while (!shutdownCts.IsCancellationRequested)
+        {
+            NamedPipeServerStream pipe = new(
                 pipeName,
                 PipeDirection.InOut,
-                maxNumberOfServerInstances: 1,
+                NamedPipeServerStream.MaxAllowedServerInstances,
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
 
-            await pipe.WaitForConnectionAsync().ConfigureAwait(false);
-            StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-            StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+            try
             {
-                AutoFlush = true,
-            };
-
-            bool shouldExit = await RunJsonLinesAsync(
-                registry,
-                reader,
-                writer,
-                "named-pipe-jsonl",
-                singleRequest: true).ConfigureAwait(false);
-            if (shouldExit)
-            {
-                return 0;
+                await pipe.WaitForConnectionAsync(shutdownCts.Token).ConfigureAwait(false);
             }
+            catch (OperationCanceledException)
+            {
+                await pipe.DisposeAsync().ConfigureAwait(false);
+                break;
+            }
+            catch (Exception)
+            {
+                await pipe.DisposeAsync().ConfigureAwait(false);
+                if (shutdownCts.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                try
+                {
+                    await Task.Delay(50, shutdownCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            _ = HandleNamedPipeConnectionAsync(registry, pipe, shutdownCts, shutdownResponseSent);
+        }
+
+        await WaitForShutdownFlushAsync(shutdownResponseSent).ConfigureAwait(false);
+        return 0;
+    }
+
+    private static async Task<NamedPipeServerStream?> TryAcquireNamedPipeLockAsync(string pipeName)
+    {
+        string lockPipeName = $"roslynskills-lock-{pipeName}";
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                return new NamedPipeServerStream(
+                    lockPipeName,
+                    PipeDirection.In,
+                    maxNumberOfServerInstances: 1,
+                    PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            if (stopwatch.Elapsed >= TimeSpan.FromSeconds(2))
+            {
+                return null;
+            }
+
+            await Task.Delay(50).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task HandleNamedPipeConnectionAsync(
+        ICommandRegistry registry,
+        NamedPipeServerStream pipe,
+        CancellationTokenSource shutdownCts,
+        TaskCompletionSource shutdownResponseSent)
+    {
+        try
+        {
+            await using (pipe.ConfigureAwait(false))
+            {
+                using StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+                using StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+                {
+                    AutoFlush = true,
+                };
+
+                bool shouldExit = await RunJsonLinesAsync(
+                    registry,
+                    reader,
+                    writer,
+                    shutdownCts,
+                    singleRequest: true).ConfigureAwait(false);
+                if (shouldExit)
+                {
+                    if (OperatingSystem.IsWindows())
+                    {
+                        try
+                        {
+                            pipe.WaitForPipeDrain();
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    shutdownResponseSent.TrySetResult();
+                    try
+                    {
+                        shutdownCts.Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
         }
     }
 
     private static async Task<int> RunUnixSocketAsync(ICommandRegistry registry, string socketPath)
     {
+        CurrentTransportName = "unix-socket-jsonl";
         string? socketDirectory = Path.GetDirectoryName(socketPath);
         if (!string.IsNullOrWhiteSpace(socketDirectory))
         {
@@ -154,14 +285,59 @@ internal static class Program
         {
             listener.Bind(new UnixDomainSocketEndPoint(socketPath));
             bound = true;
-            listener.Listen(backlog: 16);
+            listener.Listen(backlog: 32);
 
-            while (true)
+            using CancellationTokenSource shutdownCts = new();
+            TaskCompletionSource shutdownResponseSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            while (!shutdownCts.IsCancellationRequested)
             {
-                using Socket connection = await listener.AcceptAsync().ConfigureAwait(false);
-                await using NetworkStream stream = new(connection, ownsSocket: false);
-                StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-                StreamWriter writer = new(stream, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+                Socket connection;
+                try
+                {
+                    connection = await listener.AcceptAsync(shutdownCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (SocketException) when (shutdownCts.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+
+                _ = HandleUnixSocketConnectionAsync(registry, connection, shutdownCts, shutdownResponseSent);
+            }
+
+            await WaitForShutdownFlushAsync(shutdownResponseSent).ConfigureAwait(false);
+            return 0;
+        }
+        finally
+        {
+            if (bound)
+            {
+                TryDeleteSocketPath(socketPath);
+            }
+        }
+    }
+
+    private static async Task HandleUnixSocketConnectionAsync(
+        ICommandRegistry registry,
+        Socket connection,
+        CancellationTokenSource shutdownCts,
+        TaskCompletionSource shutdownResponseSent)
+    {
+        try
+        {
+            using (connection)
+            await using (NetworkStream stream = new(connection, ownsSocket: false))
+            {
+                using StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+                using StreamWriter writer = new(stream, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
                 {
                     AutoFlush = true,
                 };
@@ -170,20 +346,54 @@ internal static class Program
                     registry,
                     reader,
                     writer,
-                    "unix-socket-jsonl",
+                    shutdownCts,
                     singleRequest: true).ConfigureAwait(false);
                 if (shouldExit)
                 {
-                    return 0;
+                    try
+                    {
+                        connection.Shutdown(SocketShutdown.Send);
+                    }
+                    catch
+                    {
+                    }
+
+                    shutdownResponseSent.TrySetResult();
+                    try
+                    {
+                        shutdownCts.Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
                 }
             }
         }
-        finally
+        catch (IOException)
         {
-            if (bound)
-            {
-                TryDeleteSocketPath(socketPath);
-            }
+        }
+        catch (SocketException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task WaitForShutdownFlushAsync(TaskCompletionSource shutdownResponseSent)
+    {
+        try
+        {
+            await shutdownResponseSent.Task.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+        }
+        catch
+        {
         }
     }
 
@@ -353,11 +563,16 @@ internal static class Program
         }
     }
 
-    private static async Task<bool> HandleRequestLineAsync(ICommandRegistry registry, string line)
+    private static async Task<bool> HandleRequestLineAsync(
+        ICommandRegistry registry,
+        TextWriter writer,
+        string line,
+        CancellationToken cancellationToken)
     {
         Stopwatch stopwatch = Stopwatch.StartNew();
         string requestId = string.Empty;
         string method = string.Empty;
+        Interlocked.Increment(ref ActiveRequestCount);
 
         try
         {
@@ -369,6 +584,7 @@ internal static class Program
             if (string.IsNullOrWhiteSpace(method))
             {
                 await WriteErrorResponseAsync(
+                    writer,
                     requestId,
                     method,
                     "invalid_request",
@@ -381,6 +597,7 @@ internal static class Program
             if (!IsAuthorized(root, method))
             {
                 await WriteErrorResponseAsync(
+                    writer,
                     requestId,
                     method,
                     WorkspaceHostProtocol.ErrorCode.DaemonAuthFailed,
@@ -393,15 +610,16 @@ internal static class Program
             switch (method)
             {
                 case WorkspaceHostProtocol.Method.Handshake:
-                    await HandleHandshakeAsync(requestId, method, stopwatch).ConfigureAwait(false);
+                    await HandleHandshakeAsync(writer, requestId, method, stopwatch).ConfigureAwait(false);
                     return false;
 
                 case WorkspaceHostProtocol.Method.DaemonStatus:
-                    await HandleDaemonStatusAsync(requestId, method, stopwatch).ConfigureAwait(false);
+                    await HandleDaemonStatusAsync(writer, requestId, method, stopwatch).ConfigureAwait(false);
                     return false;
 
                 case WorkspaceHostProtocol.Method.Shutdown:
                     await WriteSuccessResponseAsync(
+                        writer,
                         requestId,
                         method,
                         stopwatch,
@@ -412,17 +630,19 @@ internal static class Program
                     return true;
 
                 case WorkspaceHostProtocol.Method.ToolList:
-                    await HandleToolListAsync(registry, requestId, method, stopwatch).ConfigureAwait(false);
+                    await HandleToolListAsync(registry, writer, requestId, method, stopwatch).ConfigureAwait(false);
                     return false;
 
                 case WorkspaceHostProtocol.Method.ToolCall:
                     await HandleToolCallAsync(
                         registry,
+                        writer,
                         root,
                         requestId,
                         method,
                         ResolveCommandId(root, method),
-                        stopwatch).ConfigureAwait(false);
+                        stopwatch,
+                        cancellationToken).ConfigureAwait(false);
                     return false;
 
                 default:
@@ -430,15 +650,18 @@ internal static class Program
                     {
                         await HandleToolCallAsync(
                             registry,
+                            writer,
                             root,
                             requestId,
                             method,
                             workspaceCommandId,
-                            stopwatch).ConfigureAwait(false);
+                            stopwatch,
+                            cancellationToken).ConfigureAwait(false);
                         return false;
                     }
 
                     await WriteErrorResponseAsync(
+                        writer,
                         requestId,
                         method,
                         "unknown_method",
@@ -451,6 +674,7 @@ internal static class Program
         catch (JsonException ex)
         {
             await WriteErrorResponseAsync(
+                writer,
                 requestId,
                 method,
                 "invalid_json",
@@ -459,9 +683,22 @@ internal static class Program
                 stopwatch).ConfigureAwait(false);
             return false;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await WriteErrorResponseAsync(
+                writer,
+                requestId,
+                method,
+                "host_shutting_down",
+                "Workspace host is shutting down.",
+                "daemon/status",
+                stopwatch).ConfigureAwait(false);
+            return false;
+        }
         catch (Exception ex)
         {
             await WriteErrorResponseAsync(
+                writer,
                 requestId,
                 method,
                 "host_error",
@@ -470,9 +707,13 @@ internal static class Program
                 stopwatch).ConfigureAwait(false);
             return false;
         }
+        finally
+        {
+            Interlocked.Decrement(ref ActiveRequestCount);
+        }
     }
 
-    private static Task HandleHandshakeAsync(string requestId, string method, Stopwatch stopwatch)
+    private static Task HandleHandshakeAsync(TextWriter writer, string requestId, string method, Stopwatch stopwatch)
     {
         WorkspaceHostHandshake handshake = new(
             ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
@@ -496,10 +737,10 @@ internal static class Program
                 "shutdown",
             });
 
-        return WriteSuccessResponseAsync(requestId, method, stopwatch, handshake);
+        return WriteSuccessResponseAsync(writer, requestId, method, stopwatch, handshake);
     }
 
-    private static Task HandleDaemonStatusAsync(string requestId, string method, Stopwatch stopwatch)
+    private static Task HandleDaemonStatusAsync(TextWriter writer, string requestId, string method, Stopwatch stopwatch)
     {
         object data = new
         {
@@ -508,14 +749,16 @@ internal static class Program
             process_id = Environment.ProcessId,
             transport = CurrentTransportName,
             workspace_store = "process_hot",
+            active_requests = Volatile.Read(ref ActiveRequestCount),
             supported_methods = SupportedMethods(),
         };
 
-        return WriteSuccessResponseAsync(requestId, method, stopwatch, data);
+        return WriteSuccessResponseAsync(writer, requestId, method, stopwatch, data);
     }
 
     private static Task HandleToolListAsync(
         ICommandRegistry registry,
+        TextWriter writer,
         string requestId,
         string method,
         Stopwatch stopwatch)
@@ -527,22 +770,25 @@ internal static class Program
             commands,
         };
 
-        return WriteSuccessResponseAsync(requestId, method, stopwatch, data);
+        return WriteSuccessResponseAsync(writer, requestId, method, stopwatch, data);
     }
 
     private static async Task HandleToolCallAsync(
         ICommandRegistry registry,
+        TextWriter writer,
         JsonElement root,
         string requestId,
         string method,
         string? commandId,
-        Stopwatch stopwatch)
+        Stopwatch stopwatch,
+        CancellationToken cancellationToken)
     {
         JsonElement input = GetInputElement(root, commandId);
 
         if (string.IsNullOrWhiteSpace(commandId))
         {
             await WriteErrorResponseAsync(
+                writer,
                 requestId,
                 method,
                 "invalid_request",
@@ -555,6 +801,7 @@ internal static class Program
         if (!registry.TryGet(commandId, out IAgentCommand? command) || command is null)
         {
             await WriteErrorResponseAsync(
+                writer,
                 requestId,
                 method,
                 "command_not_found",
@@ -577,7 +824,7 @@ internal static class Program
                 TraceId: null,
                 Summary: $"Validation failed for {commandId}.");
 
-            await WriteResponseAsync(new WorkspaceHostResponse(
+            await WriteResponseAsync(writer, new WorkspaceHostResponse(
                 Id: requestId,
                 Ok: false,
                 ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
@@ -591,9 +838,10 @@ internal static class Program
         HotWorkspaceFreshnessResult? freshness = await EnsureHotWorkspaceFreshAsync(
             command,
             root,
-            input).ConfigureAwait(false);
+            input,
+            cancellationToken).ConfigureAwait(false);
 
-        CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None).ConfigureAwait(false);
+        CommandExecutionResult result = await command.ExecuteAsync(input, cancellationToken).ConfigureAwait(false);
 
         UpdateAliasBindings(root, method, result.Data, result.Ok);
         object? responseData = BuildResponseData(commandId, result.Data, result.Ok);
@@ -611,7 +859,7 @@ internal static class Program
             TraceId: null,
             Telemetry: result.Telemetry);
 
-        await WriteResponseAsync(new WorkspaceHostResponse(
+        await WriteResponseAsync(writer, new WorkspaceHostResponse(
             Id: requestId,
             Ok: result.Ok,
             ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
@@ -629,7 +877,8 @@ internal static class Program
     private static async Task<HotWorkspaceFreshnessResult?> EnsureHotWorkspaceFreshAsync(
         IAgentCommand command,
         JsonElement root,
-        JsonElement input)
+        JsonElement input,
+        CancellationToken cancellationToken)
     {
         if (!command.Descriptor.RunsOnHotWorkspace ||
             command.Descriptor.Id.StartsWith("workspace.", StringComparison.Ordinal) ||
@@ -643,7 +892,7 @@ internal static class Program
         return await HotWorkspaceFreshness.EnsureFreshAsync(
                 handleProperty.GetString()!,
                 GetStringProperty(root, "refresh_policy"),
-                CancellationToken.None)
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1004,12 +1253,13 @@ internal static class Program
     }
 
     private static Task WriteSuccessResponseAsync(
+        TextWriter writer,
         string requestId,
         string method,
         Stopwatch stopwatch,
         object? data)
     {
-        return WriteResponseAsync(new WorkspaceHostResponse(
+        return WriteResponseAsync(writer, new WorkspaceHostResponse(
             Id: requestId,
             Ok: true,
             ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
@@ -1019,6 +1269,7 @@ internal static class Program
     }
 
     private static Task WriteErrorResponseAsync(
+        TextWriter writer,
         string requestId,
         string method,
         string code,
@@ -1046,7 +1297,7 @@ internal static class Program
                 TraceId: null,
                 Summary: message);
 
-        return WriteResponseAsync(new WorkspaceHostResponse(
+        return WriteResponseAsync(writer, new WorkspaceHostResponse(
             Id: requestId,
             Ok: false,
             ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
@@ -1056,10 +1307,24 @@ internal static class Program
             Errors: new[] { error }));
     }
 
-    private static async Task WriteResponseAsync(WorkspaceHostResponse response)
+    private static async Task WriteResponseAsync(TextWriter writer, WorkspaceHostResponse response)
     {
         string json = JsonSerializer.Serialize(response, JsonOptions);
-        await ResponseWriter.WriteLineAsync(json).ConfigureAwait(false);
+        try
+        {
+            await writer.WriteLineAsync(json).ConfigureAwait(false);
+            await writer.FlushAsync().ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            // Client closed its pipe or socket before reading the response; keep the host alive.
+        }
+        catch (SocketException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     private static double ElapsedMilliseconds(Stopwatch stopwatch)

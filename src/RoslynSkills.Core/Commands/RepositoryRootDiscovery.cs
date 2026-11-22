@@ -1,11 +1,47 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace RoslynSkills.Core.Commands;
 
 /// <summary>
-/// Shared repository-root discovery for RoslynSkills commands and CLI daemon routing.
+/// Shared repository-root discovery and per-user daemon state path helpers for RoslynSkills commands and CLI daemon routing.
 /// Handles both standard Git repositories (.git directory) and Git worktrees/submodules (.git file).
 /// </summary>
 public static class RepositoryRootDiscovery
 {
+    public static string NormalizePathRoot(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        return Path.TrimEndingDirectorySeparator(fullPath);
+    }
+
+    public static string GetWorkspaceHostStateDirectory()
+    {
+        string? root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            root = Path.GetTempPath();
+        }
+
+        return Path.Combine(root, "RoslynSkills", "workspace-hosts");
+    }
+
+    public static string ComputeWorkspaceStateHash(string repoRoot)
+    {
+        string normalized = NormalizePathRoot(repoRoot);
+        string hashInput = OperatingSystem.IsWindows()
+            ? normalized.ToLowerInvariant()
+            : normalized;
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hashInput)))
+            .ToLowerInvariant()[..16];
+    }
+
+    public static string GetWorkspaceDaemonManifestPath(string repoRoot)
+        => Path.Combine(GetWorkspaceHostStateDirectory(), $"{ComputeWorkspaceStateHash(repoRoot)}.json");
+
+    public static string GetWorkspaceAliasesPath(string repoRoot)
+        => Path.Combine(GetWorkspaceHostStateDirectory(), $"{ComputeWorkspaceStateHash(repoRoot)}.workspaces.json");
+
     public static bool IsGitRepositoryRoot(string directoryPath)
     {
         if (string.IsNullOrWhiteSpace(directoryPath))
@@ -30,7 +66,7 @@ public static class RepositoryRootDiscovery
         {
             if (IsGitRepositoryRoot(current.FullName))
             {
-                return current.FullName;
+                return NormalizePathRoot(current.FullName);
             }
 
             current = current.Parent;
@@ -63,7 +99,7 @@ public static class RepositoryRootDiscovery
 
             if (File.Exists(candidate))
             {
-                return current.FullName;
+                return NormalizePathRoot(current.FullName);
             }
 
             current = current.Parent;
@@ -76,13 +112,37 @@ public static class RepositoryRootDiscovery
     {
         if (!string.IsNullOrWhiteSpace(explicitRepoRoot))
         {
-            return Path.GetFullPath(explicitRepoRoot);
+            return NormalizePathRoot(explicitRepoRoot);
         }
 
-        string startDirectory = TryResolveStartDirectory(startPath) ?? Path.GetFullPath(Directory.GetCurrentDirectory());
-        return TryFindAncestorWithFile(startDirectory, ".roslynskills", "workspaces.json")
+        string startDirectory = TryResolveStartDirectory(startPath) ?? NormalizePathRoot(Directory.GetCurrentDirectory());
+        return TryFindAncestorWithWorkspaceAliases(startDirectory)
             ?? TryFindGitRepositoryRoot(startDirectory)
-            ?? startDirectory;
+            ?? NormalizePathRoot(startDirectory);
+    }
+
+    private static string? TryFindAncestorWithWorkspaceAliases(string startDirectory)
+    {
+        DirectoryInfo? current = new(startDirectory);
+        while (current is not null)
+        {
+            string normalized = NormalizePathRoot(current.FullName);
+            if (File.Exists(GetWorkspaceAliasesPath(normalized)))
+            {
+                return normalized;
+            }
+
+            // Never cross above an enclosing Git repository or worktree boundary: a worktree or nested repo
+            // should bind its own daemon instead of inheriting an outer repository's workspace aliases.
+            if (IsGitRepositoryRoot(normalized))
+            {
+                break;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
     }
 
     public static string? TryFindEditClaimRepositoryRoot(string? startPath)

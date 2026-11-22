@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RoslynSkills.Core.Commands;
 
 namespace RoslynSkills.Cli;
 
@@ -22,7 +23,7 @@ public sealed class WorkspaceAliasStore
 
     public WorkspaceAliasStore(string repoRoot)
     {
-        _path = System.IO.Path.Combine(System.IO.Path.GetFullPath(repoRoot), ".roslynskills", "workspaces.json");
+        _path = RepositoryRootDiscovery.GetWorkspaceAliasesPath(repoRoot);
     }
 
     public string Path => _path;
@@ -46,11 +47,22 @@ public sealed class WorkspaceAliasStore
     public void Remove(string alias)
     {
         Dictionary<string, WorkspaceAliasRecord> aliases = Load();
-        if (aliases.Remove(alias))
+        if (!aliases.Remove(alias))
         {
-            Save(aliases);
+            return;
         }
+
+        if (aliases.Count == 0)
+        {
+            TryDeleteFile(_path);
+            return;
+        }
+
+        Save(aliases);
     }
+
+    public void Clear()
+        => TryDeleteFile(_path);
 
     private Dictionary<string, WorkspaceAliasRecord> Load()
     {
@@ -83,7 +95,39 @@ public sealed class WorkspaceAliasStore
 
     private void Save(Dictionary<string, WorkspaceAliasRecord> aliases)
     {
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
-        File.WriteAllText(_path, JsonSerializer.Serialize(aliases, JsonOptions));
+        string directory = System.IO.Path.GetDirectoryName(_path)!;
+        Directory.CreateDirectory(directory);
+        string payload = JsonSerializer.Serialize(aliases, JsonOptions);
+        string tempPath = System.IO.Path.Combine(directory, $".{System.IO.Path.GetFileName(_path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, payload);
+            File.Move(tempPath, _path, overwrite: true);
+        }
+        catch (IOException)
+        {
+            File.WriteAllText(_path, payload);
+        }
+        finally
+        {
+            TryDeleteFile(tempPath);
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }

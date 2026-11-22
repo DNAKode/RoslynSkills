@@ -730,9 +730,9 @@ Workflow:
 
         WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
         request = ApplyPersistedWorkspaceAlias(verb, request!, endpoint.RepoRoot);
-        TimeSpan requestTimeout = verb is "workspace.use" or "workspace.preload"
+        TimeSpan requestTimeout = verb is "workspace.use" or "workspace.preload" or "workspace.refresh"
             ? TimeSpan.FromMinutes(5)
-            : TimeSpan.FromSeconds(2);
+            : TimeSpan.FromSeconds(30);
         WorkspaceHostResponse? response = await manager.SendRequestAsync(
             repoRoot,
             request!,
@@ -1197,7 +1197,7 @@ Workflow:
         WorkspaceHostResponse? response = await manager.SendRequestAsync(
             endpoint.RepoRoot,
             request,
-            TimeSpan.FromMinutes(2),
+            TimeSpan.FromMinutes(5),
             cancellationToken).ConfigureAwait(false);
         if (response is null)
         {

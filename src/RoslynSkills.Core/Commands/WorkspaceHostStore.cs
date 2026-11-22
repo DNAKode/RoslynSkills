@@ -49,7 +49,11 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         : StringComparer.Ordinal;
 
     private readonly Dictionary<string, HostedWorkspace> _workspaces = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _handleGates = new(StringComparer.Ordinal);
     private readonly object _gate = new();
+
+    private SemaphoreSlim GetHandleGate(string handle)
+        => _handleGates.GetOrAdd(handle, static _ => new SemaphoreSlim(1, 1));
 
     public int Count
     {
@@ -388,6 +392,33 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         CancellationToken cancellationToken,
         bool allowAddDocuments)
     {
+        SemaphoreSlim handleGate = GetHandleGate(handle);
+        await handleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ApplyIncrementalSourceChangesCoreAsync(
+                    handle,
+                    status,
+                    modifiedOrAddedPaths,
+                    removedPaths,
+                    cancellationToken,
+                    allowAddDocuments)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            handleGate.Release();
+        }
+    }
+
+    private async Task<WorkspaceRefreshResult> ApplyIncrementalSourceChangesCoreAsync(
+        string handle,
+        WorkspaceStatus status,
+        IReadOnlyList<string> modifiedOrAddedPaths,
+        IReadOnlyList<string> removedPaths,
+        CancellationToken cancellationToken,
+        bool allowAddDocuments)
+    {
         HostedWorkspace hosted;
         lock (_gate)
         {
@@ -546,6 +577,17 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 
         lock (_gate)
         {
+            if (!_workspaces.ContainsKey(handle))
+            {
+                return new WorkspaceRefreshResult(
+                    Applied: false,
+                    RefreshAction: "none",
+                    UpdatedPaths: Array.Empty<string>(),
+                    StatusBefore: status,
+                    StatusAfter: status,
+                    Error: new CommandError("workspace_not_found", $"Workspace handle '{handle}' was closed before refresh completed."));
+            }
+
             _workspaces[handle] = refreshed;
         }
 
@@ -572,10 +614,34 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         string mode,
         CancellationToken cancellationToken)
     {
-        HostedWorkspace hosted;
-        lock (_gate)
+        SemaphoreSlim handleGate = GetHandleGate(handle);
+        await handleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            if (!_workspaces.TryGetValue(handle, out HostedWorkspace? current))
+            HostedWorkspace hosted;
+            lock (_gate)
+            {
+                if (!_workspaces.TryGetValue(handle, out HostedWorkspace? current))
+                {
+                    return new WorkspaceRefreshResult(
+                        Applied: false,
+                        RefreshAction: "none",
+                        UpdatedPaths: Array.Empty<string>(),
+                        StatusBefore: statusBefore,
+                        StatusAfter: statusBefore,
+                        Error: new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found."));
+                }
+
+                hosted = current;
+            }
+
+            (StaticAnalysisWorkspace? workspace, CommandError? error) = await StaticAnalysisWorkspace.LoadAsync(
+                    hosted.Workspace.WorkspacePath,
+                    hosted.IncludeGenerated,
+                    hosted.MaxFiles,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (error is not null || workspace is null)
             {
                 return new WorkspaceRefreshResult(
                     Applied: false,
@@ -583,49 +649,46 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
                     UpdatedPaths: Array.Empty<string>(),
                     StatusBefore: statusBefore,
                     StatusAfter: statusBefore,
-                    Error: new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found."));
+                    Error: error ?? new CommandError("workspace_reload_failed", "Workspace reload failed."));
             }
 
-            hosted = current;
-        }
-
-        (StaticAnalysisWorkspace? workspace, CommandError? error) = await StaticAnalysisWorkspace.LoadAsync(
-                hosted.Workspace.WorkspacePath,
+            HostedWorkspace reloaded = CreateHostedWorkspace(
+                hosted.Handle,
+                workspace,
+                mode,
                 hosted.IncludeGenerated,
                 hosted.MaxFiles,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (error is not null || workspace is null)
-        {
+                DateTimeOffset.UtcNow);
+            lock (_gate)
+            {
+                if (!_workspaces.ContainsKey(handle))
+                {
+                    reloaded.Dispose();
+                    return new WorkspaceRefreshResult(
+                        Applied: false,
+                        RefreshAction: "none",
+                        UpdatedPaths: Array.Empty<string>(),
+                        StatusBefore: statusBefore,
+                        StatusAfter: statusBefore,
+                        Error: new CommandError("workspace_not_found", $"Workspace handle '{handle}' was closed during reload."));
+                }
+
+                _workspaces[handle] = reloaded;
+            }
+
+            hosted.Dispose();
+            WorkspaceStatus statusAfter = BuildStatus(reloaded);
             return new WorkspaceRefreshResult(
-                Applied: false,
-                RefreshAction: "none",
+                Applied: true,
+                RefreshAction: "reload",
                 UpdatedPaths: Array.Empty<string>(),
                 StatusBefore: statusBefore,
-                StatusAfter: statusBefore,
-                Error: error ?? new CommandError("workspace_reload_failed", "Workspace reload failed."));
+                StatusAfter: statusAfter);
         }
-
-        HostedWorkspace reloaded = CreateHostedWorkspace(
-            hosted.Handle,
-            workspace,
-            mode,
-            hosted.IncludeGenerated,
-            hosted.MaxFiles,
-            DateTimeOffset.UtcNow);
-        lock (_gate)
+        finally
         {
-            _workspaces[handle] = reloaded;
+            handleGate.Release();
         }
-
-        hosted.Dispose();
-        WorkspaceStatus statusAfter = BuildStatus(reloaded);
-        return new WorkspaceRefreshResult(
-            Applied: true,
-            RefreshAction: "reload",
-            UpdatedPaths: Array.Empty<string>(),
-            StatusBefore: statusBefore,
-            StatusAfter: statusAfter);
     }
 
     private static IReadOnlyDictionary<string, DateTimeOffset?> SnapshotWriteTimes(IEnumerable<string> paths)

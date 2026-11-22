@@ -11,6 +11,7 @@ internal sealed class StaticAnalysisWorkspace
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
+    private static readonly SemaphoreSlim MsBuildLoadGate = new(1, 1);
 
     public string WorkspacePath { get; }
     public string ResolvedWorkspacePath { get; }
@@ -199,88 +200,96 @@ internal sealed class StaticAnalysisWorkspace
         string rootDirectory = Path.GetDirectoryName(workspaceFilePath) ?? requestedWorkspacePath;
         List<string> diagnostics = new();
 
-        MSBuildWorkspace msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
-            diagnostics,
-            includeAllFailureMessages: true);
-
-        async Task<Solution> OpenSolutionForWorkspacePathAsync(MSBuildWorkspace workspace)
-        {
-            if (string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(extension, ".vbproj", StringComparison.OrdinalIgnoreCase))
-            {
-                Project project = await workspace.OpenProjectAsync(
-                        workspaceFilePath,
-                        cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-                return project.Solution;
-            }
-
-            if (string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase))
-            {
-                return await OpenSlnxAsSolutionAsync(workspace, workspaceFilePath, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            return await workspace.OpenSolutionAsync(workspaceFilePath, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        Solution solution;
+        await MsBuildLoadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            solution = await OpenSolutionForWorkspacePathAsync(msbuildWorkspace).ConfigureAwait(false);
-            if (WorkspaceAutoRestore.IsEnabled)
+            MSBuildWorkspace msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
+                diagnostics,
+                includeAllFailureMessages: true);
+
+            async Task<Solution> OpenSolutionForWorkspacePathAsync(MSBuildWorkspace workspace)
             {
-                IReadOnlyList<UnresolvedProjectInfo> projectsNeedingRestore = WorkspaceAutoRestore.GetProjectsNeedingRestore(solution);
-                if (projectsNeedingRestore.Count > 0)
+                if (string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(extension, ".vbproj", StringComparison.OrdinalIgnoreCase))
                 {
-                    bool restored = await WorkspaceAutoRestore
-                        .TryRestoreAsync(workspaceFilePath, diagnostics, cancellationToken, projectsNeedingRestore)
+                    Project project = await workspace.OpenProjectAsync(
+                            workspaceFilePath,
+                            cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
-                    if (restored)
+                    return project.Solution;
+                }
+
+                if (string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase))
+                {
+                    return await OpenSlnxAsSolutionAsync(workspace, workspaceFilePath, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                return await workspace.OpenSolutionAsync(workspaceFilePath, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            Solution solution;
+            try
+            {
+                solution = await OpenSolutionForWorkspacePathAsync(msbuildWorkspace).ConfigureAwait(false);
+                if (WorkspaceAutoRestore.IsEnabled)
+                {
+                    IReadOnlyList<UnresolvedProjectInfo> projectsNeedingRestore = WorkspaceAutoRestore.GetProjectsNeedingRestore(solution);
+                    if (projectsNeedingRestore.Count > 0)
                     {
-                        msbuildWorkspace.Dispose();
-                        msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
-                            diagnostics,
-                            includeAllFailureMessages: true);
-                        solution = await OpenSolutionForWorkspacePathAsync(msbuildWorkspace).ConfigureAwait(false);
+                        bool restored = await WorkspaceAutoRestore
+                            .TryRestoreAsync(workspaceFilePath, diagnostics, cancellationToken, projectsNeedingRestore)
+                            .ConfigureAwait(false);
+                        if (restored)
+                        {
+                            msbuildWorkspace.Dispose();
+                            msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
+                                diagnostics,
+                                includeAllFailureMessages: true);
+                            solution = await OpenSolutionForWorkspacePathAsync(msbuildWorkspace).ConfigureAwait(false);
+                        }
                     }
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            msbuildWorkspace.Dispose();
-            return (null, new CommandError("workspace_load_failed", $"Failed to load workspace '{workspaceFilePath}': {ex.Message}"));
-        }
-
-        try
-        {
-            solution = SolutionEditSupport.EnsureDocumentationCommentParsing(solution);
-            Project[] projects = solution.Projects
-                .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (projects.Length == 0)
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                return (null, new CommandError("workspace_load_failed", $"Workspace '{workspaceFilePath}' did not load any projects."));
+                msbuildWorkspace.Dispose();
+                return (null, new CommandError("workspace_load_failed", $"Failed to load workspace '{workspaceFilePath}': {ex.Message}"));
             }
 
-            return await FromSolutionAsync(
-                    solution,
-                    requestedWorkspacePath,
-                    workspaceFilePath,
-                    rootDirectory,
-                    analysisMode,
-                    workspaceKind,
-                    diagnostics,
-                    includeGenerated,
-                    maxFiles,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                solution = SolutionEditSupport.EnsureDocumentationCommentParsing(solution);
+                Project[] projects = solution.Projects
+                    .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (projects.Length == 0)
+                {
+                    return (null, new CommandError("workspace_load_failed", $"Workspace '{workspaceFilePath}' did not load any projects."));
+                }
+
+                return await FromSolutionAsync(
+                        solution,
+                        requestedWorkspacePath,
+                        workspaceFilePath,
+                        rootDirectory,
+                        analysisMode,
+                        workspaceKind,
+                        diagnostics,
+                        includeGenerated,
+                        maxFiles,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                msbuildWorkspace.Dispose();
+            }
         }
         finally
         {
-            msbuildWorkspace.Dispose();
+            MsBuildLoadGate.Release();
         }
     }
 
@@ -319,105 +328,113 @@ internal sealed class StaticAnalysisWorkspace
                 .ConfigureAwait(false);
         }
 
-        List<string> diagnostics = new();
-        MSBuildWorkspace msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
-            diagnostics,
-            includeAllFailureMessages: true);
-
-        async Task<Solution> OpenAllProjectsAsync(MSBuildWorkspace workspace)
+        await MsBuildLoadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            Solution? last = null;
-            HashSet<string> loaded = new(PathComparer);
-            foreach (string projectPath in orderedProjects)
+            List<string> diagnostics = new();
+            MSBuildWorkspace msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
+                diagnostics,
+                includeAllFailureMessages: true);
+
+            async Task<Solution> OpenAllProjectsAsync(MSBuildWorkspace workspace)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (loaded.Contains(projectPath))
+                Solution? last = null;
+                HashSet<string> loaded = new(PathComparer);
+                foreach (string projectPath in orderedProjects)
                 {
-                    continue;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (loaded.Contains(projectPath))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        Project project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken)
+                            .ConfigureAwait(false);
+                        last = project.Solution;
+                        foreach (Project p in last.Projects)
+                        {
+                            if (!string.IsNullOrWhiteSpace(p.FilePath))
+                            {
+                                loaded.Add(Path.GetFullPath(p.FilePath));
+                            }
+                        }
+                    }
+                    catch (Exception ex) when (ex.Message.Contains("already part of the workspace", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Referenced projects can be loaded transitively before their explicit entry is processed.
+                    }
                 }
 
-                try
+                return last ?? workspace.CurrentSolution;
+            }
+
+            Solution solution;
+            try
+            {
+                solution = await OpenAllProjectsAsync(msbuildWorkspace).ConfigureAwait(false);
+                if (WorkspaceAutoRestore.IsEnabled)
                 {
-                    Project project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
-                    last = project.Solution;
-                    foreach (Project p in last.Projects)
+                    IReadOnlyList<UnresolvedProjectInfo> projectsNeedingRestore = WorkspaceAutoRestore.GetProjectsNeedingRestore(solution);
+                    if (projectsNeedingRestore.Count > 0)
                     {
-                        if (!string.IsNullOrWhiteSpace(p.FilePath))
+                        bool restoredAny = false;
+                        foreach (UnresolvedProjectInfo unresolved in projectsNeedingRestore)
                         {
-                            loaded.Add(Path.GetFullPath(p.FilePath));
+                            if (!string.IsNullOrWhiteSpace(unresolved.project_path) &&
+                                await WorkspaceAutoRestore.TryRestoreAsync(unresolved.project_path, diagnostics, cancellationToken, new[] { unresolved }).ConfigureAwait(false))
+                            {
+                                restoredAny = true;
+                            }
+                        }
+
+                        if (restoredAny)
+                        {
+                            msbuildWorkspace.Dispose();
+                            msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
+                                diagnostics,
+                                includeAllFailureMessages: true);
+                            solution = await OpenAllProjectsAsync(msbuildWorkspace).ConfigureAwait(false);
                         }
                     }
                 }
-                catch (Exception ex) when (ex.Message.Contains("already part of the workspace", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Referenced projects can be loaded transitively before their explicit entry is processed.
-                }
             }
-
-            return last ?? workspace.CurrentSolution;
-        }
-
-        Solution solution;
-        try
-        {
-            solution = await OpenAllProjectsAsync(msbuildWorkspace).ConfigureAwait(false);
-            if (WorkspaceAutoRestore.IsEnabled)
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                IReadOnlyList<UnresolvedProjectInfo> projectsNeedingRestore = WorkspaceAutoRestore.GetProjectsNeedingRestore(solution);
-                if (projectsNeedingRestore.Count > 0)
-                {
-                    bool restoredAny = false;
-                    foreach (UnresolvedProjectInfo unresolved in projectsNeedingRestore)
-                    {
-                        if (!string.IsNullOrWhiteSpace(unresolved.project_path) &&
-                            await WorkspaceAutoRestore.TryRestoreAsync(unresolved.project_path, diagnostics, cancellationToken, new[] { unresolved }).ConfigureAwait(false))
-                        {
-                            restoredAny = true;
-                        }
-                    }
-
-                    if (restoredAny)
-                    {
-                        msbuildWorkspace.Dispose();
-                        msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
-                            diagnostics,
-                            includeAllFailureMessages: true);
-                        solution = await OpenAllProjectsAsync(msbuildWorkspace).ConfigureAwait(false);
-                    }
-                }
+                msbuildWorkspace.Dispose();
+                return (null, new CommandError("workspace_load_failed", $"Failed to load projects under '{normalizedRoot}': {ex.Message}"));
             }
-        }
-        catch (Exception ex)
-        {
-            msbuildWorkspace.Dispose();
-            return (null, new CommandError("workspace_load_failed", $"Failed to load projects under '{normalizedRoot}': {ex.Message}"));
-        }
 
-        try
-        {
-            solution = SolutionEditSupport.EnsureDocumentationCommentParsing(solution);
-            if (!solution.Projects.Any())
+            try
             {
-                return (null, new CommandError("workspace_load_failed", $"Directory '{normalizedRoot}' did not load any MSBuild projects."));
-            }
+                solution = SolutionEditSupport.EnsureDocumentationCommentParsing(solution);
+                if (!solution.Projects.Any())
+                {
+                    return (null, new CommandError("workspace_load_failed", $"Directory '{normalizedRoot}' did not load any MSBuild projects."));
+                }
 
-            return await FromSolutionAsync(
-                    solution,
-                    normalizedRoot,
-                    normalizedRoot,
-                    normalizedRoot,
-                    analysisMode: "msbuild_directory",
-                    workspaceKind: "directory",
-                    diagnostics,
-                    includeGenerated,
-                    maxFiles,
-                    cancellationToken)
-                .ConfigureAwait(false);
+                return await FromSolutionAsync(
+                        solution,
+                        normalizedRoot,
+                        normalizedRoot,
+                        normalizedRoot,
+                        analysisMode: "msbuild_directory",
+                        workspaceKind: "directory",
+                        diagnostics,
+                        includeGenerated,
+                        maxFiles,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                msbuildWorkspace.Dispose();
+            }
         }
         finally
         {
-            msbuildWorkspace.Dispose();
+            MsBuildLoadGate.Release();
         }
     }
 

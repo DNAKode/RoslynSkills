@@ -1033,7 +1033,7 @@ public sealed class VbCommandTests
 
             string clientStateDirectory = Path.Combine(root, ".roslynskills");
             Directory.CreateDirectory(clientStateDirectory);
-            await File.WriteAllTextAsync(Path.Combine(clientStateDirectory, "workspaces.json"), "{}");
+            await File.WriteAllTextAsync(Path.Combine(clientStateDirectory, "edit-claims.json"), "{}");
             await Task.Delay(250);
 
             WorkspaceRefreshCommand refresh = new();

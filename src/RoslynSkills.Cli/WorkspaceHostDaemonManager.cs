@@ -29,10 +29,10 @@ public sealed class WorkspaceHostDaemonManager
     public WorkspaceHostDaemonEndpoint GetDefaultEndpoint(string? repoRoot = null)
     {
         string resolvedRepoRoot = RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(repoRoot);
-        string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(resolvedRepoRoot)))
-            .ToLowerInvariant()[..16];
-        string stateDirectory = GetStateDirectory();
+        string hash = RepositoryRootDiscovery.ComputeWorkspaceStateHash(resolvedRepoRoot);
+        string stateDirectory = RepositoryRootDiscovery.GetWorkspaceHostStateDirectory();
         Directory.CreateDirectory(stateDirectory);
+        string manifestPath = RepositoryRootDiscovery.GetWorkspaceDaemonManifestPath(resolvedRepoRoot);
 
         string transport = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
             ? "named-pipe"
@@ -43,7 +43,7 @@ public sealed class WorkspaceHostDaemonManager
                 Transport: transport,
                 PipeName: $"roslynskills-{hash}",
                 SocketPath: null,
-                ManifestPath: Path.Combine(stateDirectory, $"{hash}.json"),
+                ManifestPath: manifestPath,
                 RepoRoot: resolvedRepoRoot);
         }
 
@@ -58,7 +58,7 @@ public sealed class WorkspaceHostDaemonManager
             Transport: transport,
             PipeName: null,
             SocketPath: socketPath,
-            ManifestPath: Path.Combine(stateDirectory, $"{hash}.json"),
+            ManifestPath: manifestPath,
             RepoRoot: resolvedRepoRoot);
     }
 
@@ -102,6 +102,24 @@ public sealed class WorkspaceHostDaemonManager
                 });
         }
 
+        WorkspaceHostDaemonManifest? staleManifest = TryReadManifest(endpoint.ManifestPath);
+        if (staleManifest is not null)
+        {
+            ManagedProcessStopResult staleStop = await StopManagedProcessAsync(
+                staleManifest,
+                graceTimeout: TimeSpan.FromMilliseconds(250),
+                cancellationToken).ConfigureAwait(false);
+            if (staleStop.StillAlive)
+            {
+                return ErrorEnvelope(
+                    "daemon.start",
+                    WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                    $"Unresponsive workspace host process {staleManifest.ProcessId} on endpoint '{FormatEndpoint(endpoint)}' could not be terminated.");
+            }
+
+            TryDeleteManifest(endpoint.ManifestPath);
+        }
+
         if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
         {
             // No live daemon answered on this socket path; remove any stale socket left by a killed/crashed daemon.
@@ -127,10 +145,11 @@ public sealed class WorkspaceHostDaemonManager
             DateTimeOffset.UtcNow);
         WriteManifest(endpoint.ManifestPath, manifest);
 
-        WorkspaceHostResponse? status = await WaitForStatusAsync(endpoint, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+        WorkspaceHostResponse? status = await WaitForStatusAsync(endpoint, process, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
         if (status?.Ok != true)
         {
             TryKillProcessTree(process);
+            await WaitForProcessExitAsync(process, TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
             TryDeleteManifest(endpoint.ManifestPath);
             if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
             {
@@ -293,16 +312,36 @@ public sealed class WorkspaceHostDaemonManager
         CancellationToken cancellationToken)
     {
         WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        WorkspaceHostDaemonManifest? manifest = TryReadManifest(endpoint.ManifestPath);
         WorkspaceHostResponse? response = await SendAsync(
             endpoint,
             new WorkspaceHostRequest(
                 Id: Guid.NewGuid().ToString("N"),
                 Method: WorkspaceHostProtocol.Method.Shutdown),
-            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(3),
             cancellationToken).ConfigureAwait(false);
 
+        bool gracefulAnswered = response?.Ok == true;
+        ManagedProcessStopResult processStop = await StopManagedProcessAsync(
+            manifest,
+            graceTimeout: gracefulAnswered ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(1),
+            cancellationToken).ConfigureAwait(false);
+
+        if (processStop.StillAlive)
+        {
+            return ErrorEnvelope(
+                "daemon.stop",
+                WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                $"Workspace host process {manifest!.ProcessId} on endpoint '{FormatEndpoint(endpoint)}' did not exit after shutdown and forced termination.");
+        }
+
         TryDeleteManifest(endpoint.ManifestPath);
-        if (response?.Ok != true)
+        if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
+        {
+            TryDeleteFileOrSocket(endpoint.SocketPath);
+        }
+
+        if (!gracefulAnswered && !processStop.StoppedProcess)
         {
             return ErrorEnvelope(
                 "daemon.stop",
@@ -315,9 +354,11 @@ public sealed class WorkspaceHostDaemonManager
             new
             {
                 stopped = true,
+                forced_kill = processStop.ForcedKill,
+                daemon_pid = manifest?.ProcessId,
                 daemon_endpoint = FormatEndpoint(endpoint),
                 manifest_path = endpoint.ManifestPath,
-                response = response.Data,
+                response = response?.Data,
             });
     }
 
@@ -344,22 +385,189 @@ public sealed class WorkspaceHostDaemonManager
 
     private static async Task<WorkspaceHostResponse?> WaitForStatusAsync(
         WorkspaceHostDaemonEndpoint endpoint,
+        Process process,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
         Stopwatch stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
         {
+            if (IsProcessExited(process))
+            {
+                return null;
+            }
+
             WorkspaceHostResponse? status = await TryGetStatusAsync(endpoint, cancellationToken).ConfigureAwait(false);
             if (status?.Ok == true)
             {
                 return status;
             }
 
+            if (IsProcessExited(process))
+            {
+                return null;
+            }
+
             await Task.Delay(100, cancellationToken).ConfigureAwait(false);
         }
 
         return null;
+    }
+
+    private static async Task<ManagedProcessStopResult> StopManagedProcessAsync(
+        WorkspaceHostDaemonManifest? manifest,
+        TimeSpan graceTimeout,
+        CancellationToken cancellationToken)
+    {
+        if (manifest is null)
+        {
+            return new ManagedProcessStopResult(StoppedProcess: false, ForcedKill: false, StillAlive: false);
+        }
+
+        using Process? process = TryGetManagedDaemonProcess(manifest);
+        if (process is null)
+        {
+            return new ManagedProcessStopResult(StoppedProcess: false, ForcedKill: false, StillAlive: false);
+        }
+
+        if (await WaitForProcessExitAsync(process, graceTimeout, cancellationToken).ConfigureAwait(false))
+        {
+            return new ManagedProcessStopResult(StoppedProcess: true, ForcedKill: false, StillAlive: false);
+        }
+
+        TryKillProcessTree(process);
+        bool exitedAfterKill = await WaitForProcessExitAsync(process, TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+        return new ManagedProcessStopResult(
+            StoppedProcess: exitedAfterKill,
+            ForcedKill: true,
+            StillAlive: !exitedAfterKill);
+    }
+
+    private static Process? TryGetManagedDaemonProcess(WorkspaceHostDaemonManifest manifest)
+    {
+        if (manifest.ProcessId <= 0 || manifest.ProcessId == Environment.ProcessId)
+        {
+            return null;
+        }
+
+        Process process;
+        try
+        {
+            process = Process.GetProcessById(manifest.ProcessId);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (process.HasExited)
+            {
+                process.Dispose();
+                return null;
+            }
+
+            if (!IsExpectedDaemonProcessName(process.ProcessName))
+            {
+                process.Dispose();
+                return null;
+            }
+
+            DateTime startTimeUtc = process.StartTime.ToUniversalTime();
+            if (Math.Abs((startTimeUtc - manifest.StartedAtUtc.UtcDateTime).TotalSeconds) > 30)
+            {
+                process.Dispose();
+                return null;
+            }
+
+            return process;
+        }
+        catch (InvalidOperationException)
+        {
+            process.Dispose();
+            return null;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            process.Dispose();
+            return null;
+        }
+    }
+
+    private static bool IsExpectedDaemonProcessName(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return false;
+        }
+
+        if (string.Equals(processName, "dotnet", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(processName, "RoslynSkills.WorkspaceHost", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return !RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+               (string.Equals(processName, "sh", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(processName, "dash", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(processName, "bash", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsProcessExited(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> WaitForProcessExitAsync(
+        Process process,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        if (IsProcessExited(process))
+        {
+            return true;
+        }
+
+        if (timeout <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        using CancellationTokenSource waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        waitCts.CancelAfter(timeout);
+        try
+        {
+            await process.WaitForExitAsync(waitCts.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return IsProcessExited(process);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return IsProcessExited(process);
+        }
     }
 
     private static Task<WorkspaceHostResponse?> TryGetStatusAsync(
@@ -482,21 +690,29 @@ public sealed class WorkspaceHostDaemonManager
         return attributes.OfType<DebuggableAttribute>().Any(a => a.IsJITTrackingEnabled);
     }
 
-    private static string GetStateDirectory()
-    {
-        string? root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(root))
-        {
-            root = Path.GetTempPath();
-        }
-
-        return Path.Combine(root, "RoslynSkills", "workspace-hosts");
-    }
-
     private static void WriteManifest(string path, WorkspaceHostDaemonManifest manifest)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(manifest, JsonOptions));
+        string directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        string tempPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(manifest, JsonOptions));
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch
+            {
+            }
+        }
     }
 
     private static WorkspaceHostRequest AddAuthToken(WorkspaceHostDaemonEndpoint endpoint, WorkspaceHostRequest request)
@@ -615,4 +831,9 @@ public sealed class WorkspaceHostDaemonManager
         string? AuthToken,
         int ProcessId,
         DateTimeOffset StartedAtUtc);
+
+    private readonly record struct ManagedProcessStopResult(
+        bool StoppedProcess,
+        bool ForcedKill,
+        bool StillAlive);
 }

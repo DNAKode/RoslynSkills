@@ -590,10 +590,10 @@ public sealed class CliApplicationTests
     {
         string repoRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-alias-store-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repoRoot);
+        WorkspaceAliasStore store = new(repoRoot);
 
         try
         {
-            WorkspaceAliasStore store = new(repoRoot);
             WorkspaceAliasRecord record = new(
                 WorkspacePath: Path.Combine(repoRoot, "Demo.slnx"),
                 WorkspaceHandle: "ws_123",
@@ -604,7 +604,13 @@ public sealed class CliApplicationTests
 
             store.Upsert("default", record);
 
-            Assert.True(File.Exists(Path.Combine(repoRoot, ".roslynskills", "workspaces.json")));
+            Assert.StartsWith(
+                RoslynSkills.Core.Commands.RepositoryRootDiscovery.GetWorkspaceHostStateDirectory(),
+                store.Path,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(store.Path));
+            Assert.False(Directory.Exists(Path.Combine(repoRoot, ".roslynskills")));
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".roslynskills", "workspaces.json")));
             Assert.True(store.TryGet("DEFAULT", out WorkspaceAliasRecord? loaded));
             Assert.NotNull(loaded);
             Assert.Equal("ws_123", loaded.WorkspaceHandle);
@@ -613,9 +619,11 @@ public sealed class CliApplicationTests
             store.Remove("default");
 
             Assert.False(store.TryGet("default", out _));
+            Assert.False(File.Exists(store.Path));
         }
         finally
         {
+            store.Clear();
             Directory.Delete(repoRoot, recursive: true);
         }
     }

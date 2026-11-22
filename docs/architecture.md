@@ -69,7 +69,8 @@ In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monor
 - **Ad-hoc**: Loose file, no project context (`workspace_context.mode=ad_hoc`).
 - **Project**: Single `.csproj`/`.vbproj` binding (`mode=workspace`).
 - **Solution**: `.sln`/`.slnx` binding, preferred for repo-wide context. Surfaces `workspace_kind`, `project_count`, `document_count`.
-- **Hot daemon**: Preloaded solution in a persistent process (`workspace_cache_mode=process_hot`), aliased as `default` via `workspace.use`.
+- **Hot daemon**: Preloaded solution in a persistent process (`workspace_cache_mode=process_hot`), aliased as `default` via `workspace.use`. Both daemon manifests (`<hash>.json`) and workspace aliases (`<hash>.workspaces.json`) live under the per-user state folder (`%LOCALAPPDATA%\RoslynSkills\workspace-hosts` on Windows, `$XDG_DATA_HOME/RoslynSkills/workspace-hosts` or `~/.local/share/RoslynSkills/workspace-hosts` on Linux/macOS), leaving no daemon files inside the analysed repository.
+- **Concurrent & recoverable host**: `RoslynSkills.WorkspaceHost` dispatches pipe/Unix-socket connections concurrently (serializing MSBuild loads and per-handle mutations internally) so `daemon.status` and `shutdown` stay responsive during full solution reloads, ignores broken-pipe client disconnects, and `daemon.stop`/`daemon.restart` verify and force-kill an unresponsive host process tree before removing its manifest.
 
 Key rules:
 - **Restore first in a fresh worktree**: Run `dotnet restore` before loading a solution. When `ROSLYNSKILLS_AUTO_RESTORE` is enabled (the default), workspace load detects projects with zero metadata references or missing `project.assets.json` for `PackageReference`/`PackageDownload` dependencies and runs `dotnet restore` before reloading.

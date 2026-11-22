@@ -211,7 +211,8 @@ public sealed class GitWorktreeTests
                     arguments: new[] { "workspace.use", "WorktreeDemo.slnx", "--require-solution", "true" },
                     requireDaemon: false);
                 Assert.True(useExit == 0, $"workspace.use failed.\nSTDOUT:\n{useOut}\nSTDERR:\n{useErr}");
-                Assert.True(File.Exists(Path.Combine(worktreeRoot, ".roslynskills", "workspaces.json")));
+                Assert.False(File.Exists(Path.Combine(worktreeRoot, ".roslynskills", "workspaces.json")));
+                Assert.True(File.Exists(new WorkspaceAliasStore(worktreeRoot).Path));
 
                 // Run nav.find_symbol with ROSCLI_DAEMON=required and NO --workspace-path from worktree root.
                 (int navExit, string navOut, string navErr) = RunCliProcess(
@@ -295,6 +296,7 @@ public sealed class GitWorktreeTests
                 finally
                 {
                     TryKillProcessById(daemonPid);
+                    try { new WorkspaceAliasStore(worktreeRoot).Clear(); } catch { }
                 }
             }
         }

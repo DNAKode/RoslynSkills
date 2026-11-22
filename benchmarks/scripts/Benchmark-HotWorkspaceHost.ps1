@@ -208,14 +208,6 @@ try {
     try {
         [void](Invoke-RoscliCall -Arguments @("workspace.close", $Alias, "--repo-root", $repoRoot))
         [void](Invoke-RoscliCall -Arguments @("daemon.stop", "--repo-root", $repoRoot))
-        $aliasFile = Join-Path $repoRoot ".roslynskills/workspaces.json"
-        if ((Test-Path $aliasFile) -and ((Get-Content -Path $aliasFile -Raw).Trim() -eq "{}")) {
-            Remove-Item -LiteralPath $aliasFile -Force
-            $aliasDirectory = Split-Path -Parent $aliasFile
-            if ((Test-Path $aliasDirectory) -and -not (Get-ChildItem -LiteralPath $aliasDirectory -Force)) {
-                Remove-Item -LiteralPath $aliasDirectory -Force
-            }
-        }
     } catch {
     }
 }
