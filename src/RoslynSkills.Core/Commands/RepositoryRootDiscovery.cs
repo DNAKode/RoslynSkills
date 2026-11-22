@@ -39,6 +39,9 @@ public static class RepositoryRootDiscovery
     public static string GetWorkspaceDaemonManifestPath(string repoRoot)
         => Path.Combine(GetWorkspaceHostStateDirectory(), $"{ComputeWorkspaceStateHash(repoRoot)}.json");
 
+    public static string GetWorkspaceDaemonLogPath(string repoRoot)
+        => Path.Combine(GetWorkspaceHostStateDirectory(), $"{ComputeWorkspaceStateHash(repoRoot)}.log");
+
     public static string GetWorkspaceAliasesPath(string repoRoot)
         => Path.Combine(GetWorkspaceHostStateDirectory(), $"{ComputeWorkspaceStateHash(repoRoot)}.workspaces.json");
 

@@ -738,19 +738,24 @@ Workflow:
             ? TimeSpan.FromMinutes(5)
             : TimeSpan.FromSeconds(30);
         Stopwatch roundtripTimer = Stopwatch.StartNew();
-        WorkspaceHostResponse? response = await manager.SendRequestAsync(
+        WorkspaceHostSendResult sendResult = await manager.SendRequestWithDiagnosticsAsync(
             repoRoot,
             request!,
             requestTimeout,
             cancellationToken).ConfigureAwait(false);
         roundtripTimer.Stop();
+        WorkspaceHostResponse? response = sendResult.Response;
         if (response is null)
         {
             totalTimer.Stop();
+            WorkspaceHostFailure? failure = sendResult.Failure;
+            string failureMessage = failure?.Message
+                ?? "Workspace daemon is unavailable. Run 'roscli daemon.start' or use workspace.use/preload to start it.";
             await WriteEnvelopeAsync(stdout, ErrorEnvelope(
                 commandId: verb,
                 code: WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
-                message: "Workspace daemon is unavailable. Run 'roscli daemon.start' or use workspace.use/preload to start it.") with
+                message: failureMessage,
+                details: failure?.ToDetails()) with
             {
                 Telemetry = BuildCliTelemetry(
                     validateMs: 0,
@@ -1121,10 +1126,60 @@ Workflow:
             return 1;
         }
 
+        string routingMode = GetDaemonRoutingMode();
+        bool daemonEnabled = !noDaemon && !string.Equals(routingMode, "off", StringComparison.OrdinalIgnoreCase);
+        bool requireHotWorkspace = daemonEnabled &&
+                                   (string.Equals(routingMode, "required", StringComparison.OrdinalIgnoreCase) ||
+                                    IsPublishedModeEnabled("ROSCLI_REQUIRE_HOT_WORKSPACE"));
+
+        PreResolvedHotWorkspace? preResolved = null;
+        JsonElement validationInput = input;
+        if (daemonEnabled && command.Descriptor.RunsOnHotWorkspace)
+        {
+            WorkspaceHostDaemonManager manager = new();
+            string repoRoot = InferToolCallDaemonRepoRoot(input);
+            WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
+            bool resolved = TryResolveHotWorkspaceInput(
+                input,
+                endpoint.RepoRoot,
+                requireHotWorkspace,
+                out JsonElement routedInput,
+                out bool resolvedHotWorkspace,
+                out string? routedAlias,
+                out string? routedHandle,
+                out CommandEnvelope? aliasError);
+            preResolved = new PreResolvedHotWorkspace(
+                Manager: manager,
+                Endpoint: endpoint,
+                Resolved: resolved,
+                RoutedInput: routedInput,
+                ResolvedHotWorkspace: resolvedHotWorkspace,
+                RoutedAlias: routedAlias,
+                RoutedHandle: routedHandle,
+                AliasError: aliasError);
+            if (resolved)
+            {
+                validationInput = routedInput;
+            }
+        }
+        else if (commandId is "diag.get_solution_snapshot" or "ctx.search_text")
+        {
+            input = TryApplyDefaultWorkspaceScopeFallback(commandId, input);
+            validationInput = input;
+        }
+
         Stopwatch validateTimer = Stopwatch.StartNew();
-        IReadOnlyList<CommandError> validationErrors = command.Validate(input);
+        IReadOnlyList<CommandError> validationErrors = command.Validate(validationInput);
         validateTimer.Stop();
-        if (validationErrors.Count > 0)
+        bool deferMissingWorkspaceToRequiredDaemon =
+            validationErrors.Count > 0 &&
+            requireHotWorkspace &&
+            preResolved is { Resolved: false } &&
+            validationErrors.All(e =>
+                string.Equals(e.Code, "invalid_input", StringComparison.OrdinalIgnoreCase) &&
+                (e.Message.Contains("workspace_path", StringComparison.OrdinalIgnoreCase) ||
+                 e.Message.Contains("workspace_handle", StringComparison.OrdinalIgnoreCase)));
+        if (validationErrors.Count > 0 && !deferMissingWorkspaceToRequiredDaemon)
         {
             totalTimer.Stop();
             await WriteEnvelopeAsync(
@@ -1153,6 +1208,7 @@ Workflow:
             command,
             commandId,
             input,
+            preResolved,
             stdout,
             cancellationToken,
             noDaemon,
@@ -1190,10 +1246,92 @@ Workflow:
         return result.Ok ? 0 : 1;
     }
 
+    private sealed record PreResolvedHotWorkspace(
+        WorkspaceHostDaemonManager Manager,
+        WorkspaceHostDaemonEndpoint Endpoint,
+        bool Resolved,
+        JsonElement RoutedInput,
+        bool ResolvedHotWorkspace,
+        string? RoutedAlias,
+        string? RoutedHandle,
+        CommandEnvelope? AliasError);
+
+    private static JsonElement TryApplyDefaultWorkspaceScopeFallback(string commandId, JsonElement input)
+    {
+        if (input.ValueKind != JsonValueKind.Object)
+        {
+            return input;
+        }
+
+        bool hasScope =
+            HasNonEmptyProperty(input, "directory_path") ||
+            HasNonEmptyProperty(input, "workspace_path") ||
+            HasNonEmptyProperty(input, "file_path") ||
+            HasNonEmptyArrayProperty(input, "file_paths") ||
+            HasNonEmptyArrayProperty(input, "roots") ||
+            (input.TryGetProperty("file_overrides", out JsonElement overrides) &&
+             overrides.ValueKind == JsonValueKind.Object &&
+             overrides.EnumerateObject().Any());
+        if (hasScope)
+        {
+            return input;
+        }
+
+        string alias = Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS") ?? "default";
+        string repoRoot = RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: null);
+        WorkspaceAliasStore aliasStore = new(repoRoot);
+        if (!aliasStore.TryGet(alias, out WorkspaceAliasRecord? record) ||
+            record is null ||
+            string.IsNullOrWhiteSpace(record.WorkspacePath))
+        {
+            return input;
+        }
+
+        string workspacePath = record.WorkspacePath;
+        if (!File.Exists(workspacePath) && !Directory.Exists(workspacePath))
+        {
+            return input;
+        }
+
+        Dictionary<string, object?> augmented = new(StringComparer.Ordinal);
+        foreach (JsonProperty property in input.EnumerateObject())
+        {
+            augmented[property.Name] = property.Value.Clone();
+        }
+
+        if (string.Equals(commandId, "ctx.search_text", StringComparison.Ordinal))
+        {
+            augmented["workspace_path"] = workspacePath;
+        }
+        else if (string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.Ordinal))
+        {
+            string? directory = Directory.Exists(workspacePath)
+                ? workspacePath
+                : Path.GetDirectoryName(workspacePath);
+            if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+            {
+                augmented["directory_path"] = directory;
+            }
+        }
+
+        return JsonSerializer.SerializeToElement(augmented);
+    }
+
+    private static bool HasNonEmptyProperty(JsonElement obj, string name)
+        => obj.TryGetProperty(name, out JsonElement val) &&
+           val.ValueKind == JsonValueKind.String &&
+           !string.IsNullOrWhiteSpace(val.GetString());
+
+    private static bool HasNonEmptyArrayProperty(JsonElement obj, string name)
+        => obj.TryGetProperty(name, out JsonElement val) &&
+           val.ValueKind == JsonValueKind.Array &&
+           val.GetArrayLength() > 0;
+
     private async Task<int?> TryRunDaemonCapableCommandAsync(
         IAgentCommand command,
         string commandId,
         JsonElement input,
+        PreResolvedHotWorkspace? preResolved,
         TextWriter stdout,
         CancellationToken cancellationToken,
         bool noDaemon,
@@ -1245,18 +1383,42 @@ Workflow:
             return null;
         }
 
-        WorkspaceHostDaemonManager manager = new();
-        string? repoRoot = InferToolCallDaemonRepoRoot(input);
-        WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
-        if (!TryResolveHotWorkspaceInput(
+        WorkspaceHostDaemonManager manager;
+        WorkspaceHostDaemonEndpoint endpoint;
+        bool resolved;
+        JsonElement routedInput;
+        bool resolvedHotWorkspace;
+        string? routedAlias;
+        string? routedHandle;
+        CommandEnvelope? aliasError;
+        if (preResolved is not null)
+        {
+            manager = preResolved.Manager;
+            endpoint = preResolved.Endpoint;
+            resolved = preResolved.Resolved;
+            routedInput = preResolved.RoutedInput;
+            resolvedHotWorkspace = preResolved.ResolvedHotWorkspace;
+            routedAlias = preResolved.RoutedAlias;
+            routedHandle = preResolved.RoutedHandle;
+            aliasError = preResolved.AliasError;
+        }
+        else
+        {
+            manager = new WorkspaceHostDaemonManager();
+            string repoRoot = InferToolCallDaemonRepoRoot(input);
+            endpoint = manager.GetDefaultEndpoint(repoRoot);
+            resolved = TryResolveHotWorkspaceInput(
                 input,
                 endpoint.RepoRoot,
                 requireHotWorkspace,
-                out JsonElement routedInput,
-                out bool resolvedHotWorkspace,
-                out string? routedAlias,
-                out string? routedHandle,
-                out CommandEnvelope? aliasError))
+                out routedInput,
+                out resolvedHotWorkspace,
+                out routedAlias,
+                out routedHandle,
+                out aliasError);
+        }
+
+        if (!resolved)
         {
             if (requireHotWorkspace)
             {
@@ -1290,12 +1452,13 @@ Workflow:
             CommandId: commandId,
             Input: routedInput);
         Stopwatch roundtripTimer = Stopwatch.StartNew();
-        WorkspaceHostResponse? response = await manager.SendRequestAsync(
+        WorkspaceHostSendResult sendResult = await manager.SendRequestWithDiagnosticsAsync(
             endpoint.RepoRoot,
             request,
             TimeSpan.FromMinutes(5),
             cancellationToken).ConfigureAwait(false);
         roundtripTimer.Stop();
+        WorkspaceHostResponse? response = sendResult.Response;
         if (response is null)
         {
             if (!requireHotWorkspace && !resolvedHotWorkspace)
@@ -1304,10 +1467,14 @@ Workflow:
             }
 
             totalTimer.Stop();
+            WorkspaceHostFailure? failure = sendResult.Failure;
+            string failureMessage = failure?.Message
+                ?? "Workspace daemon is unavailable for a required hot-workspace command. Run 'roscli workspace.use <solution>' first.";
             await WriteEnvelopeAsync(stdout, ErrorEnvelope(
                 commandId,
                 WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
-                "Workspace daemon is unavailable for a required hot-workspace command. Run 'roscli workspace.use <solution>' first.") with
+                failureMessage,
+                failure?.ToDetails()) with
             {
                 Telemetry = BuildCliTelemetry(
                     validateMs: (int)validateTimer.ElapsedMilliseconds,
@@ -2264,10 +2431,11 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, $"{commandId} [directory-path] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, $"{commandId} [directory-path] [--compact|--raw|--guided] [--option value ...]"));
                     return false;
                 }
 
+                ApplySnapshotModeShorthandFlags(options, input);
                 if (positionalArgs.Length == 1)
                 {
                     input["directory_path"] = NormalizeCliPathValue(positionalArgs[0]);
@@ -2280,10 +2448,11 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, $"{commandId} [directory-or-workspace-path] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, $"{commandId} [directory-or-workspace-path] [--compact|--raw|--guided] [--option value ...]"));
                     return false;
                 }
 
+                ApplySnapshotModeShorthandFlags(options, input);
                 if (positionalArgs.Length == 1)
                 {
                     string normalizedTarget = NormalizeCliPathValue(positionalArgs[0]);
@@ -2309,25 +2478,26 @@ Workflow:
                     break;
                 }
 
-                if (positionalArgs.Length < 3 ||
-                    positionalArgs.Length > 4 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int line) ||
-                    !int.TryParse(positionalArgs[2], out int column))
+                string[] memberArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (memberArgs.Length < 3 ||
+                    memberArgs.Length > 4 ||
+                    string.IsNullOrWhiteSpace(memberArgs[0]) ||
+                    !int.TryParse(memberArgs[1], out int line) ||
+                    !int.TryParse(memberArgs[2], out int column))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...] OR ctx.member_source <file-path> --member-name <name> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "ctx.member_source <file-path> <line> <column> [member|body] [--option value ...] OR ctx.member_source <file-path>:<line>:<column> [member|body] [--option value ...] OR ctx.member_source <file-path> --member-name <name> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["file_path"] = NormalizeCliPathValue(memberArgs[0]);
                 input["line"] = line;
                 input["column"] = column;
-                if (positionalArgs.Length == 4)
+                if (memberArgs.Length == 4)
                 {
-                    input["mode"] = positionalArgs[3];
+                    input["mode"] = memberArgs[3];
                 }
                 break;
 
@@ -2361,170 +2531,192 @@ Workflow:
             case "nav.find_implementations":
             case "nav.find_overrides":
             case "nav.find_invocations":
-                if (positionalArgs.Length != 3 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int invocationLine) ||
-                    !int.TryParse(positionalArgs[2], out int invocationColumn))
+            case "nav.call_hierarchy":
+                if (string.Equals(commandId, "nav.find_references", StringComparison.Ordinal) &&
+                    positionalArgs.Length == 0 &&
+                    (options.ContainsKey("symbol") || options.ContainsKey("symbol_name")))
                 {
+                    break;
+                }
+
+                string[] navArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (navArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(navArgs[0]) ||
+                    !int.TryParse(navArgs[1], out int invocationLine) ||
+                    !int.TryParse(navArgs[2], out int invocationColumn))
+                {
+                    string extraUsage = string.Equals(commandId, "nav.find_references", StringComparison.Ordinal)
+                        ? " OR nav.find_references --symbol <Type.Member> [--option value ...]"
+                        : string.Empty;
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> <line> <column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> <line> <column> [--option value ...] OR {commandId} <file-path>:<line>:<column> [--option value ...]{extraUsage}"));
                     return false;
                 }
 
-                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["file_path"] = NormalizeCliPathValue(navArgs[0]);
                 input["line"] = invocationLine;
                 input["column"] = invocationColumn;
                 break;
 
-            case "nav.call_hierarchy":
-                if (positionalArgs.Length != 3 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int callHierarchyLine) ||
-                    !int.TryParse(positionalArgs[2], out int callHierarchyColumn))
-                {
-                    error = ErrorEnvelope(
-                        commandId: "cli",
-                        code: "invalid_args",
-                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> <line> <column> [--option value ...]"));
-                    return false;
-                }
-
-                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
-                input["line"] = callHierarchyLine;
-                input["column"] = callHierarchyColumn;
-                break;
-
             case "nav.call_path":
-                if (positionalArgs.Length != 6 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int sourceLine) ||
-                    !int.TryParse(positionalArgs[2], out int sourceColumn) ||
-                    string.IsNullOrWhiteSpace(positionalArgs[3]) ||
-                    !int.TryParse(positionalArgs[4], out int targetLine) ||
-                    !int.TryParse(positionalArgs[5], out int targetColumn))
+                string[] callPathArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (callPathArgs.Length != 6 ||
+                    string.IsNullOrWhiteSpace(callPathArgs[0]) ||
+                    !int.TryParse(callPathArgs[1], out int sourceLine) ||
+                    !int.TryParse(callPathArgs[2], out int sourceColumn) ||
+                    string.IsNullOrWhiteSpace(callPathArgs[3]) ||
+                    !int.TryParse(callPathArgs[4], out int targetLine) ||
+                    !int.TryParse(callPathArgs[5], out int targetColumn))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column> [--option value ...] OR nav.call_path <source-file>:<line>:<col> <target-file>:<line>:<col> [--option value ...]"));
                     return false;
                 }
 
-                input["source_file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["source_file_path"] = NormalizeCliPathValue(callPathArgs[0]);
                 input["source_line"] = sourceLine;
                 input["source_column"] = sourceColumn;
-                input["target_file_path"] = NormalizeCliPathValue(positionalArgs[3]);
+                input["target_file_path"] = NormalizeCliPathValue(callPathArgs[3]);
                 input["target_line"] = targetLine;
                 input["target_column"] = targetColumn;
                 break;
 
             case "analyze.unused_private_symbols":
-                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                if (positionalArgs.Length > 1 || (positionalArgs.Length == 1 && string.IsNullOrWhiteSpace(positionalArgs[0])))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.unused_private_symbols <workspace-path> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.unused_private_symbols [workspace-path] [--option value ...]"));
                     return false;
                 }
 
-                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                if (positionalArgs.Length == 1)
+                {
+                    input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                }
                 break;
 
             case "analyze.control_flow_graph":
-                if (positionalArgs.Length != 3 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int cfgLine) ||
-                    !int.TryParse(positionalArgs[2], out int cfgColumn))
+                string[] cfgArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (cfgArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(cfgArgs[0]) ||
+                    !int.TryParse(cfgArgs[1], out int cfgLine) ||
+                    !int.TryParse(cfgArgs[2], out int cfgColumn))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.control_flow_graph <file-path> <line> <column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.control_flow_graph <file-path> <line> <column> [--option value ...] OR analyze.control_flow_graph <file-path>:<line>:<column> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["file_path"] = NormalizeCliPathValue(cfgArgs[0]);
                 input["line"] = cfgLine;
                 input["column"] = cfgColumn;
                 break;
 
             case "analyze.dataflow_slice":
-                if (positionalArgs.Length != 3 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int dataflowLine) ||
-                    !int.TryParse(positionalArgs[2], out int dataflowColumn))
+                string[] dataflowArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (dataflowArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(dataflowArgs[0]) ||
+                    !int.TryParse(dataflowArgs[1], out int dataflowLine) ||
+                    !int.TryParse(dataflowArgs[2], out int dataflowColumn))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.dataflow_slice <file-path> <line> <column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.dataflow_slice <file-path> <line> <column> [--option value ...] OR analyze.dataflow_slice <file-path>:<line>:<column> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["file_path"] = NormalizeCliPathValue(dataflowArgs[0]);
                 input["line"] = dataflowLine;
                 input["column"] = dataflowColumn;
                 break;
 
             case "analyze.dependency_violations":
-                if (positionalArgs.Length < 3 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                if (positionalArgs.Length < 2 || string.IsNullOrWhiteSpace(positionalArgs[0]))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.dependency_violations <workspace-path> <layer1> <layer2> [layerN ...] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.dependency_violations [workspace-path] <layer1> <layer2> [layerN ...] [--option value ...]"));
                     return false;
                 }
 
-                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
-                input["layers"] = positionalArgs.Skip(1).ToArray();
+                string normalizedFirstArg = NormalizeCliPathValue(positionalArgs[0]);
+                bool firstArgIsWorkspacePath =
+                    positionalArgs.Length >= 3 &&
+                    !options.ContainsKey("workspace_path") &&
+                    !options.ContainsKey("workspace_handle") &&
+                    (File.Exists(normalizedFirstArg) ||
+                     Directory.Exists(normalizedFirstArg) ||
+                     LooksLikeWorkspacePathToken(positionalArgs[0]));
+                if (firstArgIsWorkspacePath)
+                {
+                    input["workspace_path"] = normalizedFirstArg;
+                    input["layers"] = positionalArgs.Skip(1).ToArray();
+                }
+                else
+                {
+                    input["layers"] = positionalArgs;
+                }
                 break;
 
             case "analyze.impact_slice":
-                if (positionalArgs.Length != 3 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int impactLine) ||
-                    !int.TryParse(positionalArgs[2], out int impactColumn))
+                string[] impactArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (impactArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(impactArgs[0]) ||
+                    !int.TryParse(impactArgs[1], out int impactLine) ||
+                    !int.TryParse(impactArgs[2], out int impactColumn))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.impact_slice <file-path> <line> <column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.impact_slice <file-path> <line> <column> [--option value ...] OR analyze.impact_slice <file-path>:<line>:<column> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["file_path"] = NormalizeCliPathValue(impactArgs[0]);
                 input["line"] = impactLine;
                 input["column"] = impactColumn;
                 break;
 
             case "analyze.override_coverage":
-                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                if (positionalArgs.Length > 1 || (positionalArgs.Length == 1 && string.IsNullOrWhiteSpace(positionalArgs[0])))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.override_coverage <workspace-path> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.override_coverage [workspace-path] [--option value ...]"));
                     return false;
                 }
 
-                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                if (positionalArgs.Length == 1)
+                {
+                    input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                }
                 break;
 
             case "analyze.async_risk_scan":
-                if (positionalArgs.Length != 1 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                if (positionalArgs.Length > 1 || (positionalArgs.Length == 1 && string.IsNullOrWhiteSpace(positionalArgs[0])))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.async_risk_scan <workspace-path> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.async_risk_scan [workspace-path] [--option value ...]"));
                     return false;
                 }
 
-                input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                if (positionalArgs.Length == 1)
+                {
+                    input["workspace_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                }
                 break;
 
             case "ctx.search_text":
@@ -2552,10 +2744,17 @@ Workflow:
                         input["roots"] = new[] { normalizedPath };
                     }
                 }
-                else if (!HasExplicitSearchScope(options) &&
-                         TryDiscoverSingleTopLevelSolution() is { Length: > 0 } discoveredSolution)
+                else if (!HasExplicitSearchScope(options))
                 {
-                    input["workspace_path"] = NormalizeCliPathValue(discoveredSolution);
+                    string? defaultWorkspacePath = TryGetDefaultAliasWorkspacePath();
+                    if (!string.IsNullOrWhiteSpace(defaultWorkspacePath))
+                    {
+                        input["workspace_path"] = NormalizeCliPathValue(defaultWorkspacePath);
+                    }
+                    else if (TryDiscoverSingleTopLevelSolution() is { Length: > 0 } discoveredSolution)
+                    {
+                        input["workspace_path"] = NormalizeCliPathValue(discoveredSolution);
+                    }
                 }
                 break;
 
@@ -2585,23 +2784,24 @@ Workflow:
                 break;
 
             case "edit.rename_symbol":
-                if (positionalArgs.Length != 4 ||
-                    string.IsNullOrWhiteSpace(positionalArgs[0]) ||
-                    !int.TryParse(positionalArgs[1], out int renameLine) ||
-                    !int.TryParse(positionalArgs[2], out int renameColumn) ||
-                    string.IsNullOrWhiteSpace(positionalArgs[3]))
+                string[] renameArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (renameArgs.Length != 4 ||
+                    string.IsNullOrWhiteSpace(renameArgs[0]) ||
+                    !int.TryParse(renameArgs[1], out int renameLine) ||
+                    !int.TryParse(renameArgs[2], out int renameColumn) ||
+                    string.IsNullOrWhiteSpace(renameArgs[3]))
                 {
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...] OR edit.rename_symbol <file-path>:<line>:<column> <new-name> [--option value ...]"));
                     return false;
                 }
 
-                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                input["file_path"] = NormalizeCliPathValue(renameArgs[0]);
                 input["line"] = renameLine;
                 input["column"] = renameColumn;
-                input["new_name"] = positionalArgs[3];
+                input["new_name"] = renameArgs[3];
                 break;
 
             case "edit.create_file":
@@ -5333,6 +5533,135 @@ Workflow:
         };
     }
 
+    internal static string[] ExpandFileLineColumnArgs(string[] positionalArgs)
+    {
+        if (positionalArgs.Length == 0)
+        {
+            return positionalArgs;
+        }
+
+        List<string> expanded = new(positionalArgs.Length + 2);
+        foreach (string arg in positionalArgs)
+        {
+            if (TrySplitFileLineColumnToken(arg, out string filePath, out int line, out int column))
+            {
+                expanded.Add(filePath);
+                expanded.Add(line.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                expanded.Add(column.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                expanded.Add(arg);
+            }
+        }
+
+        return expanded.ToArray();
+    }
+
+    internal static bool TrySplitFileLineColumnToken(string? token, out string filePath, out int line, out int column)
+    {
+        filePath = string.Empty;
+        line = 0;
+        column = 0;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return false;
+        }
+
+        int lastColon = token.LastIndexOf(':');
+        if (lastColon <= 0 || lastColon >= token.Length - 1)
+        {
+            return false;
+        }
+
+        int prevColon = token.LastIndexOf(':', lastColon - 1);
+        if (prevColon <= 0 || prevColon >= lastColon - 1)
+        {
+            return false;
+        }
+
+        string colText = token[(lastColon + 1)..];
+        string lineText = token[(prevColon + 1)..lastColon];
+        string candidatePath = token[..prevColon];
+        if (string.IsNullOrWhiteSpace(candidatePath) ||
+            !int.TryParse(lineText, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int parsedLine) ||
+            !int.TryParse(colText, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int parsedColumn) ||
+            parsedLine <= 0 ||
+            parsedColumn <= 0)
+        {
+            return false;
+        }
+
+        filePath = candidatePath;
+        line = parsedLine;
+        column = parsedColumn;
+        return true;
+    }
+
+    private static void ApplySnapshotModeShorthandFlags(
+        Dictionary<string, object?> options,
+        Dictionary<string, object?> input)
+    {
+        string? inferredMode = null;
+        if (options.Remove("compact", out object? compactValue) && IsTruthyOptionValue(compactValue))
+        {
+            inferredMode = "compact";
+        }
+
+        if (options.Remove("raw", out object? rawValue) && IsTruthyOptionValue(rawValue))
+        {
+            inferredMode = "raw";
+        }
+
+        if (options.Remove("guided", out object? guidedValue) && IsTruthyOptionValue(guidedValue))
+        {
+            inferredMode = "guided";
+        }
+
+        if (!string.IsNullOrWhiteSpace(inferredMode) && !options.ContainsKey("mode"))
+        {
+            input["mode"] = inferredMode;
+        }
+    }
+
+    private static bool IsTruthyOptionValue(object? value)
+        => value switch
+        {
+            bool flag => flag,
+            string text => bool.TryParse(text, out bool parsed) && parsed,
+            _ => false,
+        };
+
+    private static bool LooksLikeWorkspacePathToken(string token)
+    {
+        if (token.Contains(Path.DirectorySeparatorChar) || token.Contains(Path.AltDirectorySeparatorChar))
+        {
+            return true;
+        }
+
+        string ext = Path.GetExtension(token);
+        return string.Equals(ext, ".sln", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(ext, ".slnx", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(ext, ".csproj", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(ext, ".vbproj", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? TryGetDefaultAliasWorkspacePath()
+    {
+        string alias = Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS") ?? "default";
+        string repoRoot = RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: null);
+        WorkspaceAliasStore aliasStore = new(repoRoot);
+        if (aliasStore.TryGet(alias, out WorkspaceAliasRecord? record) &&
+            record is not null &&
+            !string.IsNullOrWhiteSpace(record.WorkspacePath) &&
+            (File.Exists(record.WorkspacePath) || Directory.Exists(record.WorkspacePath)))
+        {
+            return record.WorkspacePath;
+        }
+
+        return null;
+    }
+
     private static object BuildCliTelemetry(
         int validateMs,
         int? executeMs,
@@ -5349,12 +5678,43 @@ Workflow:
             },
             cache_context = new
             {
-                binary_launch_mode = IsPublishedModeEnabled("ROSCLI_USE_PUBLISHED")
-                    ? "published_cache"
-                    : "dotnet_run",
+                binary_launch_mode = ResolveBinaryLaunchMode(),
             },
             command_telemetry = commandTelemetry,
         };
+    }
+
+    internal static string ResolveBinaryLaunchMode(
+        string? baseDirectory = null,
+        string? processPath = null,
+        bool? publishedModeEnabled = null)
+    {
+        if (publishedModeEnabled ?? IsPublishedModeEnabled("ROSCLI_USE_PUBLISHED"))
+        {
+            return "published_cache";
+        }
+
+        string effectiveBaseDirectory = baseDirectory ?? AppContext.BaseDirectory;
+        if (!string.IsNullOrWhiteSpace(effectiveBaseDirectory))
+        {
+            string normalizedBase = effectiveBaseDirectory.Replace('\\', '/');
+            if (normalizedBase.Contains("/.store/", StringComparison.OrdinalIgnoreCase))
+            {
+                return "global_tool";
+            }
+        }
+
+        string? effectiveProcessPath = processPath ?? Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(effectiveProcessPath))
+        {
+            string exeName = Path.GetFileNameWithoutExtension(effectiveProcessPath);
+            if (!string.Equals(exeName, "dotnet", StringComparison.OrdinalIgnoreCase))
+            {
+                return "compiled_binary";
+            }
+        }
+
+        return "dotnet_exec";
     }
 
     private static bool IsPublishedModeEnabled(string envVarName)
@@ -5375,7 +5735,7 @@ Workflow:
         };
     }
 
-    private static CommandEnvelope ErrorEnvelope(string commandId, string code, string message)
+    private static CommandEnvelope ErrorEnvelope(string commandId, string code, string message, object? details = null)
         => new(
             Ok: false,
             CommandId: commandId,
@@ -5383,7 +5743,7 @@ Workflow:
             Data: null,
             Errors: new[]
             {
-                new CommandError(code, message),
+                new CommandError(code, message, details),
             },
             TraceId: null);
 

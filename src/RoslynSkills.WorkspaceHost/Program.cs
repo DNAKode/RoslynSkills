@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -22,6 +23,9 @@ internal static class Program
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static string CurrentTransportName = "stdio-jsonl";
     private static string? ExpectedAuthToken;
+    private static string? LogFilePath;
+    private static readonly object LogGate = new();
+    private const long MaxLogFileBytes = 256 * 1024;
     private static int ActiveRequestCount;
     private static readonly Dictionary<string, string> WorkspaceAliases = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object AliasGate = new();
@@ -44,16 +48,39 @@ internal static class Program
             return 2;
         }
 
+        InitializeLog(options.LogPath);
+        RegisterLifecycleLogging();
+
+        string endpointLabel = options.Transport switch
+        {
+            "named-pipe" => $"pipe:{options.PipeName}",
+            "unix-socket" => $"unix:{options.SocketPath}",
+            _ => "stdio",
+        };
+        Log($"host_started pid={Environment.ProcessId} transport={options.Transport} endpoint={endpointLabel} version={GetAssemblyVersion()} cwd={Environment.CurrentDirectory}");
+
         ICommandRegistry registry = DefaultRegistryFactory.Create();
         ExpectedAuthToken = string.IsNullOrWhiteSpace(options.AuthToken) ? null : options.AuthToken;
 
-        return options.Transport switch
+        int exitCode;
+        try
         {
-            "stdio" => await RunStdioAsync(registry).ConfigureAwait(false),
-            "named-pipe" => await RunNamedPipeAsync(registry, options.PipeName!).ConfigureAwait(false),
-            "unix-socket" => await RunUnixSocketAsync(registry, options.SocketPath!).ConfigureAwait(false),
-            _ => 2,
-        };
+            exitCode = options.Transport switch
+            {
+                "stdio" => await RunStdioAsync(registry).ConfigureAwait(false),
+                "named-pipe" => await RunNamedPipeAsync(registry, options.PipeName!).ConfigureAwait(false),
+                "unix-socket" => await RunUnixSocketAsync(registry, options.SocketPath!).ConfigureAwait(false),
+                _ => 2,
+            };
+        }
+        catch (Exception ex)
+        {
+            Log($"host_fatal_exception type={ex.GetType().FullName} message={SanitizeLogText(ex.Message)}");
+            throw;
+        }
+
+        Log($"host_exiting pid={Environment.ProcessId} exit_code={exitCode}");
+        return exitCode;
     }
 
     private static async Task<int> RunStdioAsync(ICommandRegistry registry)
@@ -122,7 +149,9 @@ internal static class Program
         await using NamedPipeServerStream? instanceLock = await TryAcquireNamedPipeLockAsync(pipeName).ConfigureAwait(false);
         if (instanceLock is null)
         {
-            await Console.Error.WriteLineAsync($"Another workspace host already owns pipe '{pipeName}'.").ConfigureAwait(false);
+            string conflict = $"Another workspace host already owns pipe '{pipeName}'.";
+            Log($"pipe_lock_conflict pipe={pipeName} exit_code=3");
+            await Console.Error.WriteLineAsync(conflict).ConfigureAwait(false);
             return 3;
         }
 
@@ -424,6 +453,7 @@ internal static class Program
         string? pipeName = null;
         string? socketPath = null;
         string? authToken = Environment.GetEnvironmentVariable("ROSLYNSKILLS_WORKSPACE_HOST_TOKEN");
+        string? logPath = Environment.GetEnvironmentVariable("ROSLYNSKILLS_WORKSPACE_HOST_LOG");
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -441,7 +471,7 @@ internal static class Program
                 case "--transport":
                     if (!TryReadOptionValue(args, ref i, value, out transport, out error))
                     {
-                        options = new WorkspaceHostOptions("stdio", null, null, null);
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
                         return false;
                     }
 
@@ -451,7 +481,7 @@ internal static class Program
                 case "--pipe-name":
                     if (!TryReadOptionValue(args, ref i, value, out pipeName, out error))
                     {
-                        options = new WorkspaceHostOptions("stdio", null, null, null);
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
                         return false;
                     }
 
@@ -460,7 +490,7 @@ internal static class Program
                 case "--socket-path":
                     if (!TryReadOptionValue(args, ref i, value, out socketPath, out error))
                     {
-                        options = new WorkspaceHostOptions("stdio", null, null, null);
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
                         return false;
                     }
 
@@ -469,41 +499,50 @@ internal static class Program
                 case "--auth-token":
                     if (!TryReadOptionValue(args, ref i, value, out authToken, out error))
                     {
-                        options = new WorkspaceHostOptions("stdio", null, null, null);
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                        return false;
+                    }
+
+                    break;
+
+                case "--log-path":
+                    if (!TryReadOptionValue(args, ref i, value, out logPath, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
                         return false;
                     }
 
                     break;
 
                 default:
-                    options = new WorkspaceHostOptions("stdio", null, null, null);
-                    error = $"Unknown workspace host option '{arg}'. Supported options: --transport, --pipe-name, --socket-path, --auth-token.";
+                    options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                    error = $"Unknown workspace host option '{arg}'. Supported options: --transport, --pipe-name, --socket-path, --auth-token, --log-path.";
                     return false;
             }
         }
 
         if (transport == "named-pipe" && string.IsNullOrWhiteSpace(pipeName))
         {
-            options = new WorkspaceHostOptions("stdio", null, null, null);
+            options = new WorkspaceHostOptions("stdio", null, null, null, null);
             error = "--transport named-pipe requires --pipe-name.";
             return false;
         }
 
         if (transport == "unix-socket" && string.IsNullOrWhiteSpace(socketPath))
         {
-            options = new WorkspaceHostOptions("stdio", null, null, null);
+            options = new WorkspaceHostOptions("stdio", null, null, null, null);
             error = "--transport unix-socket requires --socket-path.";
             return false;
         }
 
         if (transport is not ("stdio" or "named-pipe" or "unix-socket"))
         {
-            options = new WorkspaceHostOptions("stdio", null, null, null);
+            options = new WorkspaceHostOptions("stdio", null, null, null, null);
             error = $"Unsupported transport '{transport}'. Supported transports: stdio, named-pipe, unix-socket.";
             return false;
         }
 
-        options = new WorkspaceHostOptions(transport, pipeName, socketPath, authToken);
+        options = new WorkspaceHostOptions(transport, pipeName, socketPath, authToken, logPath);
         error = null;
         return true;
     }
@@ -618,6 +657,7 @@ internal static class Program
                     return false;
 
                 case WorkspaceHostProtocol.Method.Shutdown:
+                    Log($"shutdown_requested pid={Environment.ProcessId}");
                     await WriteSuccessResponseAsync(
                         writer,
                         requestId,
@@ -697,6 +737,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            Log($"host_error method={method} type={ex.GetType().FullName} message={SanitizeLogText(ex.Message)}");
             await WriteErrorResponseAsync(
                 writer,
                 requestId,
@@ -783,8 +824,6 @@ internal static class Program
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
-        JsonElement input = GetInputElement(root, commandId);
-
         if (string.IsNullOrWhiteSpace(commandId))
         {
             await WriteErrorResponseAsync(
@@ -811,6 +850,8 @@ internal static class Program
                 commandId).ConfigureAwait(false);
             return;
         }
+
+        JsonElement input = GetInputElement(root, commandId, command.Descriptor.RunsOnHotWorkspace);
 
         IReadOnlyList<CommandError> validationErrors = command.Validate(input);
         if (validationErrors.Count > 0)
@@ -1056,14 +1097,16 @@ internal static class Program
         }
     }
 
-    private static JsonElement GetInputElement(JsonElement root, string? commandId)
+    private static JsonElement GetInputElement(JsonElement root, string? commandId, bool runsOnHotWorkspace = false)
     {
+        bool shouldResolveAlias = runsOnHotWorkspace ||
+            string.Equals(commandId, "workspace.status", StringComparison.Ordinal) ||
+            string.Equals(commandId, "workspace.refresh", StringComparison.Ordinal) ||
+            string.Equals(commandId, "workspace.close", StringComparison.Ordinal);
+
         if (TryGetProperty(root, "input", out JsonElement input))
         {
-            if ((string.Equals(commandId, "workspace.status", StringComparison.Ordinal) ||
-                 string.Equals(commandId, "workspace.refresh", StringComparison.Ordinal) ||
-                 string.Equals(commandId, "workspace.close", StringComparison.Ordinal)) &&
-                !TryGetProperty(input, "workspace_handle", out _))
+            if (shouldResolveAlias && !TryGetProperty(input, "workspace_handle", out _))
             {
                 string? alias = GetStringProperty(root, "workspace_alias");
                 if (!string.IsNullOrWhiteSpace(alias) && TryResolveAlias(alias, out string? handle))
@@ -1090,10 +1133,7 @@ internal static class Program
         AddStringIfPresent(root, synthesizedInput, "workspace_handle");
         AddStringIfPresent(root, synthesizedInput, "workspace_alias");
         AddStringIfPresent(root, synthesizedInput, "refresh_policy");
-        if ((string.Equals(commandId, "workspace.status", StringComparison.Ordinal) ||
-             string.Equals(commandId, "workspace.refresh", StringComparison.Ordinal) ||
-             string.Equals(commandId, "workspace.close", StringComparison.Ordinal)) &&
-            !synthesizedInput.ContainsKey("workspace_handle"))
+        if (shouldResolveAlias && !synthesizedInput.ContainsKey("workspace_handle"))
         {
             string? alias = GetStringProperty(root, "workspace_alias");
             if (!string.IsNullOrWhiteSpace(alias) && TryResolveAlias(alias, out string? handle))
@@ -1336,9 +1376,130 @@ internal static class Program
             WorkspaceHostProtocol.Method.Shutdown,
         };
 
+    private static readonly List<IDisposable> SignalRegistrations = new();
+
+    private static void InitializeLog(string? logPath)
+    {
+        if (string.IsNullOrWhiteSpace(logPath))
+        {
+            LogFilePath = null;
+            return;
+        }
+
+        try
+        {
+            string fullPath = Path.GetFullPath(logPath);
+            string? directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            LogFilePath = fullPath;
+        }
+        catch
+        {
+            LogFilePath = null;
+        }
+    }
+
+    private static void RegisterLifecycleLogging()
+    {
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            Exception? ex = args.ExceptionObject as Exception;
+            string detail = ex is not null
+                ? $"{ex.GetType().FullName}: {SanitizeLogText(ex.Message)}"
+                : SanitizeLogText(args.ExceptionObject?.ToString() ?? "unknown");
+            Log($"unhandled_exception terminating={args.IsTerminating} detail={detail}");
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log($"unobserved_task_exception detail={SanitizeLogText(args.Exception.ToString())}");
+            args.SetObserved();
+        };
+
+        Console.CancelKeyPress += (_, args) =>
+        {
+            Log($"cancel_key_press special_key={args.SpecialKey}");
+        };
+
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            Log($"process_exit pid={Environment.ProcessId}");
+        };
+
+        TryRegisterPosixSignal(PosixSignal.SIGTERM, "SIGTERM");
+        TryRegisterPosixSignal(PosixSignal.SIGINT, "SIGINT");
+    }
+
+    private static void TryRegisterPosixSignal(PosixSignal signal, string label)
+    {
+        try
+        {
+            PosixSignalRegistration registration = PosixSignalRegistration.Create(signal, _ =>
+            {
+                Log($"signal_received signal={label} pid={Environment.ProcessId}");
+            });
+            SignalRegistrations.Add(registration);
+        }
+        catch (PlatformNotSupportedException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private static void Log(string message)
+    {
+        string? path = LogFilePath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        string line = $"{DateTimeOffset.UtcNow:O} [pid:{Environment.ProcessId}] {message}{Environment.NewLine}";
+        lock (LogGate)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    FileInfo info = new(path);
+                    if (info.Length >= MaxLogFileBytes)
+                    {
+                        string[] existingLines = File.ReadAllLines(path);
+                        int keep = Math.Min(existingLines.Length, 100);
+                        string trimmed = string.Join(Environment.NewLine, existingLines.Skip(existingLines.Length - keep)) + Environment.NewLine;
+                        File.WriteAllText(path, trimmed, Utf8NoBom);
+                    }
+                }
+
+                File.AppendAllText(path, line, Utf8NoBom);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static string SanitizeLogText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        string collapsed = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return collapsed.Length <= 400 ? collapsed : collapsed[..400] + "...";
+    }
+
     private sealed record WorkspaceHostOptions(
         string Transport,
         string? PipeName,
         string? SocketPath,
-        string? AuthToken);
+        string? AuthToken,
+        string? LogPath = null);
 }

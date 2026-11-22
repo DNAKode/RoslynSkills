@@ -20,12 +20,11 @@ public sealed class DependencyViolationsCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "workspace_path", errors, out string workspacePath))
+        if (!WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _))
         {
             return errors;
         }
 
-        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         InputParsing.ValidateOptionalBool(input, "ignore_same_namespace", errors);
@@ -36,18 +35,13 @@ public sealed class DependencyViolationsCommand : IAgentCommand
             errors.Add(new CommandError("invalid_input", "Property 'direction' must be 'toward_end' or 'toward_start'."));
         }
 
-        if (!File.Exists(workspacePath) && !Directory.Exists(workspacePath))
-        {
-            errors.Add(new CommandError("workspace_not_found", $"Workspace path '{workspacePath}' does not exist."));
-        }
-
         return errors;
     }
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "workspace_path", errors, out string workspacePath))
+        if (!WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out string? workspacePath, out _))
         {
             return new CommandExecutionResult(null, errors);
         }
@@ -211,7 +205,7 @@ public sealed class DependencyViolationsCommand : IAgentCommand
         {
             query = new
             {
-                workspace_path = Path.GetFullPath(workspacePath),
+                workspace_path = !string.IsNullOrWhiteSpace(workspacePath) ? Path.GetFullPath(workspacePath) : workspace.ResolvedWorkspacePath,
                 layers,
                 direction = DirectionToString(direction),
                 include_generated = includeGenerated,

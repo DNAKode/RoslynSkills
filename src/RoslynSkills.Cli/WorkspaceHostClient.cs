@@ -43,18 +43,47 @@ public sealed class WorkspaceHostClient : IAsyncDisposable
         _disposable = disposable;
     }
 
-    public static async Task<WorkspaceHostClient> ConnectAsync(
+    public static Task<WorkspaceHostClient> ConnectAsync(
         WorkspaceHostClientOptions options,
         CancellationToken cancellationToken)
+        => ConnectAsync(options, connectTimeout: null, cancellationToken);
+
+    public static async Task<WorkspaceHostClient> ConnectAsync(
+        WorkspaceHostClientOptions options,
+        TimeSpan connectTimeout,
+        CancellationToken cancellationToken)
+        => await ConnectAsync(options, (TimeSpan?)connectTimeout, cancellationToken).ConfigureAwait(false);
+
+    private static async Task<WorkspaceHostClient> ConnectAsync(
+        WorkspaceHostClientOptions options,
+        TimeSpan? connectTimeout,
+        CancellationToken cancellationToken)
     {
-        return NormalizeTransport(options.Transport) switch
+        using CancellationTokenSource? connectCts = connectTimeout.HasValue
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : null;
+        if (connectCts is not null)
         {
-            "named-pipe" => await ConnectNamedPipeAsync(options.PipeName, cancellationToken).ConfigureAwait(false),
-            "unix-socket" => await ConnectUnixSocketAsync(options.SocketPath, cancellationToken).ConfigureAwait(false),
-            _ => throw new ArgumentException(
-                $"Unsupported workspace host transport '{options.Transport}'. Supported transports: named-pipe, unix-socket.",
-                nameof(options)),
-        };
+            connectCts.CancelAfter(connectTimeout!.Value);
+        }
+
+        CancellationToken effectiveToken = connectCts?.Token ?? cancellationToken;
+        try
+        {
+            return NormalizeTransport(options.Transport) switch
+            {
+                "named-pipe" => await ConnectNamedPipeAsync(options.PipeName, effectiveToken).ConfigureAwait(false),
+                "unix-socket" => await ConnectUnixSocketAsync(options.SocketPath, effectiveToken).ConfigureAwait(false),
+                _ => throw new ArgumentException(
+                    $"Unsupported workspace host transport '{options.Transport}'. Supported transports: named-pipe, unix-socket.",
+                    nameof(options)),
+            };
+        }
+        catch (OperationCanceledException) when (connectCts is not null && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Timed out after {(int)Math.Ceiling(connectTimeout!.Value.TotalMilliseconds)} ms connecting to workspace host ({options.Transport}).");
+        }
     }
 
     public static WorkspaceHostClient CreateForText(
@@ -109,7 +138,15 @@ public sealed class WorkspaceHostClient : IAsyncDisposable
             pipeName,
             PipeDirection.InOut,
             PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await pipe.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await pipe.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
 
         StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
         StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
@@ -130,7 +167,15 @@ public sealed class WorkspaceHostClient : IAsyncDisposable
         }
 
         Socket socket = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
 
         NetworkStream stream = new(socket, ownsSocket: true);
         StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);

@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="RoslynSkills.Cli.Tests" />
   </ItemGroup>
 
 </Project>

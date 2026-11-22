@@ -69,17 +69,37 @@ internal sealed class StaticAnalysisWorkspace
     /// </summary>
     public static Task<(StaticAnalysisWorkspace? Workspace, CommandError? Error)> ResolveAsync(
         System.Text.Json.JsonElement input,
-        string workspacePath,
+        string? workspacePath,
         bool includeGenerated,
         int maxFiles,
         CancellationToken cancellationToken)
     {
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
-        if (workspaceHandle is not null &&
-            WorkspaceHostStoreProvider.Current.TryGet(workspaceHandle, out HostedWorkspace? hosted) &&
-            hosted is not null)
+        if (workspaceHandle is not null)
         {
-            return Task.FromResult<(StaticAnalysisWorkspace?, CommandError?)>((hosted.Workspace, null));
+            if (WorkspaceHostStoreProvider.Current.TryGet(workspaceHandle, out HostedWorkspace? hosted) &&
+                hosted is not null)
+            {
+                return Task.FromResult<(StaticAnalysisWorkspace?, CommandError?)>((hosted.Workspace, null));
+            }
+
+            if (string.IsNullOrWhiteSpace(workspacePath))
+            {
+                return Task.FromResult<(StaticAnalysisWorkspace?, CommandError?)>((
+                    null,
+                    new CommandError(
+                        "workspace_not_found",
+                        $"Workspace handle '{workspaceHandle}' is not loaded in this host and no 'workspace_path' fallback was provided.")));
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return Task.FromResult<(StaticAnalysisWorkspace?, CommandError?)>((
+                null,
+                new CommandError(
+                    "invalid_input",
+                    "At least one of 'workspace_path' or 'workspace_handle' must be provided.")));
         }
 
         return LoadAsync(workspacePath, includeGenerated, maxFiles, cancellationToken);
@@ -864,7 +884,21 @@ internal sealed class StaticAnalysisWorkspace
         }
 
         Solution? last = null;
-        HashSet<string> loaded = workspace.CurrentSolution.Projects
+        try
+        {
+            Solution nativeSolution = await workspace.OpenSolutionAsync(fullPath, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            if (nativeSolution.Projects.Any())
+            {
+                last = nativeSolution;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Older MSBuild/Roslyn host environments may not support native .slnx loading; fall back to opening projects directly.
+        }
+
+        HashSet<string> loaded = (last ?? workspace.CurrentSolution).Projects
             .Select(project => project.FilePath)
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(path => Path.GetFullPath(path!))
@@ -883,14 +917,18 @@ internal sealed class StaticAnalysisWorkspace
                 Project project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
                 last = project.Solution;
-                if (!string.IsNullOrWhiteSpace(project.FilePath))
+                foreach (Project loadedProject in last.Projects)
                 {
-                    loaded.Add(Path.GetFullPath(project.FilePath));
+                    if (!string.IsNullOrWhiteSpace(loadedProject.FilePath))
+                    {
+                        loaded.Add(Path.GetFullPath(loadedProject.FilePath));
+                    }
                 }
             }
             catch (Exception ex) when (ex.Message.Contains("already part of the workspace", StringComparison.OrdinalIgnoreCase))
             {
                 // Referenced projects can be loaded transitively before their explicit .slnx entry is processed.
+                loaded.Add(projectPath);
             }
         }
 

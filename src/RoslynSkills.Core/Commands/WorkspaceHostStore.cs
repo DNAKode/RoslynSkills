@@ -981,51 +981,51 @@ internal sealed class WorkspaceChangeTracker : IDisposable
             return;
         }
 
-        string fullPath;
         try
         {
-            fullPath = Path.GetFullPath(path);
+            string fullPath = Path.GetFullPath(path);
+            if (Directory.Exists(fullPath) ||
+                WorkspaceChangeClassifier.ShouldIgnore(fullPath, _rootDirectory, _includeGenerated))
+            {
+                return;
+            }
+
+            bool exists = File.Exists(fullPath);
+            DateTimeOffset? lastWriteUtc = exists ? File.GetLastWriteTimeUtc(fullPath) : null;
+            bool isTrackedSource;
+            lock (_gate)
+            {
+                isTrackedSource = _trackedSourcePaths.Contains(fullPath);
+            }
+
+            bool isKnownProject = _trackedProjectPaths.Contains(fullPath);
+            WorkspaceChange change = WorkspaceChangeClassifier.Classify(
+                fullPath,
+                _rootDirectory,
+                isTrackedSource,
+                isKnownProject,
+                _workspacePath,
+                _projectSourceRules,
+                _baselineExcludedSourcePaths,
+                changeType,
+                exists,
+                lastWriteUtc,
+                _includeGenerated);
+            if (change.Ignored)
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                _changes[fullPath] = change;
+            }
         }
         catch
         {
-            return;
-        }
-
-        if (Directory.Exists(fullPath) ||
-            WorkspaceChangeClassifier.ShouldIgnore(fullPath, _rootDirectory, _includeGenerated))
-        {
-            return;
-        }
-
-        bool exists = File.Exists(fullPath);
-        DateTimeOffset? lastWriteUtc = exists ? File.GetLastWriteTimeUtc(fullPath) : null;
-        bool isTrackedSource;
-        lock (_gate)
-        {
-            isTrackedSource = _trackedSourcePaths.Contains(fullPath);
-        }
-
-        bool isKnownProject = _trackedProjectPaths.Contains(fullPath);
-        WorkspaceChange change = WorkspaceChangeClassifier.Classify(
-            fullPath,
-            _rootDirectory,
-            isTrackedSource,
-            isKnownProject,
-            _workspacePath,
-            _projectSourceRules,
-            _baselineExcludedSourcePaths,
-            changeType,
-            exists,
-            lastWriteUtc,
-            _includeGenerated);
-        if (change.Ignored)
-        {
-            return;
-        }
-
-        lock (_gate)
-        {
-            _changes[fullPath] = change;
+            // Transient file locks, path-length races, or permission glitches during builds/git checkouts
+            // must never terminate the host on a FileSystemWatcher callback thread; BuildStatus reconciles
+            // tracked paths and loaded project directories directly from disk on the next request.
         }
     }
 }

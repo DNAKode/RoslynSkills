@@ -115,13 +115,18 @@ public sealed class CallHierarchyCommand : IAgentCommand
         ISymbol? anchorSymbol = SymbolResolution.GetSymbolForToken(anchorToken, analysis.SemanticModel, cancellationToken);
         if (anchorSymbol is not (IMethodSymbol or IFieldSymbol or IPropertySymbol or IEventSymbol))
         {
+            string hint = SymbolResolution.FormatLineSymbolHint(
+                analysis,
+                line,
+                s => s is IMethodSymbol or IFieldSymbol or IPropertySymbol or IEventSymbol,
+                cancellationToken);
             return new CommandExecutionResult(
                 null,
                 new[]
                 {
                     new CommandError(
                         "invalid_target",
-                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method or member. Anchor to a method or member declaration/reference and retry."),
+                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method or member. Anchor to a method or member declaration/reference and retry.{hint}"),
                 });
         }
 

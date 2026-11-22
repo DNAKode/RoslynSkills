@@ -73,9 +73,10 @@ public sealed class FindImplementationsCommand : IAgentCommand
         ISymbol? anchorSymbol = SymbolResolution.GetSymbolForToken(anchorToken, analysis.SemanticModel, cancellationToken);
         if (anchorSymbol is null)
         {
+            string hint = SymbolResolution.FormatLineSymbolHint(analysis, line, predicate: null, cancellationToken);
             return new CommandExecutionResult(
                 null,
-                new[] { new CommandError("symbol_not_found", "Unable to resolve a semantic symbol at the provided location.") });
+                new[] { new CommandError("symbol_not_found", $"Unable to resolve a semantic symbol at {line}:{column}.{hint}") });
         }
 
         string searchScope = SolutionSearchScope.CompilationKind;
@@ -116,9 +117,14 @@ public sealed class FindImplementationsCommand : IAgentCommand
         }
         else
         {
+            string hint = SymbolResolution.FormatLineSymbolHint(
+                analysis,
+                line,
+                s => s is INamedTypeSymbol or IMethodSymbol or IPropertySymbol or IEventSymbol,
+                cancellationToken);
             return new CommandExecutionResult(
                 null,
-                new[] { new CommandError("invalid_target", $"Symbol kind '{anchorSymbol.Kind}' does not have implementation semantics.") });
+                new[] { new CommandError("invalid_target", $"Symbol kind '{anchorSymbol.Kind}' does not have implementation semantics.{hint}") });
         }
 
         matches = matches.Select(match => match.file_path is null ? match with { file_path = analysis.FilePath } : match).ToList();

@@ -93,4 +93,28 @@ internal static class WorkspaceInput
                 "Property 'workspace_handle' must not be empty when provided."));
         }
     }
+
+    public static bool TryGetRequiredWorkspaceTarget(
+        JsonElement input,
+        List<CommandError> errors,
+        out string? workspacePath,
+        out string? workspaceHandle)
+    {
+        int initialErrorCount = errors.Count;
+        ValidateOptionalWorkspacePath(input, errors);
+        ValidateOptionalWorkspaceHandle(input, errors);
+
+        workspacePath = GetOptionalWorkspacePath(input);
+        workspaceHandle = GetOptionalWorkspaceHandle(input);
+
+        if (string.IsNullOrWhiteSpace(workspacePath) && string.IsNullOrWhiteSpace(workspaceHandle))
+        {
+            errors.Add(new CommandError(
+                "invalid_input",
+                "At least one of 'workspace_path' or 'workspace_handle' must be provided."));
+            return false;
+        }
+
+        return errors.Count == initialErrorCount;
+    }
 }

@@ -20,26 +20,20 @@ public sealed class UnusedPrivateSymbolsCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "workspace_path", errors, out string workspacePath))
+        if (!WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _))
         {
             return errors;
         }
 
-        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
-        if (!File.Exists(workspacePath) && !Directory.Exists(workspacePath))
-        {
-            errors.Add(new CommandError("workspace_not_found", $"Workspace path '{workspacePath}' does not exist."));
-        }
-
         return errors;
     }
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "workspace_path", errors, out string workspacePath))
+        if (!WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out string? workspacePath, out _))
         {
             return new CommandExecutionResult(null, errors);
         }
@@ -178,7 +172,7 @@ public sealed class UnusedPrivateSymbolsCommand : IAgentCommand
         {
             query = new
             {
-                workspace_path = Path.GetFullPath(workspacePath),
+                workspace_path = !string.IsNullOrWhiteSpace(workspacePath) ? Path.GetFullPath(workspacePath) : workspace.ResolvedWorkspacePath,
                 include_generated = includeGenerated,
                 max_files = maxFiles,
                 max_symbols = maxSymbols,

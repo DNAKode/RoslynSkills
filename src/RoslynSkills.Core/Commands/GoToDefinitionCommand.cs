@@ -81,9 +81,10 @@ public sealed class GoToDefinitionCommand : IAgentCommand
         ISymbol? anchorSymbol = ResolveAnchorSymbol(anchorToken, analysis.SemanticModel, cancellationToken);
         if (anchorSymbol is null)
         {
+            string hint = SymbolResolution.FormatLineSymbolHint(analysis, line, predicate: null, cancellationToken);
             return new CommandExecutionResult(
                 null,
-                new[] { new CommandError("symbol_not_found", "Unable to resolve a semantic symbol at the provided location.") });
+                new[] { new CommandError("symbol_not_found", $"Unable to resolve a semantic symbol at {line}:{column}.{hint}") });
         }
 
         ISymbol definitionSymbol = NormalizeDefinitionSymbol(anchorSymbol);

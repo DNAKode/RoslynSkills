@@ -19,6 +19,16 @@ public sealed class FindReferencesCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        string? symbolQuery = GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
+            InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+            InputParsing.ValidateOptionalBool(input, "include_declaration", errors);
+            InputParsing.ValidateOptionalBool(input, "include_generated", errors);
+            return errors;
+        }
+
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
         {
             return errors;
@@ -45,6 +55,31 @@ public sealed class FindReferencesCommand : IAgentCommand
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
+        int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 200, minValue: 1, maxValue: 2_000);
+        int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 2, minValue: 0, maxValue: 20);
+        bool includeDeclaration = InputParsing.GetOptionalBool(input, "include_declaration", defaultValue: true);
+        bool includeGenerated = InputParsing.GetOptionalBool(input, "include_generated", defaultValue: false);
+
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        string? symbolQuery = GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            return await ExecuteBySymbolNameAsync(
+                input,
+                symbolQuery,
+                workspacePath,
+                workspaceHandle,
+                requireWorkspace,
+                includeDeclaration,
+                includeGenerated,
+                contextLines,
+                maxResults,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         List<CommandError> errors = new();
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
             !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
@@ -59,15 +94,6 @@ public sealed class FindReferencesCommand : IAgentCommand
                 null,
                 new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
         }
-
-        int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 200, minValue: 1, maxValue: 2_000);
-        int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 2, minValue: 0, maxValue: 20);
-        bool includeDeclaration = InputParsing.GetOptionalBool(input, "include_declaration", defaultValue: true);
-        bool includeGenerated = InputParsing.GetOptionalBool(input, "include_generated", defaultValue: false);
-
-        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
-        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
-        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
         CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, workspaceHandle).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
@@ -86,9 +112,10 @@ public sealed class FindReferencesCommand : IAgentCommand
         ISymbol? targetSymbol = SymbolResolution.GetSymbolForToken(anchorToken, analysis.SemanticModel, cancellationToken);
         if (targetSymbol is null)
         {
+            string hint = SymbolResolution.FormatLineSymbolHint(analysis, line, predicate: null, cancellationToken);
             return new CommandExecutionResult(
                 null,
-                new[] { new CommandError("symbol_not_found", "Unable to resolve a semantic symbol at the provided location.") });
+                new[] { new CommandError("symbol_not_found", $"Unable to resolve a semantic symbol at {line}:{column}.{hint}") });
         }
 
         string? targetSymbolId = CommandTextFormatting.GetStableSymbolId(targetSymbol);
@@ -141,6 +168,243 @@ public sealed class FindReferencesCommand : IAgentCommand
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static string? GetOptionalSymbolQuery(JsonElement input)
+    {
+        if (input.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (input.TryGetProperty("symbol", out JsonElement symbolProp) &&
+            symbolProp.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(symbolProp.GetString()))
+        {
+            return symbolProp.GetString()!.Trim();
+        }
+
+        if (input.TryGetProperty("symbol_name", out JsonElement symbolNameProp) &&
+            symbolNameProp.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(symbolNameProp.GetString()))
+        {
+            return symbolNameProp.GetString()!.Trim();
+        }
+
+        return null;
+    }
+
+    private async Task<CommandExecutionResult> ExecuteBySymbolNameAsync(
+        JsonElement input,
+        string symbolQuery,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        bool includeDeclaration,
+        bool includeGenerated,
+        int contextLines,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        List<CommandError> errors = new();
+        if (!WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _))
+        {
+            return new CommandExecutionResult(null, errors);
+        }
+
+        (StaticAnalysisWorkspace? workspace, CommandError? loadError) = await StaticAnalysisWorkspace
+            .ResolveAsync(input, workspacePath, includeGenerated: false, maxFiles: 50_000, cancellationToken)
+            .ConfigureAwait(false);
+        if (loadError is not null || workspace is null)
+        {
+            return new CommandExecutionResult(null, new[] { loadError ?? new CommandError("workspace_load_failed", "Failed to resolve workspace for symbol lookup.") });
+        }
+
+        if (workspace.Solution is null)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("workspace_required", "Symbol lookup (--symbol) requires a loaded MSBuild solution or project workspace. Run 'roscli workspace.use <solution>' first.") });
+        }
+
+        List<ISymbol> candidates = await ResolveSymbolsByNameAsync(workspace.Solution, symbolQuery, cancellationToken).ConfigureAwait(false);
+        if (candidates.Count == 0)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("symbol_not_found", $"No source symbol matching '{symbolQuery}' was found in workspace '{workspace.ResolvedWorkspacePath}'.") });
+        }
+
+        if (candidates.Count > 1)
+        {
+            object[] candidateSummaries = candidates
+                .Take(20)
+                .Select(FormatSymbolCandidate)
+                .ToArray();
+            return new CommandExecutionResult(
+                null,
+                new[]
+                {
+                    new CommandError(
+                        "ambiguous_symbol",
+                        $"Symbol '{symbolQuery}' matched {candidates.Count} declarations. Qualify the name further or pass <file>:<line>:<column>.",
+                        new { candidates = candidateSummaries }),
+                });
+        }
+
+        ISymbol targetSymbol = candidates[0];
+        string? targetSymbolId = CommandTextFormatting.GetStableSymbolId(targetSymbol);
+        (List<ReferenceMatch> matches, bool truncated) = await FindSolutionReferencesAsync(
+            workspace.Solution,
+            targetSymbol,
+            includeDeclaration,
+            includeGenerated,
+            contextLines,
+            maxResults,
+            cancellationToken).ConfigureAwait(false);
+
+        Location? firstSourceLocation = targetSymbol.Locations.FirstOrDefault(loc => loc.IsInSource && loc.SourceTree is not null);
+        string? declarationFilePath = firstSourceLocation?.SourceTree?.FilePath;
+        int? declarationLine = firstSourceLocation is not null ? firstSourceLocation.GetLineSpan().StartLinePosition.Line + 1 : null;
+        int? declarationColumn = firstSourceLocation is not null ? firstSourceLocation.GetLineSpan().StartLinePosition.Character + 1 : null;
+
+        object data = new
+        {
+            file_path = declarationFilePath ?? workspace.ResolvedWorkspacePath,
+            query = new
+            {
+                symbol = symbolQuery,
+                line = declarationLine,
+                column = declarationColumn,
+                include_declaration = includeDeclaration,
+                include_generated = includeGenerated,
+                max_results = maxResults,
+                workspace_path = workspacePath ?? workspace.ResolvedWorkspacePath,
+                workspace_handle = workspaceHandle,
+                require_workspace = requireWorkspace,
+            },
+            symbol = new
+            {
+                symbol_display = targetSymbol.ToDisplayString(),
+                symbol_kind = targetSymbol.Kind.ToString(),
+                symbol_id = targetSymbolId,
+            },
+            search_scope = SolutionSearchScope.SolutionKind,
+            searched_projects = workspace.Solution.Projects.Count(),
+            total_matches = matches.Count,
+            truncated,
+            matches,
+        };
+
+        return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static async Task<List<ISymbol>> ResolveSymbolsByNameAsync(
+        Solution solution,
+        string symbolQuery,
+        CancellationToken cancellationToken)
+    {
+        string normalizedQuery = symbolQuery.Trim();
+        if (normalizedQuery.StartsWith("global::", StringComparison.Ordinal))
+        {
+            normalizedQuery = normalizedQuery["global::".Length..];
+        }
+
+        int parenIndex = normalizedQuery.IndexOf('(');
+        if (parenIndex > 0)
+        {
+            normalizedQuery = normalizedQuery[..parenIndex].Trim();
+        }
+
+        string[] segments = normalizedQuery.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 0)
+        {
+            return new List<ISymbol>();
+        }
+
+        string leafSegment = segments[^1];
+        int genericIndex = leafSegment.IndexOf('<');
+        string lookupName = genericIndex > 0 ? leafSegment[..genericIndex] : leafSegment;
+        int backtickIndex = lookupName.IndexOf('`');
+        if (backtickIndex > 0)
+        {
+            lookupName = lookupName[..backtickIndex];
+        }
+
+        Dictionary<string, ISymbol> byKey = new(StringComparer.Ordinal);
+        foreach (Project project in solution.Projects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IEnumerable<ISymbol> declared = await SymbolFinder
+                .FindDeclarationsAsync(project, lookupName, ignoreCase: false, SymbolFilter.TypeAndMember, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (ISymbol candidate in declared)
+            {
+                if (!candidate.Locations.Any(loc => loc.IsInSource))
+                {
+                    continue;
+                }
+
+                if (MatchesQualifiedSymbolName(candidate, normalizedQuery, StringComparison.Ordinal))
+                {
+                    string key = CommandTextFormatting.GetStableSymbolId(candidate)
+                        ?? candidate.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                    byKey.TryAdd(key, candidate);
+                }
+            }
+        }
+
+        return byKey.Values.ToList();
+    }
+
+    private static bool MatchesQualifiedSymbolName(ISymbol symbol, string query, StringComparison comparison)
+    {
+        string qualified = BuildDottedSymbolName(symbol);
+        if (string.Equals(qualified, query, comparison))
+        {
+            return true;
+        }
+
+        return qualified.EndsWith("." + query, comparison);
+    }
+
+    private static string BuildDottedSymbolName(ISymbol symbol)
+    {
+        Stack<string> parts = new();
+        ISymbol? current = symbol;
+        while (current is not null)
+        {
+            if (current is INamespaceSymbol ns)
+            {
+                if (!ns.IsGlobalNamespace && !string.IsNullOrEmpty(ns.Name))
+                {
+                    parts.Push(ns.Name);
+                }
+            }
+            else if (!string.IsNullOrEmpty(current.Name))
+            {
+                parts.Push(current.Name);
+            }
+
+            current = current.ContainingSymbol;
+        }
+
+        return string.Join(".", parts);
+    }
+
+    private static object FormatSymbolCandidate(ISymbol symbol)
+    {
+        Location? loc = symbol.Locations.FirstOrDefault(l => l.IsInSource && l.SourceTree is not null);
+        FileLinePositionSpan? span = loc?.GetLineSpan();
+        return new
+        {
+            symbol_display = symbol.ToDisplayString(),
+            symbol_kind = symbol.Kind.ToString(),
+            qualified_name = BuildDottedSymbolName(symbol),
+            file_path = loc?.SourceTree?.FilePath,
+            line = span.HasValue ? span.Value.StartLinePosition.Line + 1 : (int?)null,
+            column = span.HasValue ? span.Value.StartLinePosition.Character + 1 : (int?)null,
+        };
     }
 
     private static (List<ReferenceMatch> Matches, bool Truncated) FindSameFileReferences(

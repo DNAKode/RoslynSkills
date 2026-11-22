@@ -87,13 +87,14 @@ public sealed class FindInvocationsCommand : IAgentCommand
 
         if (!SolutionSearchScope.IsInvocationTarget(anchorSymbol))
         {
+            string hint = SymbolResolution.FormatLineSymbolHint(analysis, line, SolutionSearchScope.IsInvocationTarget, cancellationToken);
             return new CommandExecutionResult(
                 null,
                 new[]
                 {
                     new CommandError(
                         "invalid_target",
-                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method, constructor, or constructible type. Anchor to a method, constructor, or class/struct/record and retry."),
+                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method, constructor, or constructible type. Anchor to a method, constructor, or class/struct/record and retry.{hint}"),
                 });
         }
 
