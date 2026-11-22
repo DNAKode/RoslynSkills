@@ -6360,7 +6360,9 @@ Workflow:
         string? effectiveProcessPath = processPath ?? Environment.ProcessPath;
         if (!string.IsNullOrWhiteSpace(effectiveProcessPath))
         {
-            string exeName = Path.GetFileNameWithoutExtension(effectiveProcessPath);
+            // Both separators, as for the base directory above: on Linux a Windows path's backslashes are not
+            // separators, so C:\Program Files\dotnet\dotnet.exe would read as one file name (release run 45012894779).
+            string exeName = Path.GetFileNameWithoutExtension(effectiveProcessPath.Replace('\\', '/'));
             if (!string.Equals(exeName, "dotnet", StringComparison.OrdinalIgnoreCase))
             {
                 return "compiled_binary";
