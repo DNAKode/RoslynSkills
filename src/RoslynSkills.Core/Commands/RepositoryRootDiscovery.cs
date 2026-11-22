@@ -17,6 +17,12 @@ public static class RepositoryRootDiscovery
 
     public static string GetWorkspaceHostStateDirectory()
     {
+        string? overrideDir = Environment.GetEnvironmentVariable("ROSLYNSKILLS_WORKSPACE_HOST_DIR");
+        if (!string.IsNullOrWhiteSpace(overrideDir))
+        {
+            return NormalizePathRoot(overrideDir);
+        }
+
         string? root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(root))
         {

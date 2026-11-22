@@ -27,6 +27,10 @@ internal static class Program
     private static readonly object LogGate = new();
     private const long MaxLogFileBytes = 256 * 1024;
     private static int ActiveRequestCount;
+    private static int NonStatusActiveRequestCount;
+    private static long LastActivityTicksUtc = DateTimeOffset.UtcNow.UtcTicks;
+    private static TimeSpan? ConfiguredIdleTimeout;
+    private static string? ConfiguredManifestPath;
     private static readonly Dictionary<string, string> WorkspaceAliases = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object AliasGate = new();
 
@@ -50,6 +54,9 @@ internal static class Program
 
         InitializeLog(options.LogPath);
         RegisterLifecycleLogging();
+        ConfiguredIdleTimeout = options.IdleTimeout;
+        ConfiguredManifestPath = options.ManifestPath;
+        Interlocked.Exchange(ref LastActivityTicksUtc, DateTimeOffset.UtcNow.UtcTicks);
 
         string endpointLabel = options.Transport switch
         {
@@ -57,7 +64,13 @@ internal static class Program
             "unix-socket" => $"unix:{options.SocketPath}",
             _ => "stdio",
         };
-        Log($"host_started pid={Environment.ProcessId} transport={options.Transport} endpoint={endpointLabel} version={GetAssemblyVersion()} cwd={Environment.CurrentDirectory}");
+        string idleLabel = options.IdleTimeout is { } idle ? $"{idle.TotalSeconds:F0}s" : "disabled";
+        if (!string.IsNullOrWhiteSpace(options.LaunchWarning))
+        {
+            Log($"launch_warning {SanitizeLogText(options.LaunchWarning)}");
+        }
+
+        Log($"host_started pid={Environment.ProcessId} transport={options.Transport} endpoint={endpointLabel} idle_timeout={idleLabel} version={GetAssemblyVersion()} cwd={Environment.CurrentDirectory}");
 
         ICommandRegistry registry = DefaultRegistryFactory.Create();
         ExpectedAuthToken = string.IsNullOrWhiteSpace(options.AuthToken) ? null : options.AuthToken;
@@ -68,8 +81,8 @@ internal static class Program
             exitCode = options.Transport switch
             {
                 "stdio" => await RunStdioAsync(registry).ConfigureAwait(false),
-                "named-pipe" => await RunNamedPipeAsync(registry, options.PipeName!).ConfigureAwait(false),
-                "unix-socket" => await RunUnixSocketAsync(registry, options.SocketPath!).ConfigureAwait(false),
+                "named-pipe" => await RunNamedPipeAsync(registry, options.PipeName!, options.ExitOnStdinEof).ConfigureAwait(false),
+                "unix-socket" => await RunUnixSocketAsync(registry, options.SocketPath!, options.ExitOnStdinEof).ConfigureAwait(false),
                 _ => 2,
             };
         }
@@ -77,6 +90,10 @@ internal static class Program
         {
             Log($"host_fatal_exception type={ex.GetType().FullName} message={SanitizeLogText(ex.Message)}");
             throw;
+        }
+        finally
+        {
+            TryCleanupOwnManifestOnExit();
         }
 
         Log($"host_exiting pid={Environment.ProcessId} exit_code={exitCode}");
@@ -143,7 +160,7 @@ internal static class Program
         return false;
     }
 
-    private static async Task<int> RunNamedPipeAsync(ICommandRegistry registry, string pipeName)
+    private static async Task<int> RunNamedPipeAsync(ICommandRegistry registry, string pipeName, bool exitOnStdinEof)
     {
         CurrentTransportName = "named-pipe-jsonl";
         await using NamedPipeServerStream? instanceLock = await TryAcquireNamedPipeLockAsync(pipeName).ConfigureAwait(false);
@@ -156,6 +173,13 @@ internal static class Program
         }
 
         using CancellationTokenSource shutdownCts = new();
+        if (exitOnStdinEof)
+        {
+            StartStdinEofMonitor(shutdownCts);
+        }
+
+        StartIdleTimeoutMonitor(shutdownCts);
+
         TaskCompletionSource shutdownResponseSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         while (!shutdownCts.IsCancellationRequested)
@@ -294,7 +318,120 @@ internal static class Program
         }
     }
 
-    private static async Task<int> RunUnixSocketAsync(ICommandRegistry registry, string socketPath)
+    private static void StartStdinEofMonitor(CancellationTokenSource shutdownCts)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using Stream stdin = Console.OpenStandardInput();
+                byte[] buffer = new byte[64];
+                while (!shutdownCts.IsCancellationRequested)
+                {
+                    int read = await stdin.ReadAsync(buffer, shutdownCts.Token).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch
+            {
+            }
+
+            if (!shutdownCts.IsCancellationRequested)
+            {
+                Log("stdin_eof_shutdown");
+                try
+                {
+                    shutdownCts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        });
+    }
+
+    private static void StartIdleTimeoutMonitor(CancellationTokenSource shutdownCts)
+    {
+        TimeSpan? timeout = ConfiguredIdleTimeout;
+        if (timeout is null || timeout.Value <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        TimeSpan idleLimit = timeout.Value;
+        TimeSpan pollInterval = TimeSpan.FromMilliseconds(
+            Math.Clamp(idleLimit.TotalMilliseconds / 4.0, 100.0, 15_000.0));
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!shutdownCts.IsCancellationRequested)
+                {
+                    await Task.Delay(pollInterval, shutdownCts.Token).ConfigureAwait(false);
+                    if (Volatile.Read(ref NonStatusActiveRequestCount) > 0)
+                    {
+                        continue;
+                    }
+
+                    DateTimeOffset lastActivity = new(Interlocked.Read(ref LastActivityTicksUtc), TimeSpan.Zero);
+                    TimeSpan idleElapsed = DateTimeOffset.UtcNow - lastActivity;
+                    if (idleElapsed >= idleLimit)
+                    {
+                        Log($"host_idle_timeout pid={Environment.ProcessId} idle_seconds={idleElapsed.TotalSeconds:F1} timeout_seconds={idleLimit.TotalSeconds:F1} action=shutdown");
+                        try
+                        {
+                            shutdownCts.Cancel();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                        }
+
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        });
+    }
+
+    private static void TryCleanupOwnManifestOnExit()
+    {
+        string? manifestPath = ConfiguredManifestPath;
+        if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (doc.RootElement.TryGetProperty("ProcessId", out JsonElement pidElement) &&
+                pidElement.ValueKind == JsonValueKind.Number &&
+                pidElement.TryGetInt32(out int manifestPid) &&
+                manifestPid == Environment.ProcessId)
+            {
+                File.Delete(manifestPath);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task<int> RunUnixSocketAsync(ICommandRegistry registry, string socketPath, bool exitOnStdinEof)
     {
         CurrentTransportName = "unix-socket-jsonl";
         string? socketDirectory = Path.GetDirectoryName(socketPath);
@@ -317,6 +454,13 @@ internal static class Program
             listener.Listen(backlog: 32);
 
             using CancellationTokenSource shutdownCts = new();
+            if (exitOnStdinEof)
+            {
+                StartStdinEofMonitor(shutdownCts);
+            }
+
+            StartIdleTimeoutMonitor(shutdownCts);
+
             TaskCompletionSource shutdownResponseSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
             while (!shutdownCts.IsCancellationRequested)
@@ -454,6 +598,10 @@ internal static class Program
         string? socketPath = null;
         string? authToken = Environment.GetEnvironmentVariable("ROSLYNSKILLS_WORKSPACE_HOST_TOKEN");
         string? logPath = Environment.GetEnvironmentVariable("ROSLYNSKILLS_WORKSPACE_HOST_LOG");
+        string? manifestPath = null;
+        string? launchWarning = null;
+        bool exitOnStdinEof = false;
+        TimeSpan? idleTimeout = ResolveDefaultIdleTimeout();
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -514,9 +662,83 @@ internal static class Program
 
                     break;
 
+                case "--manifest-path":
+                    if (!TryReadOptionValue(args, ref i, value, out manifestPath, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                        return false;
+                    }
+
+                    break;
+
+                case "--launch-warning":
+                    if (!TryReadOptionValue(args, ref i, value, out launchWarning, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                        return false;
+                    }
+
+                    break;
+
+                case "--idle-timeout-minutes":
+                    if (!TryReadOptionValue(args, ref i, value, out string minutesRaw, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                        return false;
+                    }
+
+                    if (!double.TryParse(minutesRaw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double minutes))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                        error = $"Invalid numeric value '{minutesRaw}' for --idle-timeout-minutes.";
+                        return false;
+                    }
+
+                    idleTimeout = minutes > 0 ? TimeSpan.FromMinutes(minutes) : null;
+                    break;
+
+                case "--idle-timeout-seconds":
+                    if (!TryReadOptionValue(args, ref i, value, out string secondsRaw, out error))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                        return false;
+                    }
+
+                    if (!double.TryParse(secondsRaw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds))
+                    {
+                        options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                        error = $"Invalid numeric value '{secondsRaw}' for --idle-timeout-seconds.";
+                        return false;
+                    }
+
+                    idleTimeout = seconds > 0 ? TimeSpan.FromSeconds(seconds) : null;
+                    break;
+
+                case "--exit-on-stdin-eof":
+                    if (value is not null)
+                    {
+                        if (!bool.TryParse(value, out exitOnStdinEof))
+                        {
+                            options = new WorkspaceHostOptions("stdio", null, null, null, null);
+                            error = $"Invalid boolean value '{value}' for --exit-on-stdin-eof.";
+                            return false;
+                        }
+                    }
+                    else if (i + 1 < args.Length && bool.TryParse(args[i + 1], out bool parsedBool))
+                    {
+                        exitOnStdinEof = parsedBool;
+                        i++;
+                    }
+                    else
+                    {
+                        exitOnStdinEof = true;
+                    }
+
+                    break;
+
                 default:
                     options = new WorkspaceHostOptions("stdio", null, null, null, null);
-                    error = $"Unknown workspace host option '{arg}'. Supported options: --transport, --pipe-name, --socket-path, --auth-token, --log-path.";
+                    error = $"Unknown workspace host option '{arg}'. Supported options: --transport, --pipe-name, --socket-path, --auth-token, --log-path, --manifest-path, --launch-warning, --idle-timeout-minutes, --idle-timeout-seconds, --exit-on-stdin-eof.";
                     return false;
             }
         }
@@ -542,9 +764,37 @@ internal static class Program
             return false;
         }
 
-        options = new WorkspaceHostOptions(transport, pipeName, socketPath, authToken, logPath);
+        options = new WorkspaceHostOptions(
+            transport,
+            pipeName,
+            socketPath,
+            authToken,
+            logPath,
+            exitOnStdinEof,
+            idleTimeout,
+            manifestPath,
+            launchWarning);
         error = null;
         return true;
+    }
+
+    private static TimeSpan? ResolveDefaultIdleTimeout()
+    {
+        string? secondsEnv = Environment.GetEnvironmentVariable("ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_SECONDS");
+        if (!string.IsNullOrWhiteSpace(secondsEnv) &&
+            double.TryParse(secondsEnv.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double envSeconds))
+        {
+            return envSeconds > 0 ? TimeSpan.FromSeconds(envSeconds) : null;
+        }
+
+        string? minutesEnv = Environment.GetEnvironmentVariable("ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_MINUTES");
+        if (!string.IsNullOrWhiteSpace(minutesEnv) &&
+            double.TryParse(minutesEnv.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double envMinutes))
+        {
+            return envMinutes > 0 ? TimeSpan.FromMinutes(envMinutes) : null;
+        }
+
+        return TimeSpan.FromMinutes(30);
     }
 
     private static bool TryReadOptionValue(
@@ -612,6 +862,7 @@ internal static class Program
         string requestId = string.Empty;
         string method = string.Empty;
         Interlocked.Increment(ref ActiveRequestCount);
+        bool countedAsActivity = false;
 
         try
         {
@@ -644,6 +895,14 @@ internal static class Program
                     "host/handshake",
                     stopwatch).ConfigureAwait(false);
                 return false;
+            }
+
+            if (!string.Equals(method, WorkspaceHostProtocol.Method.DaemonStatus, StringComparison.Ordinal) &&
+                !string.Equals(method, WorkspaceHostProtocol.Method.Handshake, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref NonStatusActiveRequestCount);
+                Interlocked.Exchange(ref LastActivityTicksUtc, DateTimeOffset.UtcNow.UtcTicks);
+                countedAsActivity = true;
             }
 
             switch (method)
@@ -750,6 +1009,12 @@ internal static class Program
         }
         finally
         {
+            if (countedAsActivity)
+            {
+                Interlocked.Exchange(ref LastActivityTicksUtc, DateTimeOffset.UtcNow.UtcTicks);
+                Interlocked.Decrement(ref NonStatusActiveRequestCount);
+            }
+
             Interlocked.Decrement(ref ActiveRequestCount);
         }
     }
@@ -783,6 +1048,10 @@ internal static class Program
 
     private static Task HandleDaemonStatusAsync(TextWriter writer, string requestId, string method, Stopwatch stopwatch)
     {
+        DateTimeOffset lastActivityUtc = new(Interlocked.Read(ref LastActivityTicksUtc), TimeSpan.Zero);
+        double idleSeconds = Math.Round(Math.Max(0.0, (DateTimeOffset.UtcNow - lastActivityUtc).TotalSeconds), 1);
+        double? idleTimeoutSeconds = ConfiguredIdleTimeout is { } timeout ? Math.Round(timeout.TotalSeconds, 1) : null;
+        double memoryMb = Math.Round(Process.GetCurrentProcess().WorkingSet64 / (1024.0 * 1024.0), 1);
         object data = new
         {
             protocol_version = WorkspaceHostProtocol.ProtocolVersion,
@@ -791,6 +1060,10 @@ internal static class Program
             transport = CurrentTransportName,
             workspace_store = "process_hot",
             active_requests = Volatile.Read(ref ActiveRequestCount),
+            idle_seconds = idleSeconds,
+            idle_timeout_seconds = idleTimeoutSeconds,
+            last_activity_utc = lastActivityUtc,
+            memory_mb = memoryMb,
             supported_methods = SupportedMethods(),
         };
 
@@ -1501,5 +1774,9 @@ internal static class Program
         string? PipeName,
         string? SocketPath,
         string? AuthToken,
-        string? LogPath = null);
+        string? LogPath = null,
+        bool ExitOnStdinEof = false,
+        TimeSpan? IdleTimeout = null,
+        string? ManifestPath = null,
+        string? LaunchWarning = null);
 }

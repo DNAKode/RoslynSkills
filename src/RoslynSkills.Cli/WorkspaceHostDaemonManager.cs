@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -19,6 +20,15 @@ public sealed record WorkspaceHostDaemonEndpoint(
     string RepoRoot,
     string? LogPath = null);
 
+public sealed record WorkspaceHostLaunchMetadata(
+    int? DaemonPid,
+    string? LaunchMode,
+    string? DaemonLifetime,
+    string? DaemonLifetimeNote,
+    string? CallerJobFlags,
+    string? LaunchWarning,
+    bool Reused = false);
+
 public sealed record WorkspaceHostFailure(
     string Reason,
     string Message,
@@ -26,7 +36,10 @@ public sealed record WorkspaceHostFailure(
     string DaemonEndpoint,
     int? ExitCode,
     string? LogPath,
-    string? LastLogLine)
+    string? LastLogLine,
+    string? DaemonLifetime = null,
+    string? LaunchMode = null,
+    string? CallerJobFlags = null)
 {
     public object ToDetails()
         => new
@@ -34,6 +47,9 @@ public sealed record WorkspaceHostFailure(
             reason = Reason,
             daemon_pid = DaemonPid,
             daemon_endpoint = DaemonEndpoint,
+            daemon_lifetime = DaemonLifetime,
+            launch_mode = LaunchMode,
+            caller_job_flags = CallerJobFlags,
             exit_code = ExitCode,
             log_path = LogPath,
             last_log_line = LastLogLine,
@@ -49,15 +65,76 @@ public sealed record WorkspaceHostSendResult(
 
 public sealed class WorkspaceHostDaemonManager
 {
+    public const string LifetimeDetached = "detached";
+    public const string LifetimeCallerJob = "caller_job";
+    public const string LifetimeForeground = "foreground";
+    public const int DefaultMaxDaemonHosts = 8;
+    public static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(30);
+
     private const string ManifestVersion = "1.0";
     private const int MaxUnixSocketPathUtf8Bytes = 100;
     private static readonly TimeSpan LiveHostConnectTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan DeadHostProbeTimeout = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan MissingManifestProbeTimeout = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan StartLockTimeout = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
     };
+
+    public static string? GetDaemonLifetimeNote(string? daemonLifetime)
+        => string.Equals(daemonLifetime, LifetimeCallerJob, StringComparison.OrdinalIgnoreCase)
+            ? "The workspace host started inside the calling shell's Windows Job Object (KILL_ON_JOB_CLOSE without BREAKAWAY_OK) and ends when the calling shell exits. To keep the daemon alive across shells, start 'roscli daemon.run' in a long-lived runner (such as a background job) before running 'roscli workspace.use', or unset ROSCLI_DAEMON_LAUNCH=nodetach."
+            : null;
+
+    public static int ResolveMaxDaemonHosts()
+    {
+        string? raw = Environment.GetEnvironmentVariable("ROSLYNSKILLS_MAX_DAEMON_HOSTS");
+        if (!string.IsNullOrWhiteSpace(raw) &&
+            int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed) &&
+            parsed > 0)
+        {
+            return parsed;
+        }
+
+        return DefaultMaxDaemonHosts;
+    }
+
+    public static TimeSpan? ResolveIdleTimeout(TimeSpan? explicitIdleTimeout)
+    {
+        if (explicitIdleTimeout.HasValue)
+        {
+            return explicitIdleTimeout.Value > TimeSpan.Zero ? explicitIdleTimeout.Value : null;
+        }
+
+        string? secondsEnv = Environment.GetEnvironmentVariable("ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_SECONDS");
+        if (!string.IsNullOrWhiteSpace(secondsEnv) &&
+            double.TryParse(secondsEnv.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double envSeconds))
+        {
+            return envSeconds > 0 ? TimeSpan.FromSeconds(envSeconds) : null;
+        }
+
+        string? minutesEnv = Environment.GetEnvironmentVariable("ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_MINUTES");
+        if (!string.IsNullOrWhiteSpace(minutesEnv) &&
+            double.TryParse(minutesEnv.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double envMinutes))
+        {
+            return envMinutes > 0 ? TimeSpan.FromMinutes(envMinutes) : null;
+        }
+
+        return DefaultIdleTimeout;
+    }
+
+    public static bool IsNoDetachRequested(bool? explicitNoDetach)
+    {
+        if (explicitNoDetach.HasValue)
+        {
+            return explicitNoDetach.Value;
+        }
+
+        string? raw = Environment.GetEnvironmentVariable("ROSCLI_DAEMON_LAUNCH");
+        return !string.IsNullOrWhiteSpace(raw) &&
+               string.Equals(raw.Trim(), "nodetach", StringComparison.OrdinalIgnoreCase);
+    }
 
     public WorkspaceHostDaemonEndpoint GetDefaultEndpoint(string? repoRoot = null)
     {
@@ -116,27 +193,51 @@ public sealed class WorkspaceHostDaemonManager
         return $"/tmp/roscli-{hash}.sock";
     }
 
-    public async Task<CommandEnvelope> StartAsync(
+    public Task<CommandEnvelope> StartAsync(
         string? repoRoot,
         string? hostPath,
         CancellationToken cancellationToken)
+        => StartAsync(repoRoot, hostPath, noDetach: null, idleTimeout: null, cancellationToken);
+
+    public async Task<CommandEnvelope> StartAsync(
+        string? repoRoot,
+        string? hostPath,
+        bool? noDetach,
+        TimeSpan? idleTimeout,
+        CancellationToken cancellationToken)
     {
         WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        using IDisposable? startLock = await AcquireWorkspaceStartLockAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        if (startLock is null)
+        {
+            return ErrorEnvelope(
+                "daemon.start",
+                WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                $"Timed out waiting for launch lock on workspace host endpoint '{FormatEndpoint(endpoint)}'.");
+        }
+
+        // Launch order (a) & (b): reuse any existing live host (detached or foreground daemon.run) for this workspace key.
         WorkspaceHostResponse? existing = await TryGetStatusAsync(endpoint, cancellationToken).ConfigureAwait(false);
         if (existing?.Ok == true)
         {
             WorkspaceHostDaemonManifest? existingManifest = TryReadManifest(endpoint.ManifestPath);
+            string existingLifetime = existingManifest?.DaemonLifetime ?? LifetimeDetached;
             return SuccessEnvelope(
                 "daemon.start",
                 new
                 {
                     started = false,
                     already_running = true,
+                    reused = true,
                     daemon_endpoint = FormatEndpoint(endpoint),
                     daemon_pid = existingManifest?.ProcessId,
                     manifest_path = endpoint.ManifestPath,
                     log_path = existingManifest?.LogPath ?? ResolveLogPath(endpoint, existingManifest),
                     launch_mode = existingManifest?.LaunchMode,
+                    daemon_lifetime = existingLifetime,
+                    daemon_lifetime_note = GetDaemonLifetimeNote(existingLifetime),
+                    caller_job_flags = existingManifest?.CallerJobFlags,
+                    launch_warning = existingManifest?.LaunchWarning,
                     status = existing.Data,
                 });
         }
@@ -165,12 +266,27 @@ public sealed class WorkspaceHostDaemonManager
             TryDeleteFileOrSocket(endpoint.SocketPath);
         }
 
+        // Enforce per-user host cap (and clean up stale dead-PID manifests across all workspace keys).
+        CommandEnvelope? limitError = await CheckHostCapAsync("daemon.start", endpoint.ManifestPath, cancellationToken).ConfigureAwait(false);
+        if (limitError is not null)
+        {
+            return limitError;
+        }
+
         string resolvedHostPath = ResolveHostPath(hostPath);
         string authToken = GenerateAuthToken();
         string logPath = ResolveLogPath(endpoint, manifest: null);
+        TimeSpan? resolvedIdleTimeout = ResolveIdleTimeout(idleTimeout);
+        bool forceNoDetach = IsNoDetachRequested(noDetach);
 
-        (Process process, string launchMode) = StartDaemonProcess(endpoint, resolvedHostPath, authToken, logPath);
-        using (process)
+        LaunchedDaemonProcess launched = StartDaemonProcess(
+            endpoint,
+            resolvedHostPath,
+            authToken,
+            logPath,
+            resolvedIdleTimeout,
+            forceNoDetach);
+        using (launched.Process)
         {
             WorkspaceHostDaemonManifest manifest = new(
                 ManifestVersion,
@@ -180,20 +296,23 @@ public sealed class WorkspaceHostDaemonManager
                 endpoint.RepoRoot,
                 resolvedHostPath,
                 authToken,
-                process.Id,
+                launched.Process.Id,
                 DateTimeOffset.UtcNow,
                 LogPath: logPath,
-                LaunchMode: launchMode);
+                LaunchMode: launched.LaunchMode,
+                DaemonLifetime: launched.DaemonLifetime,
+                CallerJobFlags: launched.CallerJobFlags,
+                LaunchWarning: launched.LaunchWarning);
             WriteManifest(endpoint.ManifestPath, manifest);
 
-            WorkspaceHostResponse? status = await WaitForStatusAsync(endpoint, process, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+            WorkspaceHostResponse? status = await WaitForStatusAsync(endpoint, launched.Process, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
             if (status?.Ok != true)
             {
-                int? exitCode = TryGetProcessExitCode(process);
-                bool exitedBeforeReady = IsProcessExited(process);
-                TryKillProcessTree(process);
-                await WaitForProcessExitAsync(process, TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
-                exitCode ??= TryGetProcessExitCode(process);
+                int? exitCode = TryGetProcessExitCode(launched.Process);
+                bool exitedBeforeReady = IsProcessExited(launched.Process);
+                TryKillProcessTree(launched.Process);
+                await WaitForProcessExitAsync(launched.Process, TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                exitCode ??= TryGetProcessExitCode(launched.Process);
                 string? lastLogLine = TryReadLastLogLine(logPath);
                 TryDeleteManifest(endpoint.ManifestPath);
                 if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
@@ -205,12 +324,15 @@ public sealed class WorkspaceHostDaemonManager
                 string reason = exitedBeforeReady ? "host_exited_during_startup" : "startup_timeout";
                 WorkspaceHostFailure failure = new(
                     Reason: reason,
-                    Message: $"Started workspace host process {process.Id} ({launchMode}), but it did not answer daemon/status on endpoint '{FormatEndpoint(endpoint)}'{detailSuffix}.",
-                    DaemonPid: process.Id,
+                    Message: $"Started workspace host process {launched.Process.Id} ({launched.LaunchMode}), but it did not answer daemon/status on endpoint '{FormatEndpoint(endpoint)}'{detailSuffix}.",
+                    DaemonPid: launched.Process.Id,
                     DaemonEndpoint: FormatEndpoint(endpoint),
                     ExitCode: exitCode,
                     LogPath: logPath,
-                    LastLogLine: lastLogLine);
+                    LastLogLine: lastLogLine,
+                    DaemonLifetime: launched.DaemonLifetime,
+                    LaunchMode: launched.LaunchMode,
+                    CallerJobFlags: launched.CallerJobFlags);
                 return ErrorEnvelope(
                     "daemon.start",
                     WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
@@ -224,29 +346,397 @@ public sealed class WorkspaceHostDaemonManager
                 {
                     started = true,
                     already_running = false,
+                    reused = false,
                     daemon_endpoint = FormatEndpoint(endpoint),
-                    daemon_pid = process.Id,
+                    daemon_pid = launched.Process.Id,
                     manifest_path = endpoint.ManifestPath,
                     log_path = logPath,
-                    launch_mode = launchMode,
+                    launch_mode = launched.LaunchMode,
+                    daemon_lifetime = launched.DaemonLifetime,
+                    daemon_lifetime_note = GetDaemonLifetimeNote(launched.DaemonLifetime),
+                    caller_job_flags = launched.CallerJobFlags,
+                    launch_warning = launched.LaunchWarning,
+                    idle_timeout_seconds = resolvedIdleTimeout is { } t ? Math.Round(t.TotalSeconds, 1) : (double?)null,
                     host_path = resolvedHostPath,
                     status = status.Data,
                 });
         }
     }
 
-    private static (Process Process, string LaunchMode) StartDaemonProcess(
+    public Task<int> RunForegroundAsync(
+        string? repoRoot,
+        string? hostPath,
+        bool? exitOnStdinEof,
+        Func<CommandEnvelope, Task> writeEnvelopeAsync,
+        CancellationToken cancellationToken)
+        => RunForegroundAsync(repoRoot, hostPath, exitOnStdinEof, idleTimeout: null, writeEnvelopeAsync, cancellationToken);
+
+    public async Task<int> RunForegroundAsync(
+        string? repoRoot,
+        string? hostPath,
+        bool? exitOnStdinEof,
+        TimeSpan? idleTimeout,
+        Func<CommandEnvelope, Task> writeEnvelopeAsync,
+        CancellationToken cancellationToken)
+    {
+        WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        IDisposable? startLock = await AcquireWorkspaceStartLockAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        if (startLock is null)
+        {
+            await writeEnvelopeAsync(ErrorEnvelope(
+                "daemon.run",
+                WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                $"Timed out waiting for launch lock on workspace host endpoint '{FormatEndpoint(endpoint)}'.")).ConfigureAwait(false);
+            return 1;
+        }
+
+        Process? hostProcess = null;
+        int hostPid = 0;
+        string resolvedHostPath;
+        string logPath;
+        bool watchStdin;
+        TimeSpan? resolvedIdleTimeout;
+        string? callerJobFlags = OperatingSystem.IsWindows() ? QueryCallerJobInfoWindows().FormattedFlags : null;
+        WorkspaceHostResponse? readyStatus = null;
+
+        try
+        {
+            WorkspaceHostResponse? existing = await TryGetStatusAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            if (existing?.Ok == true)
+            {
+                WorkspaceHostDaemonManifest? existingManifest = TryReadManifest(endpoint.ManifestPath);
+                await writeEnvelopeAsync(ErrorEnvelope(
+                    "daemon.run",
+                    WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                    $"A workspace host daemon (pid {existingManifest?.ProcessId}) is already running on endpoint '{FormatEndpoint(endpoint)}'. Stop it first with 'roscli daemon.stop'.",
+                    new
+                    {
+                        reason = "already_running",
+                        daemon_pid = existingManifest?.ProcessId,
+                        daemon_endpoint = FormatEndpoint(endpoint),
+                        daemon_lifetime = existingManifest?.DaemonLifetime ?? LifetimeDetached,
+                    })).ConfigureAwait(false);
+                return 1;
+            }
+
+            WorkspaceHostDaemonManifest? staleManifest = TryReadManifest(endpoint.ManifestPath);
+            if (staleManifest is not null)
+            {
+                ManagedProcessStopResult staleStop = await StopManagedProcessAsync(
+                    staleManifest,
+                    graceTimeout: TimeSpan.FromMilliseconds(250),
+                    cancellationToken).ConfigureAwait(false);
+                if (staleStop.StillAlive)
+                {
+                    await writeEnvelopeAsync(ErrorEnvelope(
+                        "daemon.run",
+                        WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                        $"Unresponsive workspace host process {staleManifest.ProcessId} on endpoint '{FormatEndpoint(endpoint)}' could not be terminated.")).ConfigureAwait(false);
+                    return 1;
+                }
+
+                TryDeleteManifest(endpoint.ManifestPath);
+            }
+
+            if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
+            {
+                TryDeleteFileOrSocket(endpoint.SocketPath);
+            }
+
+            CommandEnvelope? limitError = await CheckHostCapAsync("daemon.run", endpoint.ManifestPath, cancellationToken).ConfigureAwait(false);
+            if (limitError is not null)
+            {
+                await writeEnvelopeAsync(limitError).ConfigureAwait(false);
+                return 1;
+            }
+
+            resolvedHostPath = ResolveHostPath(hostPath);
+            string authToken = GenerateAuthToken();
+            logPath = ResolveLogPath(endpoint, manifest: null);
+            watchStdin = exitOnStdinEof ?? ShouldWatchStdinForEof();
+            resolvedIdleTimeout = ResolveIdleTimeout(idleTimeout);
+
+            string dotnetExecutable = ResolveDotnetExecutable();
+            List<string> daemonArguments = BuildDaemonArguments(
+                resolvedHostPath,
+                endpoint,
+                authToken,
+                logPath,
+                resolvedIdleTimeout,
+                launchWarning: null);
+            daemonArguments.Add("--exit-on-stdin-eof");
+
+            ProcessStartInfo startInfo = new(dotnetExecutable)
+            {
+                WorkingDirectory = ResolveHostWorkingDirectory(endpoint),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (string arg in daemonArguments)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            hostProcess = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start RoslynSkills workspace host process.");
+            hostPid = hostProcess.Id;
+            _ = Task.Run(async () =>
+            {
+                try { await hostProcess.StandardOutput.ReadToEndAsync().ConfigureAwait(false); } catch { }
+            });
+            _ = Task.Run(async () =>
+            {
+                try { await hostProcess.StandardError.ReadToEndAsync().ConfigureAwait(false); } catch { }
+            });
+
+            WorkspaceHostDaemonManifest manifest = new(
+                ManifestVersion,
+                endpoint.Transport,
+                endpoint.PipeName,
+                endpoint.SocketPath,
+                endpoint.RepoRoot,
+                resolvedHostPath,
+                authToken,
+                hostPid,
+                DateTimeOffset.UtcNow,
+                LogPath: logPath,
+                LaunchMode: "foreground",
+                DaemonLifetime: LifetimeForeground,
+                CallerJobFlags: callerJobFlags);
+            WriteManifest(endpoint.ManifestPath, manifest);
+
+            readyStatus = await WaitForStatusAsync(endpoint, hostProcess, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+            if (readyStatus?.Ok != true)
+            {
+                int? exitCode = TryGetProcessExitCode(hostProcess);
+                bool exitedBeforeReady = IsProcessExited(hostProcess);
+                TryKillProcessTree(hostProcess);
+                await WaitForProcessExitAsync(hostProcess, TimeSpan.FromSeconds(2), CancellationToken.None).ConfigureAwait(false);
+                exitCode ??= TryGetProcessExitCode(hostProcess);
+                string? lastLogLine = TryReadLastLogLine(logPath);
+                TryDeleteManifest(endpoint.ManifestPath);
+                if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
+                {
+                    TryDeleteFileOrSocket(endpoint.SocketPath);
+                }
+
+                string detailSuffix = BuildFailureDetailSuffix(exitCode, lastLogLine);
+                string reason = exitedBeforeReady ? "host_exited_during_startup" : "startup_timeout";
+                WorkspaceHostFailure failure = new(
+                    Reason: reason,
+                    Message: $"Started foreground workspace host process {hostPid}, but it did not answer daemon/status on endpoint '{FormatEndpoint(endpoint)}'{detailSuffix}.",
+                    DaemonPid: hostPid,
+                    DaemonEndpoint: FormatEndpoint(endpoint),
+                    ExitCode: exitCode,
+                    LogPath: logPath,
+                    LastLogLine: lastLogLine,
+                    DaemonLifetime: LifetimeForeground,
+                    LaunchMode: "foreground",
+                    CallerJobFlags: callerJobFlags);
+                await writeEnvelopeAsync(ErrorEnvelope(
+                    "daemon.run",
+                    WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                    failure.Message,
+                    failure.ToDetails())).ConfigureAwait(false);
+                hostProcess.Dispose();
+                return 1;
+            }
+        }
+        finally
+        {
+            // Release the start lock as soon as startup finishes so subsequent workspace.use calls can reuse this host.
+            startLock.Dispose();
+        }
+
+        using Process ownedHostProcess = hostProcess!;
+        using CancellationTokenSource stopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        ConsoleCancelEventHandler cancelHandler = (_, e) =>
+        {
+            e.Cancel = true;
+            try
+            {
+                stopCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        };
+        PosixSignalRegistration? sigTermRegistration = null;
+        PosixSignalRegistration? sigIntRegistration = null;
+        bool stopRequested = false;
+
+        try
+        {
+            Console.CancelKeyPress += cancelHandler;
+            if (!OperatingSystem.IsWindows())
+            {
+                sigTermRegistration = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+                {
+                    ctx.Cancel = true;
+                    try { stopCts.Cancel(); } catch (ObjectDisposedException) { }
+                });
+                sigIntRegistration = PosixSignalRegistration.Create(PosixSignal.SIGINT, ctx =>
+                {
+                    ctx.Cancel = true;
+                    try { stopCts.Cancel(); } catch (ObjectDisposedException) { }
+                });
+            }
+
+            await writeEnvelopeAsync(SuccessEnvelope(
+                "daemon.run",
+                new
+                {
+                    running = true,
+                    foreground = true,
+                    daemon_endpoint = FormatEndpoint(endpoint),
+                    daemon_pid = hostPid,
+                    manifest_path = endpoint.ManifestPath,
+                    log_path = logPath,
+                    launch_mode = "foreground",
+                    daemon_lifetime = LifetimeForeground,
+                    caller_job_flags = callerJobFlags,
+                    exit_on_stdin_eof = watchStdin,
+                    idle_timeout_seconds = resolvedIdleTimeout is { } t ? Math.Round(t.TotalSeconds, 1) : (double?)null,
+                    host_path = resolvedHostPath,
+                    status = readyStatus!.Data,
+                })).ConfigureAwait(false);
+
+            if (watchStdin)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using Stream stdin = Console.OpenStandardInput();
+                        byte[] buffer = new byte[64];
+                        while (!stopCts.IsCancellationRequested)
+                        {
+                            int read = await stdin.ReadAsync(buffer, stopCts.Token).ConfigureAwait(false);
+                            if (read == 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    catch
+                    {
+                    }
+
+                    try
+                    {
+                        stopCts.Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                });
+            }
+
+            Task hostExitTask = ownedHostProcess.WaitForExitAsync(CancellationToken.None);
+            Task stopSignalTask = Task.Delay(Timeout.InfiniteTimeSpan, stopCts.Token);
+            Task completed = await Task.WhenAny(hostExitTask, stopSignalTask).ConfigureAwait(false);
+
+            if (!ReferenceEquals(completed, hostExitTask))
+            {
+                stopRequested = true;
+                try
+                {
+                    // Closing child stdin triggers WorkspaceHost --exit-on-stdin-eof clean shutdown.
+                    ownedHostProcess.StandardInput.Close();
+                }
+                catch
+                {
+                }
+
+                if (!await WaitForProcessExitAsync(ownedHostProcess, TimeSpan.FromSeconds(3), CancellationToken.None).ConfigureAwait(false))
+                {
+                    _ = await SendWithDiagnosticsAsync(
+                        endpoint,
+                        new WorkspaceHostRequest(
+                            Id: Guid.NewGuid().ToString("N"),
+                            Method: WorkspaceHostProtocol.Method.Shutdown),
+                        TimeSpan.FromSeconds(2),
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (!await WaitForProcessExitAsync(ownedHostProcess, TimeSpan.FromSeconds(2), CancellationToken.None).ConfigureAwait(false))
+                    {
+                        TryKillProcessTree(ownedHostProcess);
+                        await WaitForProcessExitAsync(ownedHostProcess, TimeSpan.FromSeconds(2), CancellationToken.None).ConfigureAwait(false);
+                    }
+                }
+            }
+            else
+            {
+                await hostExitTask.ConfigureAwait(false);
+            }
+
+            int? finalExitCode = TryGetProcessExitCode(ownedHostProcess);
+            return stopRequested || finalExitCode == 0 ? 0 : (finalExitCode ?? 1);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+            sigTermRegistration?.Dispose();
+            sigIntRegistration?.Dispose();
+            try
+            {
+                stopCts.Cancel();
+            }
+            catch
+            {
+            }
+
+            if (!IsProcessExited(ownedHostProcess))
+            {
+                TryKillProcessTree(ownedHostProcess);
+            }
+
+            WorkspaceHostDaemonManifest? currentManifest = TryReadManifest(endpoint.ManifestPath);
+            if (currentManifest is null || currentManifest.ProcessId == hostPid)
+            {
+                TryDeleteManifest(endpoint.ManifestPath);
+                if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
+                {
+                    TryDeleteFileOrSocket(endpoint.SocketPath);
+                }
+            }
+        }
+    }
+
+    private static LaunchedDaemonProcess StartDaemonProcess(
         WorkspaceHostDaemonEndpoint endpoint,
         string resolvedHostPath,
         string authToken,
-        string logPath)
+        string logPath,
+        TimeSpan? idleTimeout,
+        bool forceNoDetach)
     {
         string dotnetExecutable = ResolveDotnetExecutable();
-        List<string> daemonArguments = BuildDaemonArguments(resolvedHostPath, endpoint, authToken, logPath);
         if (OperatingSystem.IsWindows())
         {
-            return StartWindowsDetachedDaemon(dotnetExecutable, daemonArguments, endpoint.RepoRoot);
+            return StartWindowsDetachedDaemon(
+                dotnetExecutable,
+                resolvedHostPath,
+                endpoint,
+                authToken,
+                logPath,
+                idleTimeout,
+                forceNoDetach);
         }
+
+        List<string> daemonArguments = BuildDaemonArguments(
+            resolvedHostPath,
+            endpoint,
+            authToken,
+            logPath,
+            idleTimeout,
+            launchWarning: null);
 
         // On Unix, starting dotnet directly with UseShellExecute=false causes the background daemon (and any
         // MSBuild/restore children it spawns) to inherit roscli's stdout/stderr pipe descriptors, hanging any
@@ -254,7 +744,7 @@ public sealed class WorkspaceHostDaemonManager
         // to /dev/null and ignores SIGHUP while keeping the exact daemon PID.
         ProcessStartInfo unixStartInfo = new("/bin/sh")
         {
-            WorkingDirectory = endpoint.RepoRoot,
+            WorkingDirectory = ResolveHostWorkingDirectory(endpoint),
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -269,212 +759,261 @@ public sealed class WorkspaceHostDaemonManager
 
         Process unixProcess = Process.Start(unixStartInfo)
             ?? throw new InvalidOperationException("Failed to start RoslynSkills workspace host process.");
-        return (unixProcess, "unix_sh_exec");
+        return new LaunchedDaemonProcess(
+            Process: unixProcess,
+            LaunchMode: "unix_sh_exec",
+            DaemonLifetime: LifetimeDetached,
+            CallerJobFlags: null,
+            LaunchWarning: null);
+    }
+
+    private static string ResolveHostWorkingDirectory(WorkspaceHostDaemonEndpoint endpoint)
+    {
+        string? stateDir = Path.GetDirectoryName(endpoint.ManifestPath);
+        if (!string.IsNullOrWhiteSpace(stateDir))
+        {
+            Directory.CreateDirectory(stateDir);
+            return stateDir;
+        }
+
+        return Path.GetTempPath();
     }
 
     [SupportedOSPlatform("windows")]
-    private static (Process Process, string LaunchMode) StartWindowsDetachedDaemon(
+    private static LaunchedDaemonProcess StartWindowsDetachedDaemon(
         string dotnetExecutable,
-        IReadOnlyList<string> daemonArguments,
-        string workingDirectory)
+        string resolvedHostPath,
+        WorkspaceHostDaemonEndpoint endpoint,
+        string authToken,
+        string logPath,
+        TimeSpan? idleTimeout,
+        bool forceNoDetach)
     {
-        string commandLine = BuildWindowsCommandLine(dotnetExecutable, daemonArguments);
+        string hostWorkingDirectory = ResolveHostWorkingDirectory(endpoint);
+        CallerJobInfo jobInfo = QueryCallerJobInfoWindows();
+        List<string> baseArguments = BuildDaemonArguments(
+            resolvedHostPath,
+            endpoint,
+            authToken,
+            logPath,
+            idleTimeout,
+            launchWarning: null);
+        string baseCommandLine = BuildWindowsCommandLine(dotnetExecutable, baseArguments);
 
-        // 1. Prefer Win32 CreateProcessW with CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | DETACHED_PROCESS
-        // and bInheritHandles = false. This inherits the full current environment block (e.g. test overrides),
-        // avoids handle leaks, and escapes any parent job object that permits breakaway.
-        if (TryStartWindowsProcessWithBreakaway(commandLine, workingDirectory, out Process? breakawayProcess) &&
+        // Launch order (c): Prefer Win32 CreateProcessW with CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | DETACHED_PROCESS
+        // and bInheritHandles = false. Where the caller is in no job or its job allows breakaway, this detaches cleanly
+        // without handle leaks while preserving the environment block.
+        if (TryStartWindowsProcess(baseCommandLine, hostWorkingDirectory, breakawayFromJob: true, out Process? breakawayProcess, out int breakawayError) &&
             breakawayProcess is not null)
         {
-            return (breakawayProcess, "create_process_breakaway");
+            return new LaunchedDaemonProcess(
+                Process: breakawayProcess,
+                LaunchMode: "create_process_breakaway",
+                DaemonLifetime: LifetimeDetached,
+                CallerJobFlags: jobInfo.FormattedFlags,
+                LaunchWarning: null);
         }
 
-        // 2. When the parent shell runs inside a Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        // and without JOB_OBJECT_LIMIT_BREAKAWAY_OK (common in agent harnesses and CI runners), CreateProcessW
-        // with CREATE_BREAKAWAY_FROM_JOB fails with ERROR_ACCESS_DENIED. Spawning through WMI Win32_Process.Create
-        // launches the daemon under WmiPrvSE outside the caller's job object so it survives shell exit.
-        if (TryStartWindowsProcessViaWmi(commandLine, workingDirectory, out Process? wmiProcess) &&
-            wmiProcess is not null)
+        // Launch order (d): Breakaway was refused by the caller's Windows Job Object. Build an explicit warning with
+        // the caller job flags and process chain, and pass it to the host so it is written to both the answer and <hash>.log.
+        string callerChain = GetWindowsCallerProcessChain();
+        string jobFlagsLabel = jobInfo.FormattedFlags ?? $"win32_error={breakawayError}";
+        string idleLabel = idleTimeout is { } t ? $"{Math.Round(t.TotalMinutes, 1):G}m" : "disabled";
+        bool callerJobKillsOnClose = jobInfo.KillOnJobClose || (jobInfo.InJob && breakawayError == 5);
+
+        if (forceNoDetach)
         {
-            return (wmiProcess, "wmi_win32_process");
+            string noDetachWarning =
+                $"Breakaway from Windows Job Object was refused (job_flags={jobFlagsLabel}, caller_chain={callerChain}); " +
+                $"ROSCLI_DAEMON_LAUNCH=nodetach requested, so the host started inside the caller job (daemon_lifetime={LifetimeCallerJob}) " +
+                $"and ends when the calling shell exits. Run 'roscli daemon.run' in a long-lived runner to keep it alive across shells.";
+            List<string> noDetachArgs = BuildDaemonArguments(resolvedHostPath, endpoint, authToken, logPath, idleTimeout, noDetachWarning);
+            string noDetachCmd = BuildWindowsCommandLine(dotnetExecutable, noDetachArgs);
+            if (TryStartWindowsProcess(noDetachCmd, hostWorkingDirectory, breakawayFromJob: false, out Process? inJobProcess, out _) &&
+                inJobProcess is not null)
+            {
+                return new LaunchedDaemonProcess(
+                    Process: inJobProcess,
+                    LaunchMode: callerJobKillsOnClose ? "caller_job" : "create_process_detached",
+                    DaemonLifetime: callerJobKillsOnClose ? LifetimeCallerJob : LifetimeDetached,
+                    CallerJobFlags: jobInfo.FormattedFlags,
+                    LaunchWarning: noDetachWarning);
+            }
+        }
+        else
+        {
+            string wmiWarning =
+                $"Breakaway from Windows Job Object was refused (job_flags={jobFlagsLabel}, caller_chain={callerChain}); " +
+                $"launched detached host via WMI Win32_Process.Create (idle timeout {idleLabel}, bounded by per-user host cap). " +
+                $"Prefer 'roscli daemon.run' under a long-lived runner where available, or set ROSCLI_DAEMON_LAUNCH=nodetach to stay inside the caller job.";
+            List<string> wmiArgs = BuildDaemonArguments(resolvedHostPath, endpoint, authToken, logPath, idleTimeout, wmiWarning);
+            string wmiCmd = BuildWindowsCommandLine(dotnetExecutable, wmiArgs);
+            if (TryStartWindowsProcessViaWmi(wmiCmd, hostWorkingDirectory, out Process? wmiProcess) &&
+                wmiProcess is not null)
+            {
+                return new LaunchedDaemonProcess(
+                    Process: wmiProcess,
+                    LaunchMode: "wmi_win32_process",
+                    DaemonLifetime: LifetimeDetached,
+                    CallerJobFlags: jobInfo.FormattedFlags,
+                    LaunchWarning: wmiWarning);
+            }
         }
 
-        // 3. Final fallback if both Win32 breakaway and WMI are unavailable in a restricted environment.
+        string fallbackWarning =
+            $"Breakaway from Windows Job Object was refused (job_flags={jobFlagsLabel}, caller_chain={callerChain}) and detached WMI launch was unavailable or disabled; " +
+            $"started inside the caller job (daemon_lifetime={(callerJobKillsOnClose ? LifetimeCallerJob : LifetimeDetached)}).";
+        List<string> fallbackArgs = BuildDaemonArguments(resolvedHostPath, endpoint, authToken, logPath, idleTimeout, fallbackWarning);
+        string fallbackCmd = BuildWindowsCommandLine(dotnetExecutable, fallbackArgs);
+        if (TryStartWindowsProcess(fallbackCmd, hostWorkingDirectory, breakawayFromJob: false, out Process? directInJob, out _) &&
+            directInJob is not null)
+        {
+            return new LaunchedDaemonProcess(
+                Process: directInJob,
+                LaunchMode: callerJobKillsOnClose ? "caller_job" : "create_process_detached",
+                DaemonLifetime: callerJobKillsOnClose ? LifetimeCallerJob : LifetimeDetached,
+                CallerJobFlags: jobInfo.FormattedFlags,
+                LaunchWarning: fallbackWarning);
+        }
+
         ProcessStartInfo fallbackStartInfo = new(dotnetExecutable)
         {
-            WorkingDirectory = workingDirectory,
+            WorkingDirectory = hostWorkingDirectory,
             UseShellExecute = true,
             CreateNoWindow = false,
             WindowStyle = ProcessWindowStyle.Hidden,
         };
-        foreach (string arg in daemonArguments)
+        foreach (string arg in fallbackArgs)
         {
             fallbackStartInfo.ArgumentList.Add(arg);
         }
 
         Process fallbackProcess = Process.Start(fallbackStartInfo)
             ?? throw new InvalidOperationException("Failed to start RoslynSkills workspace host process.");
-        return (fallbackProcess, "shell_execute_fallback");
+        return new LaunchedDaemonProcess(
+            Process: fallbackProcess,
+            LaunchMode: callerJobKillsOnClose ? "caller_job" : "shell_execute_fallback",
+            DaemonLifetime: callerJobKillsOnClose ? LifetimeCallerJob : LifetimeDetached,
+            CallerJobFlags: jobInfo.FormattedFlags,
+            LaunchWarning: fallbackWarning);
     }
 
-    private static List<string> BuildDaemonArguments(
-        string resolvedHostPath,
-        WorkspaceHostDaemonEndpoint endpoint,
-        string authToken,
-        string logPath)
+    [SupportedOSPlatform("windows")]
+    private static CallerJobInfo QueryCallerJobInfoWindows()
     {
-        List<string> args = new()
-        {
-            resolvedHostPath,
-            "--transport",
-            endpoint.Transport,
-            "--auth-token",
-            authToken,
-            "--log-path",
-            logPath,
-        };
-        if (endpoint.Transport == "named-pipe")
-        {
-            args.Add("--pipe-name");
-            args.Add(endpoint.PipeName!);
-        }
-        else
-        {
-            args.Add("--socket-path");
-            args.Add(endpoint.SocketPath!);
-        }
-
-        return args;
-    }
-
-    internal static string BuildWindowsCommandLine(string executable, IReadOnlyList<string> arguments)
-    {
-        StringBuilder builder = new();
-        AppendWindowsArgument(builder, executable);
-        foreach (string argument in arguments)
-        {
-            builder.Append(' ');
-            AppendWindowsArgument(builder, argument);
-        }
-
-        return builder.ToString();
-    }
-
-    private static void AppendWindowsArgument(StringBuilder builder, string argument)
-    {
-        if (argument.Length == 0)
-        {
-            builder.Append("\"\"");
-            return;
-        }
-
-        bool needsQuotes = false;
-        foreach (char ch in argument)
-        {
-            if (char.IsWhiteSpace(ch) || ch == '"')
-            {
-                needsQuotes = true;
-                break;
-            }
-        }
-
-        if (!needsQuotes)
-        {
-            builder.Append(argument);
-            return;
-        }
-
-        builder.Append('"');
-        int backslashes = 0;
-        foreach (char ch in argument)
-        {
-            if (ch == '\\')
-            {
-                backslashes++;
-            }
-            else if (ch == '"')
-            {
-                builder.Append('\\', backslashes * 2 + 1);
-                builder.Append('"');
-                backslashes = 0;
-            }
-            else
-            {
-                if (backslashes > 0)
-                {
-                    builder.Append('\\', backslashes);
-                    backslashes = 0;
-                }
-
-                builder.Append(ch);
-            }
-        }
-
-        if (backslashes > 0)
-        {
-            builder.Append('\\', backslashes * 2);
-        }
-
-        builder.Append('"');
-    }
-
-    private static bool TryStartWindowsProcessWithBreakaway(
-        string commandLine,
-        string workingDirectory,
-        out Process? process)
-    {
-        process = null;
-        const uint DetachedProcess = 0x00000008;
-        const uint CreateBreakawayFromJob = 0x01000000;
-        const uint CreateNoWindow = 0x08000000;
-        const uint CreateUnicodeEnvironment = 0x00000400;
-        const uint StartfUseShowWindow = 0x00000001;
-        const short SwHide = 0;
-
-        StartupInfoW startupInfo = new()
-        {
-            cb = Marshal.SizeOf<StartupInfoW>(),
-            dwFlags = StartfUseShowWindow,
-            wShowWindow = SwHide,
-        };
-
-        StringBuilder mutableCommandLine = new(commandLine);
-        bool created = CreateProcessW(
-            lpApplicationName: null,
-            lpCommandLine: mutableCommandLine,
-            lpProcessAttributes: IntPtr.Zero,
-            lpThreadAttributes: IntPtr.Zero,
-            bInheritHandles: false,
-            dwCreationFlags: CreateBreakawayFromJob | CreateNoWindow | DetachedProcess | CreateUnicodeEnvironment,
-            lpEnvironment: IntPtr.Zero,
-            lpCurrentDirectory: workingDirectory,
-            ref startupInfo,
-            out ProcessInformation processInfo);
-        if (!created)
-        {
-            return false;
-        }
+        const uint JobObjectLimitBreakawayOk = 0x00000800;
+        const uint JobObjectLimitSilentBreakawayOk = 0x00001000;
+        const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        const int JobObjectExtendedLimitInformation = 9;
 
         try
         {
-            process = Process.GetProcessById((int)processInfo.dwProcessId);
-            return true;
+            if (!IsProcessInJob(GetCurrentProcess(), IntPtr.Zero, out bool inJob) || !inJob)
+            {
+                return new CallerJobInfo(InJob: false, LimitFlags: null, FormattedFlags: null, KillOnJobClose: false, BreakawayOk: true);
+            }
+
+            int size = Marshal.SizeOf<JobObjectExtendedLimitInfo>();
+            IntPtr buffer = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (QueryInformationJobObject(IntPtr.Zero, JobObjectExtendedLimitInformation, buffer, (uint)size, out _))
+                {
+                    JobObjectExtendedLimitInfo info = Marshal.PtrToStructure<JobObjectExtendedLimitInfo>(buffer);
+                    uint flags = info.BasicLimitInformation.LimitFlags;
+                    bool killOnClose = (flags & JobObjectLimitKillOnJobClose) != 0;
+                    bool breakawayOk = (flags & (JobObjectLimitBreakawayOk | JobObjectLimitSilentBreakawayOk)) != 0;
+                    return new CallerJobInfo(
+                        InJob: true,
+                        LimitFlags: flags,
+                        FormattedFlags: FormatJobLimitFlags(flags),
+                        KillOnJobClose: killOnClose,
+                        BreakawayOk: breakawayOk);
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+
+            return new CallerJobInfo(InJob: true, LimitFlags: null, FormattedFlags: "in_job(unreadable_flags)", KillOnJobClose: false, BreakawayOk: false);
         }
         catch
         {
-            process = null;
-            return false;
+            return new CallerJobInfo(InJob: false, LimitFlags: null, FormattedFlags: null, KillOnJobClose: false, BreakawayOk: false);
+        }
+    }
+
+    private static string FormatJobLimitFlags(uint flags)
+    {
+        List<string> names = new();
+        if ((flags & 0x00000800) != 0) names.Add("BREAKAWAY_OK");
+        if ((flags & 0x00001000) != 0) names.Add("SILENT_BREAKAWAY_OK");
+        if ((flags & 0x00002000) != 0) names.Add("KILL_ON_JOB_CLOSE");
+        if ((flags & 0x00000100) != 0) names.Add("PROCESS_MEMORY");
+        if ((flags & 0x00000200) != 0) names.Add("JOB_MEMORY");
+        if ((flags & 0x00000400) != 0) names.Add("DIE_ON_UNHANDLED_EXCEPTION");
+        string hex = $"0x{flags:X8}";
+        return names.Count == 0 ? hex : $"{hex} ({string.Join(" | ", names)})";
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string GetWindowsCallerProcessChain()
+    {
+        const uint Th32csSnapProcess = 0x00000002;
+        IntPtr invalidHandle = new(-1);
+        IntPtr snapshot = IntPtr.Zero;
+        try
+        {
+            snapshot = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+            if (snapshot == IntPtr.Zero || snapshot == invalidHandle)
+            {
+                return $"pid({Environment.ProcessId})";
+            }
+
+            Dictionary<int, (int ParentPid, string Name)> processMap = new();
+            ProcessEntry32W entry = new() { dwSize = (uint)Marshal.SizeOf<ProcessEntry32W>() };
+            if (Process32FirstW(snapshot, ref entry))
+            {
+                do
+                {
+                    processMap[(int)entry.th32ProcessID] = ((int)entry.th32ParentProcessID, entry.szExeFile ?? "unknown");
+                }
+                while (Process32NextW(snapshot, ref entry));
+            }
+
+            List<string> chain = new();
+            HashSet<int> visited = new();
+            int currentPid = Environment.ProcessId;
+            for (int depth = 0; depth < 6 && currentPid > 0 && visited.Add(currentPid); depth++)
+            {
+                if (!processMap.TryGetValue(currentPid, out (int ParentPid, string Name) info))
+                {
+                    chain.Add($"pid({currentPid})");
+                    break;
+                }
+
+                string shortName = Path.GetFileNameWithoutExtension(info.Name);
+                chain.Add($"{shortName}({currentPid})");
+                if (info.ParentPid <= 0 || info.ParentPid == currentPid)
+                {
+                    break;
+                }
+
+                currentPid = info.ParentPid;
+            }
+
+            return chain.Count > 0 ? string.Join(" <- ", chain) : $"pid({Environment.ProcessId})";
+        }
+        catch
+        {
+            return $"pid({Environment.ProcessId})";
         }
         finally
         {
-            if (processInfo.hThread != IntPtr.Zero)
+            if (snapshot != IntPtr.Zero && snapshot != invalidHandle)
             {
-                CloseHandle(processInfo.hThread);
-            }
-
-            if (processInfo.hProcess != IntPtr.Zero)
-            {
-                CloseHandle(processInfo.hProcess);
+                CloseHandle(snapshot);
             }
         }
     }
@@ -553,8 +1092,8 @@ public sealed class WorkspaceHostDaemonManager
 
             object? returnValueObj = GetWmiPropertyValue(result, "ReturnValue");
             object? processIdObj = GetWmiPropertyValue(result, "ProcessId");
-            int returnValue = returnValueObj is not null ? Convert.ToInt32(returnValueObj) : -1;
-            int processId = processIdObj is not null ? Convert.ToInt32(processIdObj) : 0;
+            int returnValue = returnValueObj is not null ? Convert.ToInt32(returnValueObj, CultureInfo.InvariantCulture) : -1;
+            int processId = processIdObj is not null ? Convert.ToInt32(processIdObj, CultureInfo.InvariantCulture) : 0;
             if (returnValue != 0 || processId <= 0)
             {
                 return false;
@@ -622,10 +1161,251 @@ public sealed class WorkspaceHostDaemonManager
         {
             try
             {
-                Marshal.FinalReleaseComObject(value);
+                _ = Marshal.FinalReleaseComObject(value);
             }
             catch
             {
+            }
+        }
+    }
+
+    private static bool ShouldWatchStdinForEof()
+    {
+        if (!Console.IsInputRedirected)
+        {
+            return false;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            const int StdInputHandle = -10;
+            const uint FileTypePipe = 0x0003;
+            try
+            {
+                IntPtr handle = GetStdHandle(StdInputHandle);
+                if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+                {
+                    return false;
+                }
+
+                return GetFileType(handle) == FileTypePipe;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // On Linux/Unix, background runners frequently attach stdin to /dev/null (immediate EOF).
+        // Only treat redirected stdin as a lifetime pipe when fd 0 does not resolve to /dev/null.
+        try
+        {
+            if (File.Exists("/proc/self/fd/0"))
+            {
+                FileSystemInfo? target = File.ResolveLinkTarget("/proc/self/fd/0", returnFinalTarget: false);
+                if (target is not null)
+                {
+                    string targetPath = target.FullName;
+                    if (string.Equals(targetPath, "/dev/null", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    return targetPath.Contains("pipe:", StringComparison.Ordinal) ||
+                           targetPath.Contains("socket:", StringComparison.Ordinal);
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return true;
+    }
+
+    private static List<string> BuildDaemonArguments(
+        string resolvedHostPath,
+        WorkspaceHostDaemonEndpoint endpoint,
+        string authToken,
+        string logPath,
+        TimeSpan? idleTimeout,
+        string? launchWarning)
+    {
+        List<string> args = new()
+        {
+            resolvedHostPath,
+            "--transport",
+            endpoint.Transport,
+            "--auth-token",
+            authToken,
+            "--log-path",
+            logPath,
+            "--manifest-path",
+            endpoint.ManifestPath,
+        };
+        if (endpoint.Transport == "named-pipe")
+        {
+            args.Add("--pipe-name");
+            args.Add(endpoint.PipeName!);
+        }
+        else
+        {
+            args.Add("--socket-path");
+            args.Add(endpoint.SocketPath!);
+        }
+
+        double idleSeconds = idleTimeout is { } t && t > TimeSpan.Zero ? t.TotalSeconds : 0.0;
+        args.Add("--idle-timeout-seconds");
+        args.Add(idleSeconds.ToString("G", CultureInfo.InvariantCulture));
+
+        if (!string.IsNullOrWhiteSpace(launchWarning))
+        {
+            args.Add("--launch-warning");
+            args.Add(launchWarning);
+        }
+
+        return args;
+    }
+
+    internal static string BuildWindowsCommandLine(string executable, IReadOnlyList<string> arguments)
+    {
+        StringBuilder builder = new();
+        AppendWindowsArgument(builder, executable);
+        foreach (string argument in arguments)
+        {
+            builder.Append(' ');
+            AppendWindowsArgument(builder, argument);
+        }
+
+        return builder.ToString();
+    }
+
+    private static void AppendWindowsArgument(StringBuilder builder, string argument)
+    {
+        if (argument.Length == 0)
+        {
+            builder.Append("\"\"");
+            return;
+        }
+
+        bool needsQuotes = false;
+        foreach (char ch in argument)
+        {
+            if (char.IsWhiteSpace(ch) || ch == '"')
+            {
+                needsQuotes = true;
+                break;
+            }
+        }
+
+        if (!needsQuotes)
+        {
+            builder.Append(argument);
+            return;
+        }
+
+        builder.Append('"');
+        int backslashes = 0;
+        foreach (char ch in argument)
+        {
+            if (ch == '\\')
+            {
+                backslashes++;
+            }
+            else if (ch == '"')
+            {
+                builder.Append('\\', backslashes * 2 + 1);
+                builder.Append('"');
+                backslashes = 0;
+            }
+            else
+            {
+                if (backslashes > 0)
+                {
+                    builder.Append('\\', backslashes);
+                    backslashes = 0;
+                }
+
+                builder.Append(ch);
+            }
+        }
+
+        if (backslashes > 0)
+        {
+            builder.Append('\\', backslashes * 2);
+        }
+
+        builder.Append('"');
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static bool TryStartWindowsProcess(
+        string commandLine,
+        string workingDirectory,
+        bool breakawayFromJob,
+        out Process? process,
+        out int lastWin32Error)
+    {
+        process = null;
+        lastWin32Error = 0;
+        const uint DetachedProcess = 0x00000008;
+        const uint CreateBreakawayFromJob = 0x01000000;
+        const uint CreateNoWindow = 0x08000000;
+        const uint CreateUnicodeEnvironment = 0x00000400;
+        const uint StartfUseShowWindow = 0x00000001;
+        const short SwHide = 0;
+
+        StartupInfoW startupInfo = new()
+        {
+            cb = Marshal.SizeOf<StartupInfoW>(),
+            dwFlags = StartfUseShowWindow,
+            wShowWindow = SwHide,
+        };
+
+        uint creationFlags = CreateNoWindow | DetachedProcess | CreateUnicodeEnvironment;
+        if (breakawayFromJob)
+        {
+            creationFlags |= CreateBreakawayFromJob;
+        }
+
+        StringBuilder mutableCommandLine = new(commandLine);
+        bool created = CreateProcessW(
+            lpApplicationName: null,
+            lpCommandLine: mutableCommandLine,
+            lpProcessAttributes: IntPtr.Zero,
+            lpThreadAttributes: IntPtr.Zero,
+            bInheritHandles: false,
+            dwCreationFlags: creationFlags,
+            lpEnvironment: IntPtr.Zero,
+            lpCurrentDirectory: workingDirectory,
+            ref startupInfo,
+            out ProcessInformation processInfo);
+        if (!created)
+        {
+            lastWin32Error = Marshal.GetLastWin32Error();
+            return false;
+        }
+
+        try
+        {
+            process = Process.GetProcessById((int)processInfo.dwProcessId);
+            return true;
+        }
+        catch
+        {
+            process = null;
+            return false;
+        }
+        finally
+        {
+            if (processInfo.hThread != IntPtr.Zero)
+            {
+                CloseHandle(processInfo.hThread);
+            }
+
+            if (processInfo.hProcess != IntPtr.Zero)
+            {
+                CloseHandle(processInfo.hProcess);
             }
         }
     }
@@ -745,6 +1525,7 @@ public sealed class WorkspaceHostDaemonManager
                 failure.ToDetails());
         }
 
+        string daemonLifetime = manifest?.DaemonLifetime ?? LifetimeDetached;
         return SuccessEnvelope(
             "daemon.status",
             new
@@ -755,6 +1536,10 @@ public sealed class WorkspaceHostDaemonManager
                 manifest_path = endpoint.ManifestPath,
                 log_path = manifest?.LogPath ?? ResolveLogPath(endpoint, manifest),
                 launch_mode = manifest?.LaunchMode,
+                daemon_lifetime = daemonLifetime,
+                daemon_lifetime_note = GetDaemonLifetimeNote(daemonLifetime),
+                caller_job_flags = manifest?.CallerJobFlags,
+                launch_warning = manifest?.LaunchWarning,
                 status = result.Response.Data,
             });
     }
@@ -803,7 +1588,10 @@ public sealed class WorkspaceHostDaemonManager
                 DaemonEndpoint: FormatEndpoint(endpoint),
                 ExitCode: null,
                 LogPath: ResolveLogPath(endpoint, manifest),
-                LastLogLine: TryReadLastLogLine(ResolveLogPath(endpoint, manifest)));
+                LastLogLine: TryReadLastLogLine(ResolveLogPath(endpoint, manifest)),
+                DaemonLifetime: manifest?.DaemonLifetime,
+                LaunchMode: manifest?.LaunchMode,
+                CallerJobFlags: manifest?.CallerJobFlags);
             return ErrorEnvelope(
                 "daemon.stop",
                 WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
@@ -821,6 +1609,109 @@ public sealed class WorkspaceHostDaemonManager
                 daemon_endpoint = FormatEndpoint(endpoint),
                 manifest_path = endpoint.ManifestPath,
                 response = response?.Data,
+            });
+    }
+
+    public async Task<CommandEnvelope> ListAsync(CancellationToken cancellationToken)
+    {
+        string stateDirectory = RepositoryRootDiscovery.GetWorkspaceHostStateDirectory();
+        (List<ManagedHostSnapshot> liveHosts, List<string> removedStaleManifests) = await ScanManagedHostsAsync(
+            stateDirectory,
+            excludeManifestPath: null,
+            deleteDeadManifests: true,
+            cancellationToken).ConfigureAwait(false);
+
+        return SuccessEnvelope(
+            "daemon.list",
+            new
+            {
+                state_directory = stateDirectory,
+                active_count = liveHosts.Count,
+                max_hosts = ResolveMaxDaemonHosts(),
+                cleaned_stale_manifests = removedStaleManifests.Count,
+                hosts = liveHosts.Select(h => h.ToPublicObject()).ToArray(),
+            });
+    }
+
+    public async Task<CommandEnvelope> PruneAsync(
+        bool pruneAll,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        string stateDirectory = RepositoryRootDiscovery.GetWorkspaceHostStateDirectory();
+        (List<ManagedHostSnapshot> liveHosts, List<string> staleManifests) = await ScanManagedHostsAsync(
+            stateDirectory,
+            excludeManifestPath: null,
+            deleteDeadManifests: !dryRun,
+            cancellationToken).ConfigureAwait(false);
+
+        List<object> stoppedHosts = new();
+        List<ManagedHostSnapshot> remainingHosts = new();
+
+        foreach (ManagedHostSnapshot host in liveHosts)
+        {
+            bool folderMissing = !host.RepoRootExists;
+            bool shouldStop = pruneAll || folderMissing;
+            if (!shouldStop)
+            {
+                remainingHosts.Add(host);
+                continue;
+            }
+
+            string reason = folderMissing ? "worktree_missing" : "prune_all";
+            if (!dryRun)
+            {
+                WorkspaceHostDaemonEndpoint hostEndpoint = new(
+                    Transport: host.Manifest.Transport,
+                    PipeName: host.Manifest.PipeName,
+                    SocketPath: host.Manifest.SocketPath,
+                    ManifestPath: host.ManifestPath,
+                    RepoRoot: host.Manifest.RepoRoot,
+                    LogPath: host.Manifest.LogPath);
+                _ = await SendWithDiagnosticsAsync(
+                    hostEndpoint,
+                    new WorkspaceHostRequest(
+                        Id: Guid.NewGuid().ToString("N"),
+                        Method: WorkspaceHostProtocol.Method.Shutdown),
+                    TimeSpan.FromSeconds(2),
+                    cancellationToken).ConfigureAwait(false);
+                _ = await StopManagedProcessAsync(
+                    host.Manifest,
+                    graceTimeout: TimeSpan.FromSeconds(2),
+                    cancellationToken).ConfigureAwait(false);
+                TryDeleteManifest(host.ManifestPath);
+                if (!string.IsNullOrWhiteSpace(host.Manifest.SocketPath))
+                {
+                    TryDeleteFileOrSocket(host.Manifest.SocketPath);
+                }
+
+                TryDeleteFileOrSocket($"{host.ManifestPath}.lock");
+            }
+
+            stoppedHosts.Add(new
+            {
+                workspace_key = host.WorkspaceKey,
+                repo_root = host.Manifest.RepoRoot,
+                daemon_pid = host.Manifest.ProcessId,
+                launch_mode = host.Manifest.LaunchMode,
+                daemon_lifetime = host.Manifest.DaemonLifetime ?? LifetimeDetached,
+                reason,
+                stopped = !dryRun,
+            });
+        }
+
+        return SuccessEnvelope(
+            "daemon.prune",
+            new
+            {
+                dry_run = dryRun,
+                prune_all = pruneAll,
+                state_directory = stateDirectory,
+                removed_stale_manifests = staleManifests.Count,
+                stopped_count = stoppedHosts.Count,
+                stopped_hosts = stoppedHosts,
+                remaining_live_hosts = remainingHosts.Count,
+                remaining_hosts = remainingHosts.Select(h => h.ToPublicObject()).ToArray(),
             });
     }
 
@@ -854,10 +1745,262 @@ public sealed class WorkspaceHostDaemonManager
         return TryReadManifest(endpoint.ManifestPath)?.ProcessId;
     }
 
+    public string? TryGetDaemonLifetime(string? repoRoot)
+    {
+        WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        return TryReadManifest(endpoint.ManifestPath)?.DaemonLifetime;
+    }
+
+    public WorkspaceHostLaunchMetadata? TryGetLaunchMetadata(string? repoRoot)
+    {
+        WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        WorkspaceHostDaemonManifest? manifest = TryReadManifest(endpoint.ManifestPath);
+        if (manifest is null)
+        {
+            return null;
+        }
+
+        string lifetime = manifest.DaemonLifetime ?? LifetimeDetached;
+        return new WorkspaceHostLaunchMetadata(
+            DaemonPid: manifest.ProcessId,
+            LaunchMode: manifest.LaunchMode,
+            DaemonLifetime: lifetime,
+            DaemonLifetimeNote: GetDaemonLifetimeNote(lifetime),
+            CallerJobFlags: manifest.CallerJobFlags,
+            LaunchWarning: manifest.LaunchWarning);
+    }
+
     public static string FormatEndpoint(WorkspaceHostDaemonEndpoint endpoint)
         => endpoint.Transport == "named-pipe"
             ? $"pipe:{endpoint.PipeName}"
             : $"unix:{endpoint.SocketPath}";
+
+    private static async Task<IDisposable?> AcquireWorkspaceStartLockAsync(
+        WorkspaceHostDaemonEndpoint endpoint,
+        CancellationToken cancellationToken)
+    {
+        string lockPath = $"{endpoint.ManifestPath}.lock";
+        string? directory = Path.GetDirectoryName(lockPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < StartLockTimeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+
+        return null;
+    }
+
+    private async Task<CommandEnvelope?> CheckHostCapAsync(
+        string commandId,
+        string? excludeManifestPath,
+        CancellationToken cancellationToken)
+    {
+        int maxHosts = ResolveMaxDaemonHosts();
+        string stateDirectory = RepositoryRootDiscovery.GetWorkspaceHostStateDirectory();
+        (List<ManagedHostSnapshot> liveHosts, _) = await ScanManagedHostsAsync(
+            stateDirectory,
+            excludeManifestPath,
+            deleteDeadManifests: true,
+            cancellationToken).ConfigureAwait(false);
+        if (liveHosts.Count < maxHosts)
+        {
+            return null;
+        }
+
+        string message =
+            $"Refused to start a new workspace host: {liveHosts.Count} live workspace hosts already running (per-user cap: {maxHosts}). " +
+            "Stop unused hosts with 'roscli daemon.prune' (or 'roscli daemon.prune --all'), inspect them with 'roscli daemon.list', or raise ROSLYNSKILLS_MAX_DAEMON_HOSTS.";
+        return ErrorEnvelope(
+            commandId,
+            "daemon_host_limit_reached",
+            message,
+            new
+            {
+                reason = "host_limit_reached",
+                max_hosts = maxHosts,
+                active_count = liveHosts.Count,
+                hosts = liveHosts.Select(h => h.ToPublicObject()).ToArray(),
+            });
+    }
+
+    private async Task<(List<ManagedHostSnapshot> LiveHosts, List<string> StaleManifests)> ScanManagedHostsAsync(
+        string stateDirectory,
+        string? excludeManifestPath,
+        bool deleteDeadManifests,
+        CancellationToken cancellationToken)
+    {
+        List<ManagedHostSnapshot> liveHosts = new();
+        List<string> staleManifests = new();
+        if (!Directory.Exists(stateDirectory))
+        {
+            return (liveHosts, staleManifests);
+        }
+
+        string? normalizedExclude = string.IsNullOrWhiteSpace(excludeManifestPath)
+            ? null
+            : Path.GetFullPath(excludeManifestPath);
+
+        string[] manifestFiles;
+        try
+        {
+            manifestFiles = Directory.GetFiles(stateDirectory, "*.json");
+        }
+        catch
+        {
+            return (liveHosts, staleManifests);
+        }
+
+        foreach (string manifestPath in manifestFiles)
+        {
+            string fileName = Path.GetFileName(manifestPath);
+            if (fileName.EndsWith(".workspaces.json", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (normalizedExclude is not null &&
+                string.Equals(Path.GetFullPath(manifestPath), normalizedExclude, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            WorkspaceHostDaemonManifest? manifest = TryReadManifest(manifestPath);
+            if (manifest is null)
+            {
+                continue;
+            }
+
+            using Process? proc = TryGetManagedDaemonProcess(manifest);
+            if (proc is null || IsProcessExited(proc))
+            {
+                staleManifests.Add(manifestPath);
+                if (deleteDeadManifests)
+                {
+                    TryDeleteManifest(manifestPath);
+                    if (!string.IsNullOrWhiteSpace(manifest.SocketPath))
+                    {
+                        TryDeleteFileOrSocket(manifest.SocketPath);
+                    }
+
+                    TryDeleteFileOrSocket($"{manifestPath}.lock");
+                }
+
+                continue;
+            }
+
+            double? memoryMb = TryGetProcessMemoryMb(proc);
+            double? idleSeconds = null;
+            double? idleTimeoutSeconds = null;
+
+            WorkspaceHostDaemonEndpoint hostEndpoint = new(
+                Transport: manifest.Transport,
+                PipeName: manifest.PipeName,
+                SocketPath: manifest.SocketPath,
+                ManifestPath: manifestPath,
+                RepoRoot: manifest.RepoRoot,
+                LogPath: manifest.LogPath);
+            WorkspaceHostSendResult statusProbe = await SendWithDiagnosticsAsync(
+                hostEndpoint,
+                new WorkspaceHostRequest(
+                    Id: Guid.NewGuid().ToString("N"),
+                    Method: WorkspaceHostProtocol.Method.DaemonStatus),
+                timeoutDuration: TimeSpan.FromMilliseconds(500),
+                cancellationToken,
+                connectTimeoutOverride: TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+            if (statusProbe.Response?.Ok == true && statusProbe.Response.Data is not null)
+            {
+                TryExtractStatusMetrics(statusProbe.Response.Data, out idleSeconds, out idleTimeoutSeconds, out double? statusMemoryMb);
+                memoryMb ??= statusMemoryMb;
+            }
+
+            string workspaceKey = Path.GetFileNameWithoutExtension(manifestPath);
+            bool repoRootExists = !string.IsNullOrWhiteSpace(manifest.RepoRoot) && Directory.Exists(manifest.RepoRoot);
+            liveHosts.Add(new ManagedHostSnapshot(
+                WorkspaceKey: workspaceKey,
+                ManifestPath: manifestPath,
+                Manifest: manifest,
+                EndpointLabel: FormatEndpoint(hostEndpoint),
+                RepoRootExists: repoRootExists,
+                IdleSeconds: idleSeconds,
+                IdleTimeoutSeconds: idleTimeoutSeconds,
+                MemoryMb: memoryMb));
+        }
+
+        return (liveHosts, staleManifests);
+    }
+
+    private static double? TryGetProcessMemoryMb(Process process)
+    {
+        try
+        {
+            process.Refresh();
+            return Math.Round(process.WorkingSet64 / (1024.0 * 1024.0), 1);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void TryExtractStatusMetrics(
+        object data,
+        out double? idleSeconds,
+        out double? idleTimeoutSeconds,
+        out double? memoryMb)
+    {
+        idleSeconds = null;
+        idleTimeoutSeconds = null;
+        memoryMb = null;
+        try
+        {
+            JsonElement element = data is JsonElement je
+                ? je
+                : JsonSerializer.SerializeToElement(data);
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            if (element.TryGetProperty("idle_seconds", out JsonElement idleEl) && idleEl.ValueKind == JsonValueKind.Number)
+            {
+                idleSeconds = idleEl.GetDouble();
+            }
+
+            if (element.TryGetProperty("idle_timeout_seconds", out JsonElement timeoutEl) && timeoutEl.ValueKind == JsonValueKind.Number)
+            {
+                idleTimeoutSeconds = timeoutEl.GetDouble();
+            }
+
+            if (element.TryGetProperty("memory_mb", out JsonElement memEl) && memEl.ValueKind == JsonValueKind.Number)
+            {
+                memoryMb = memEl.GetDouble();
+            }
+        }
+        catch
+        {
+        }
+    }
 
     private static async Task<WorkspaceHostResponse?> WaitForStatusAsync(
         WorkspaceHostDaemonEndpoint endpoint,
@@ -1123,9 +2266,13 @@ public sealed class WorkspaceHostDaemonManager
         catch (Exception ex) when (ex is TimeoutException or IOException or SocketException or UnauthorizedAccessException ||
                                    (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            return new WorkspaceHostSendResult(
-                Response: null,
-                Failure: BuildConnectFailure(manifest, managedProcess, endpointLabel, logPath, connectTimeout, ex));
+            WorkspaceHostFailure failure = BuildConnectFailure(manifest, managedProcess, endpointLabel, logPath, connectTimeout, ex);
+            if (string.Equals(failure.Reason, "host_exited", StringComparison.Ordinal) && manifest is not null)
+            {
+                TryCleanupDeadManifest(endpoint, manifest.ProcessId);
+            }
+
+            return new WorkspaceHostSendResult(Response: null, Failure: failure);
         }
 
         await using (client)
@@ -1147,9 +2294,26 @@ public sealed class WorkspaceHostDaemonManager
             catch (Exception ex) when (ex is IOException or TimeoutException or SocketException or UnauthorizedAccessException ||
                                        (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
-                return new WorkspaceHostSendResult(
-                    Response: null,
-                    Failure: BuildRequestFailure(manifest, managedProcess, endpointLabel, logPath, timeoutDuration, ex));
+                WorkspaceHostFailure failure = BuildRequestFailure(manifest, managedProcess, endpointLabel, logPath, timeoutDuration, ex);
+                if (string.Equals(failure.Reason, "host_exited", StringComparison.Ordinal) && manifest is not null)
+                {
+                    TryCleanupDeadManifest(endpoint, manifest.ProcessId);
+                }
+
+                return new WorkspaceHostSendResult(Response: null, Failure: failure);
+            }
+        }
+    }
+
+    private static void TryCleanupDeadManifest(WorkspaceHostDaemonEndpoint endpoint, int deadPid)
+    {
+        WorkspaceHostDaemonManifest? current = TryReadManifest(endpoint.ManifestPath);
+        if (current is not null && current.ProcessId == deadPid)
+        {
+            TryDeleteManifest(endpoint.ManifestPath);
+            if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
+            {
+                TryDeleteFileOrSocket(endpoint.SocketPath);
             }
         }
     }
@@ -1226,10 +2390,17 @@ public sealed class WorkspaceHostDaemonManager
         bool hostExited = manifest is not null && (managedProcess is null || IsProcessExited(managedProcess));
         string? lastLogLine = TryReadLastLogLine(logPath);
         string detailSuffix = BuildFailureDetailSuffix(exitCode, lastLogLine);
+        string? daemonLifetime = manifest?.DaemonLifetime;
+        string? launchMode = manifest?.LaunchMode;
+        string? callerJobFlags = manifest?.CallerJobFlags;
 
         if (hostExited)
         {
-            string message = $"Workspace host process {manifest!.ProcessId} for endpoint '{endpointLabel}' is no longer running (exited){detailSuffix}.";
+            string jobFlagsPart = string.IsNullOrWhiteSpace(callerJobFlags) ? string.Empty : $" (job_flags={callerJobFlags})";
+            string jobNote = string.Equals(daemonLifetime, LifetimeCallerJob, StringComparison.OrdinalIgnoreCase)
+                ? $"; started with daemon_lifetime=caller_job inside a Windows KILL_ON_JOB_CLOSE job object without BREAKAWAY_OK{jobFlagsPart} so it terminates when the launching shell exits — run 'roscli daemon.run' in a long-lived runner such as a background job to keep it alive across shells"
+                : string.Empty;
+            string message = $"Workspace host process {manifest!.ProcessId} for endpoint '{endpointLabel}' is no longer running (exited{jobNote}){detailSuffix}.";
             return new WorkspaceHostFailure(
                 Reason: "host_exited",
                 Message: message,
@@ -1237,12 +2408,15 @@ public sealed class WorkspaceHostDaemonManager
                 DaemonEndpoint: endpointLabel,
                 ExitCode: exitCode,
                 LogPath: logPath,
-                LastLogLine: lastLogLine);
+                LastLogLine: lastLogLine,
+                DaemonLifetime: daemonLifetime,
+                LaunchMode: launchMode,
+                CallerJobFlags: callerJobFlags);
         }
 
         if (manifest is null)
         {
-            string message = $"No workspace host is running for endpoint '{endpointLabel}'. Start it with 'roscli workspace.use <solution-or-csproj>' or 'roscli daemon.start'{detailSuffix}.";
+            string message = $"No workspace host is running for endpoint '{endpointLabel}'. Start it with 'roscli workspace.use <solution-or-csproj>', 'roscli daemon.start', or 'roscli daemon.run'{detailSuffix}.";
             return new WorkspaceHostFailure(
                 Reason: "no_host",
                 Message: message,
@@ -1250,7 +2424,8 @@ public sealed class WorkspaceHostDaemonManager
                 DaemonEndpoint: endpointLabel,
                 ExitCode: null,
                 LogPath: logPath,
-                LastLogLine: lastLogLine);
+                LastLogLine: lastLogLine,
+                DaemonLifetime: null);
         }
 
         if (ex is TimeoutException)
@@ -1263,7 +2438,10 @@ public sealed class WorkspaceHostDaemonManager
                 DaemonEndpoint: endpointLabel,
                 ExitCode: exitCode,
                 LogPath: logPath,
-                LastLogLine: lastLogLine);
+                LastLogLine: lastLogLine,
+                DaemonLifetime: daemonLifetime,
+                LaunchMode: launchMode,
+                CallerJobFlags: callerJobFlags);
         }
 
         return new WorkspaceHostFailure(
@@ -1273,7 +2451,10 @@ public sealed class WorkspaceHostDaemonManager
             DaemonEndpoint: endpointLabel,
             ExitCode: exitCode,
             LogPath: logPath,
-            LastLogLine: lastLogLine);
+            LastLogLine: lastLogLine,
+            DaemonLifetime: daemonLifetime,
+            LaunchMode: launchMode,
+            CallerJobFlags: callerJobFlags);
     }
 
     private static WorkspaceHostFailure BuildRequestFailure(
@@ -1288,17 +2469,27 @@ public sealed class WorkspaceHostDaemonManager
         bool hostExited = manifest is not null && (managedProcess is null || IsProcessExited(managedProcess));
         string? lastLogLine = TryReadLastLogLine(logPath);
         string detailSuffix = BuildFailureDetailSuffix(exitCode, lastLogLine);
+        string? daemonLifetime = manifest?.DaemonLifetime;
+        string? launchMode = manifest?.LaunchMode;
+        string? callerJobFlags = manifest?.CallerJobFlags;
 
         if (hostExited)
         {
+            string jobFlagsPart = string.IsNullOrWhiteSpace(callerJobFlags) ? string.Empty : $", job_flags={callerJobFlags}";
+            string jobNote = string.Equals(daemonLifetime, LifetimeCallerJob, StringComparison.OrdinalIgnoreCase)
+                ? $" (started with daemon_lifetime=caller_job inside a Windows KILL_ON_JOB_CLOSE job object without BREAKAWAY_OK{jobFlagsPart})"
+                : string.Empty;
             return new WorkspaceHostFailure(
                 Reason: "host_exited",
-                Message: $"Workspace host process {manifest!.ProcessId} exited while handling request on endpoint '{endpointLabel}'{detailSuffix}.",
+                Message: $"Workspace host process {manifest!.ProcessId} exited while handling request on endpoint '{endpointLabel}'{jobNote}{detailSuffix}.",
                 DaemonPid: manifest.ProcessId,
                 DaemonEndpoint: endpointLabel,
                 ExitCode: exitCode,
                 LogPath: logPath,
-                LastLogLine: lastLogLine);
+                LastLogLine: lastLogLine,
+                DaemonLifetime: daemonLifetime,
+                LaunchMode: launchMode,
+                CallerJobFlags: callerJobFlags);
         }
 
         if (ex is OperationCanceledException or TimeoutException)
@@ -1310,7 +2501,10 @@ public sealed class WorkspaceHostDaemonManager
                 DaemonEndpoint: endpointLabel,
                 ExitCode: exitCode,
                 LogPath: logPath,
-                LastLogLine: lastLogLine);
+                LastLogLine: lastLogLine,
+                DaemonLifetime: daemonLifetime,
+                LaunchMode: launchMode,
+                CallerJobFlags: callerJobFlags);
         }
 
         return new WorkspaceHostFailure(
@@ -1320,7 +2514,10 @@ public sealed class WorkspaceHostDaemonManager
             DaemonEndpoint: endpointLabel,
             ExitCode: exitCode,
             LogPath: logPath,
-            LastLogLine: lastLogLine);
+            LastLogLine: lastLogLine,
+            DaemonLifetime: daemonLifetime,
+            LaunchMode: launchMode,
+            CallerJobFlags: callerJobFlags);
     }
 
     private static string ResolveLogPath(WorkspaceHostDaemonEndpoint endpoint, WorkspaceHostDaemonManifest? manifest)
@@ -1595,6 +2792,52 @@ public sealed class WorkspaceHostDaemonManager
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool IsProcessInJob(IntPtr hProcess, IntPtr hJob, out bool result);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool QueryInformationJobObject(
+        IntPtr hJob,
+        int jobObjectInfoClass,
+        IntPtr lpJobObjectInfo,
+        uint cbJobObjectInfoLength,
+        out uint lpReturnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetFileType(IntPtr hFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32FirstW(IntPtr hSnapshot, ref ProcessEntry32W lppe);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32NextW(IntPtr hSnapshot, ref ProcessEntry32W lppe);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public UIntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct StartupInfoW
     {
@@ -1627,6 +2870,42 @@ public sealed class WorkspaceHostDaemonManager
         public uint dwThreadId;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicLimitInformation
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectExtendedLimitInfo
+    {
+        public JobObjectBasicLimitInformation BasicLimitInformation;
+        public IoCounters IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
     private sealed record WorkspaceHostDaemonManifest(
         string ManifestVersion,
         string Transport,
@@ -1638,7 +2917,53 @@ public sealed class WorkspaceHostDaemonManager
         int ProcessId,
         DateTimeOffset StartedAtUtc,
         string? LogPath = null,
-        string? LaunchMode = null);
+        string? LaunchMode = null,
+        string? DaemonLifetime = null,
+        string? CallerJobFlags = null,
+        string? LaunchWarning = null);
+
+    private sealed record LaunchedDaemonProcess(
+        Process Process,
+        string LaunchMode,
+        string DaemonLifetime,
+        string? CallerJobFlags,
+        string? LaunchWarning);
+
+    private readonly record struct CallerJobInfo(
+        bool InJob,
+        uint? LimitFlags,
+        string? FormattedFlags,
+        bool KillOnJobClose,
+        bool BreakawayOk);
+
+    private sealed record ManagedHostSnapshot(
+        string WorkspaceKey,
+        string ManifestPath,
+        WorkspaceHostDaemonManifest Manifest,
+        string EndpointLabel,
+        bool RepoRootExists,
+        double? IdleSeconds,
+        double? IdleTimeoutSeconds,
+        double? MemoryMb)
+    {
+        public object ToPublicObject() => new
+        {
+            workspace_key = WorkspaceKey,
+            repo_root = Manifest.RepoRoot,
+            repo_root_exists = RepoRootExists,
+            daemon_pid = Manifest.ProcessId,
+            launch_mode = Manifest.LaunchMode,
+            daemon_lifetime = Manifest.DaemonLifetime ?? LifetimeDetached,
+            caller_job_flags = Manifest.CallerJobFlags,
+            daemon_endpoint = EndpointLabel,
+            idle_seconds = IdleSeconds,
+            idle_timeout_seconds = IdleTimeoutSeconds,
+            memory_mb = MemoryMb,
+            started_utc = Manifest.StartedAtUtc,
+            manifest_path = ManifestPath,
+            log_path = Manifest.LogPath,
+        };
+    }
 
     private readonly record struct ManagedProcessStopResult(
         bool StoppedProcess,

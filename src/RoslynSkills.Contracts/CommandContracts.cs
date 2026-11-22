@@ -49,7 +49,12 @@ public sealed record CommandTransportMetadata(
     [property: JsonPropertyName("refresh_action")] string? RefreshAction = null,
     [property: JsonPropertyName("daemon_endpoint")] string? DaemonEndpoint = null,
     [property: JsonPropertyName("timings")] CommandTransportTimings? Timings = null,
-    [property: JsonPropertyName("workspace")] WorkspaceHostWorkspaceMetadata? Workspace = null);
+    [property: JsonPropertyName("workspace")] WorkspaceHostWorkspaceMetadata? Workspace = null,
+    [property: JsonPropertyName("daemon_lifetime"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DaemonLifetime = null,
+    [property: JsonPropertyName("daemon_lifetime_note"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DaemonLifetimeNote = null,
+    [property: JsonPropertyName("launch_mode"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LaunchMode = null,
+    [property: JsonPropertyName("caller_job_flags"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallerJobFlags = null,
+    [property: JsonPropertyName("launch_warning"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LaunchWarning = null);
 
 public sealed record CommandEnvelope(
     [property: JsonPropertyOrder(-100)] bool Ok,

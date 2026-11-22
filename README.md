@@ -47,6 +47,18 @@ roscli workspace.use MySolution.slnx --require-solution true
 roscli list-commands --stable-only --ids-only
 ```
 
+Two ways to run the hot workspace daemon:
+
+1. **Runner-owned foreground host (preferred where a long-lived runner exists, such as a background job):** start `roscli daemon.run` under that runner so the host stays visible and stoppable there, then run `roscli workspace.use MySolution.slnx --require-solution true` which reuses it automatically:
+
+```powershell
+roscli daemon.run --repo-root .
+```
+
+`roscli daemon.run` writes the standard manifest and serves until stopped with `roscli daemon.stop`, `SIGINT`/`SIGTERM`, idle timeout (default 30 min), or EOF on a piped stdin (override with `--exit-on-stdin-eof true|false`).
+
+2. **Self-managed detached host (`roscli workspace.use` / `roscli daemon.start`):** reuses any live host for the workspace key (guarded by a per-key lock), otherwise launches detached (`CREATE_BREAKAWAY_FROM_JOB` on Windows when allowed; when breakaway is refused, logs a warning with the caller's job flags and process chain to both the response and `<hash>.log` and uses WMI `Win32_Process.Create`, unless `ROSCLI_DAEMON_LAUNCH=nodetach` or `--nodetach` keeps it inside the caller job with `daemon_lifetime: "caller_job"`). Detached hosts are bounded by an idle timeout (default 30 min; `ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_MINUTES` / `--idle-timeout-minutes`) and a per-user host cap (default 8; `ROSLYNSKILLS_MAX_DAEMON_HOSTS`). Inspect active hosts with `roscli daemon.list` and clean up missing-worktree or all hosts with `roscli daemon.prune [--all]`.
+
 First semantic flow (runs on the preloaded hot workspace, refreshed from disk before each call):
 
 ```powershell
@@ -61,7 +73,7 @@ roscli diag.get_file_diagnostics src/MyProject/File.cs
 Use this sequence to reduce retries and avoid tool-learning churn:
 
 1. In a fresh worktree, run `dotnet restore` before binding the workspace. (`workspace.use` also auto-restores projects missing `project.assets.json` or metadata references unless `ROSLYNSKILLS_AUTO_RESTORE=false`, and reports any unresolved projects in `unresolved_projects` and `workspace_diagnostics`.)
-2. Bind the solution once with `roscli workspace.use <solution.sln|.slnx> --require-solution true`. Subsequent read-only semantic commands and exact/semantic edits reuse the hot workspace automatically and re-read files modified on disk before each call.
+2. Bind the solution once with `roscli workspace.use <solution.sln|.slnx> --require-solution true` (or start `roscli daemon.run` in a host runner first so the host is visible and stoppable there, then call `workspace.use` to reuse it). Subsequent read-only semantic commands and exact/semantic edits reuse the hot workspace automatically and re-read files modified on disk before each call. Use `roscli daemon.list` to inspect active hosts and `roscli daemon.prune [--all]` to clean them up.
 3. Set `ROSCLI_DAEMON=required` when you want calls that cannot use the hot workspace (or when the daemon is unavailable) to fail closed instead of reloading the solution in-process.
 4. Every command returns the same flat JSON envelope (`Ok`, `CommandId`, `Version`, `Preview`, `Data`, `Telemetry`, `Transport`, `Errors`, `TraceId`, `Summary`) whether it runs in-process or through the daemon: the command's own payload is always directly at top-level `Data`, and `Transport.mode` (`"daemon"` vs `"in_process"`) reports how it ran.
 5. Keep reads compact (`--brief true`, bounded `--max-results`) and check `Data.workspace_context.mode` / `Data.workspace_context.project_resolved` on file queries.

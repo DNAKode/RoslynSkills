@@ -63,9 +63,12 @@ public sealed class CliApplication
             "text.measure" => await HandleTextMeasureAsync(remainder, stdout, stdin).ConfigureAwait(false),
             "llmstxt" => await HandleLlmstxtAsync(remainder, stdout).ConfigureAwait(false),
             "daemon.start" => await HandleDaemonStartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "daemon.run" => await HandleDaemonRunAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.status" => await HandleDaemonStatusAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.stop" => await HandleDaemonStopAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "daemon.restart" => await HandleDaemonRestartAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "daemon.list" => await HandleDaemonListAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
+            "daemon.prune" => await HandleDaemonPruneAsync(remainder, stdout, cancellationToken).ConfigureAwait(false),
             "workspace.use" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
             "workspace.use" => await HandleDaemonWorkspaceAsync(verb, remainder, stdout, cancellationToken).ConfigureAwait(false),
             "workspace.preload" when daemonOff => await HandleRunDirectAsync(verb, remainder, stdout, cancellationToken, stdin, daemonOff).ConfigureAwait(false),
@@ -503,6 +506,12 @@ Workflow:
                 OutputSchemaVersion: "1.0",
                 MutatesState: true),
             new CommandDescriptor(
+                Id: "daemon.run",
+                Summary: "Run the process-hot Roslyn workspace host daemon in the foreground until stopped or until stdin closes.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: true),
+            new CommandDescriptor(
                 Id: "daemon.stop",
                 Summary: "Stop the process-hot Roslyn workspace host daemon.",
                 InputSchemaVersion: "1.0",
@@ -511,6 +520,18 @@ Workflow:
             new CommandDescriptor(
                 Id: "daemon.restart",
                 Summary: "Restart the process-hot Roslyn workspace host daemon.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: true),
+            new CommandDescriptor(
+                Id: "daemon.list",
+                Summary: "List every live workspace host daemon for the current user (workspace key, PID, launch mode, idle seconds, memory) and clean up dead-PID stale manifests.",
+                InputSchemaVersion: "1.0",
+                OutputSchemaVersion: "1.0",
+                MutatesState: false),
+            new CommandDescriptor(
+                Id: "daemon.prune",
+                Summary: "Stop workspace host daemons whose worktree folder no longer exists, remove dead-PID stale manifests, or stop all hosts with --all.",
                 InputSchemaVersion: "1.0",
                 OutputSchemaVersion: "1.0",
                 MutatesState: true),
@@ -571,11 +592,15 @@ Workflow:
                 Version: EnvelopeVersion,
                 Data: new
                 {
-                    usage = "daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]",
+                    usage = "daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>] [--nodetach] [--launch-mode auto|nodetach] [--idle-timeout-minutes <N>] [--idle-timeout-seconds <N>]",
                     options = new[]
                     {
                         new { name = "--repo-root", summary = "Repo/workspace root used to derive the default daemon endpoint." },
                         new { name = "--host-path", summary = "Explicit RoslynSkills.WorkspaceHost.dll path." },
+                        new { name = "--nodetach", summary = "Forbid WMI detached fallback when Windows job breakaway is refused; run inside the caller job instead (same as ROSCLI_DAEMON_LAUNCH=nodetach)." },
+                        new { name = "--launch-mode", summary = "Launch policy: auto (default) or nodetach." },
+                        new { name = "--idle-timeout-minutes", summary = "Exit the host after N idle minutes (default 30; 0 disables)." },
+                        new { name = "--idle-timeout-seconds", summary = "Exit the host after N idle seconds (0 disables)." },
                     },
                 },
                 Errors: Array.Empty<CommandError>(),
@@ -583,16 +608,84 @@ Workflow:
             return 0;
         }
 
-        if (!TryGetDaemonOptions(args, allowHostPath: true, out string? repoRoot, out string? hostPath, out CommandEnvelope? error))
+        if (!TryGetDaemonOptions(
+                args,
+                allowHostPath: true,
+                allowExitOnStdinEof: false,
+                allowLaunchOptions: true,
+                allowIdleTimeout: true,
+                out DaemonCliOptions parsed,
+                out CommandEnvelope? error))
         {
             await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
             return 1;
         }
 
         WorkspaceHostDaemonManager manager = new();
-        CommandEnvelope envelope = await manager.StartAsync(repoRoot, hostPath, cancellationToken).ConfigureAwait(false);
+        CommandEnvelope envelope = await manager.StartAsync(
+            parsed.RepoRoot,
+            parsed.HostPath,
+            parsed.NoDetach,
+            parsed.IdleTimeout,
+            cancellationToken).ConfigureAwait(false);
         await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
         return envelope.Ok ? 0 : 1;
+    }
+
+    private async Task<int> HandleDaemonRunAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+                Ok: true,
+                CommandId: "daemon.run",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    usage = "daemon.run [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>] [--exit-on-stdin-eof true|false] [--idle-timeout-minutes <N>] [--idle-timeout-seconds <N>]",
+                    summary = "Run the workspace host daemon in the foreground until 'roscli daemon.stop', SIGINT/SIGTERM, idle timeout, or stdin EOF (when attached to a pipe).",
+                    options = new[]
+                    {
+                        new { name = "--repo-root", summary = "Repo/workspace root used to derive the default daemon endpoint." },
+                        new { name = "--host-path", summary = "Explicit RoslynSkills.WorkspaceHost.dll path." },
+                        new { name = "--exit-on-stdin-eof", summary = "Override whether closing redirected stdin stops the host (defaults to auto: enabled when stdin is a pipe)." },
+                        new { name = "--idle-timeout-minutes", summary = "Exit the host after N idle minutes (default 30; 0 disables)." },
+                        new { name = "--idle-timeout-seconds", summary = "Exit the host after N idle seconds (0 disables)." },
+                    },
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+            return 0;
+        }
+
+        if (!TryGetDaemonOptions(
+                args,
+                allowHostPath: true,
+                allowExitOnStdinEof: true,
+                allowLaunchOptions: false,
+                allowIdleTimeout: true,
+                out DaemonCliOptions parsed,
+                out CommandEnvelope? error))
+        {
+            await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        return await manager.RunForegroundAsync(
+            parsed.RepoRoot,
+            parsed.HostPath,
+            parsed.ExitOnStdinEof,
+            parsed.IdleTimeout,
+            async envelope =>
+            {
+                await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
+                await stdout.FlushAsync().ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<int> HandleDaemonStatusAsync(
@@ -619,14 +712,21 @@ Workflow:
             return 0;
         }
 
-        if (!TryGetDaemonOptions(args, allowHostPath: false, out string? repoRoot, out _, out CommandEnvelope? error))
+        if (!TryGetDaemonOptions(
+                args,
+                allowHostPath: false,
+                allowExitOnStdinEof: false,
+                allowLaunchOptions: false,
+                allowIdleTimeout: false,
+                out DaemonCliOptions parsed,
+                out CommandEnvelope? error))
         {
             await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
             return 1;
         }
 
         WorkspaceHostDaemonManager manager = new();
-        CommandEnvelope envelope = await manager.StatusAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        CommandEnvelope envelope = await manager.StatusAsync(parsed.RepoRoot, cancellationToken).ConfigureAwait(false);
         await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
         return envelope.Ok ? 0 : 1;
     }
@@ -655,14 +755,21 @@ Workflow:
             return 0;
         }
 
-        if (!TryGetDaemonOptions(args, allowHostPath: false, out string? repoRoot, out _, out CommandEnvelope? error))
+        if (!TryGetDaemonOptions(
+                args,
+                allowHostPath: false,
+                allowExitOnStdinEof: false,
+                allowLaunchOptions: false,
+                allowIdleTimeout: false,
+                out DaemonCliOptions parsed,
+                out CommandEnvelope? error))
         {
             await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
             return 1;
         }
 
         WorkspaceHostDaemonManager manager = new();
-        CommandEnvelope envelope = await manager.StopAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        CommandEnvelope envelope = await manager.StopAsync(parsed.RepoRoot, cancellationToken).ConfigureAwait(false);
         await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
         return envelope.Ok ? 0 : 1;
     }
@@ -672,15 +779,27 @@ Workflow:
         TextWriter stdout,
         CancellationToken cancellationToken)
     {
-        if (!TryGetDaemonOptions(args, allowHostPath: true, out string? repoRoot, out string? hostPath, out CommandEnvelope? error))
+        if (!TryGetDaemonOptions(
+                args,
+                allowHostPath: true,
+                allowExitOnStdinEof: false,
+                allowLaunchOptions: true,
+                allowIdleTimeout: true,
+                out DaemonCliOptions parsed,
+                out CommandEnvelope? error))
         {
             await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
             return 1;
         }
 
         WorkspaceHostDaemonManager manager = new();
-        CommandEnvelope stop = await manager.StopAsync(repoRoot, cancellationToken).ConfigureAwait(false);
-        CommandEnvelope start = await manager.StartAsync(repoRoot, hostPath, cancellationToken).ConfigureAwait(false);
+        CommandEnvelope stop = await manager.StopAsync(parsed.RepoRoot, cancellationToken).ConfigureAwait(false);
+        CommandEnvelope start = await manager.StartAsync(
+            parsed.RepoRoot,
+            parsed.HostPath,
+            parsed.NoDetach,
+            parsed.IdleTimeout,
+            cancellationToken).ConfigureAwait(false);
         CommandEnvelope envelope = new(
             Ok: start.Ok,
             CommandId: "daemon.restart",
@@ -692,6 +811,110 @@ Workflow:
             },
             Errors: start.Errors,
             TraceId: null);
+        await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
+        return envelope.Ok ? 0 : 1;
+    }
+
+    private async Task<int> HandleDaemonListAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+                Ok: true,
+                CommandId: "daemon.list",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    usage = "daemon.list",
+                    summary = "List every live workspace host daemon for the current user (workspace_key, daemon_pid, launch_mode, idle_seconds, memory_mb) and remove dead-PID stale manifests.",
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+            return 0;
+        }
+
+        if (args.Length > 0)
+        {
+            await WriteEnvelopeAsync(stdout, ErrorEnvelope("daemon.list", "invalid_args", $"Unknown daemon.list option '{args[0]}'.")).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        CommandEnvelope envelope = await manager.ListAsync(cancellationToken).ConfigureAwait(false);
+        await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
+        return envelope.Ok ? 0 : 1;
+    }
+
+    private async Task<int> HandleDaemonPruneAsync(
+        string[] args,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        if (args.Any(a => IsHelp(a)))
+        {
+            await WriteEnvelopeAsync(stdout, new CommandEnvelope(
+                Ok: true,
+                CommandId: "daemon.prune",
+                Version: EnvelopeVersion,
+                Data: new
+                {
+                    usage = "daemon.prune [--all] [--dry-run]",
+                    summary = "Stop workspace host daemons whose worktree folder no longer exists and remove dead-PID stale manifests. Pass --all to stop all live workspace hosts.",
+                    options = new[]
+                    {
+                        new { name = "--all", summary = "Stop every live workspace host daemon owned by the current user." },
+                        new { name = "--dry-run", summary = "Report what would be stopped or removed without mutating anything." },
+                    },
+                },
+                Errors: Array.Empty<CommandError>(),
+                TraceId: null)).ConfigureAwait(false);
+            return 0;
+        }
+
+        bool pruneAll = false;
+        bool dryRun = false;
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            string? inlineValue = null;
+            int eq = arg.IndexOf('=', StringComparison.Ordinal);
+            if (eq >= 0)
+            {
+                inlineValue = arg[(eq + 1)..];
+                arg = arg[..eq];
+            }
+
+            if (string.Equals(arg, "--all", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseOptionalBooleanFlag(args, ref i, inlineValue, "daemon.prune", arg, out pruneAll, out CommandEnvelope? err))
+                {
+                    await WriteEnvelopeAsync(stdout, err!).ConfigureAwait(false);
+                    return 1;
+                }
+
+                continue;
+            }
+
+            if (string.Equals(arg, "--dry-run", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseOptionalBooleanFlag(args, ref i, inlineValue, "daemon.prune", arg, out dryRun, out CommandEnvelope? err))
+                {
+                    await WriteEnvelopeAsync(stdout, err!).ConfigureAwait(false);
+                    return 1;
+                }
+
+                continue;
+            }
+
+            await WriteEnvelopeAsync(stdout, ErrorEnvelope("daemon.prune", "invalid_args", $"Unknown daemon.prune option '{arg}'.")).ConfigureAwait(false);
+            return 1;
+        }
+
+        WorkspaceHostDaemonManager manager = new();
+        CommandEnvelope envelope = await manager.PruneAsync(pruneAll, dryRun, cancellationToken).ConfigureAwait(false);
         await WriteEnvelopeAsync(stdout, envelope).ConfigureAwait(false);
         return envelope.Ok ? 0 : 1;
     }
@@ -715,21 +938,35 @@ Workflow:
             return 0;
         }
 
-        if (!TryBuildWorkspaceHostRequest(verb, args, out string? repoRoot, out WorkspaceHostRequest? request, out CommandEnvelope? error))
+        if (!TryBuildWorkspaceHostRequest(
+                verb,
+                args,
+                out string? repoRoot,
+                out WorkspaceDaemonLaunchOptions launchOptions,
+                out WorkspaceHostRequest? request,
+                out CommandEnvelope? error))
         {
             await WriteEnvelopeAsync(stdout, error!).ConfigureAwait(false);
             return 1;
         }
 
         WorkspaceHostDaemonManager manager = new();
+        bool? daemonReused = null;
         if (verb is "workspace.use" or "workspace.preload")
         {
-            CommandEnvelope start = await manager.StartAsync(repoRoot, hostPath: null, cancellationToken).ConfigureAwait(false);
+            CommandEnvelope start = await manager.StartAsync(
+                repoRoot,
+                hostPath: null,
+                launchOptions.NoDetach,
+                launchOptions.IdleTimeout,
+                cancellationToken).ConfigureAwait(false);
             if (!start.Ok)
             {
                 await WriteEnvelopeAsync(stdout, start with { CommandId = verb }).ConfigureAwait(false);
                 return 1;
             }
+
+            daemonReused = TryGetBoolProperty(start.Data, "reused");
         }
 
         WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
@@ -750,7 +987,7 @@ Workflow:
             totalTimer.Stop();
             WorkspaceHostFailure? failure = sendResult.Failure;
             string failureMessage = failure?.Message
-                ?? "Workspace daemon is unavailable. Run 'roscli daemon.start' or use workspace.use/preload to start it.";
+                ?? "Workspace daemon is unavailable. Run 'roscli daemon.start', 'roscli daemon.run', or use workspace.use/preload to start it.";
             await WriteEnvelopeAsync(stdout, ErrorEnvelope(
                 commandId: verb,
                 code: WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
@@ -770,7 +1007,11 @@ Workflow:
                     DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
                     Timings: new CommandTransportTimings(
                         RoundtripMs: Math.Round(roundtripTimer.Elapsed.TotalMilliseconds, 3),
-                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3)),
+                    DaemonLifetime: failure?.DaemonLifetime,
+                    DaemonLifetimeNote: WorkspaceHostDaemonManager.GetDaemonLifetimeNote(failure?.DaemonLifetime),
+                    LaunchMode: failure?.LaunchMode,
+                    CallerJobFlags: failure?.CallerJobFlags),
             }).ConfigureAwait(false);
             return 1;
         }
@@ -778,11 +1019,38 @@ Workflow:
         UpdatePersistedWorkspaceAlias(verb, request!, response, manager, endpoint);
         totalTimer.Stop();
         IReadOnlyList<CommandError> errors = response.Errors ?? Array.Empty<CommandError>();
+        WorkspaceHostLaunchMetadata? launchMetadata = verb is "workspace.use" or "workspace.preload"
+            ? manager.TryGetLaunchMetadata(repoRoot)
+            : null;
+        if (launchMetadata is not null && daemonReused.HasValue)
+        {
+            launchMetadata = launchMetadata with { Reused = daemonReused.Value };
+        }
+
+        object? responseData = verb is "workspace.use" or "workspace.preload" && response.Ok
+            ? AttachDaemonLaunchMetadataToData(response.Data, launchMetadata)
+            : response.Data;
+        CommandTransportMetadata transport = BuildDaemonTransport(
+            request!,
+            response,
+            endpoint,
+            routedAlias: request!.WorkspaceAlias,
+            routedHandle: request.WorkspaceHandle,
+            validateTimer: null,
+            roundtripTimer: roundtripTimer,
+            totalTimer: totalTimer) with
+        {
+            DaemonLifetime = launchMetadata?.DaemonLifetime,
+            DaemonLifetimeNote = launchMetadata?.DaemonLifetimeNote,
+            LaunchMode = launchMetadata?.LaunchMode,
+            CallerJobFlags = launchMetadata?.CallerJobFlags,
+            LaunchWarning = launchMetadata?.LaunchWarning,
+        };
         await WriteEnvelopeAsync(stdout, new CommandEnvelope(
             Ok: response.Ok,
             CommandId: verb,
             Version: response.Version ?? EnvelopeVersion,
-            Data: response.Data,
+            Data: responseData,
             Errors: errors,
             TraceId: response.TraceId,
             Telemetry: BuildCliTelemetry(
@@ -790,16 +1058,89 @@ Workflow:
                 executeMs: (int)Math.Round(response.ElapsedMs),
                 totalMs: (int)totalTimer.ElapsedMilliseconds,
                 commandTelemetry: response.Telemetry),
-            Transport: BuildDaemonTransport(
-                request!,
-                response,
-                endpoint,
-                routedAlias: request!.WorkspaceAlias,
-                routedHandle: request.WorkspaceHandle,
-                validateTimer: null,
-                roundtripTimer: roundtripTimer,
-                totalTimer: totalTimer))).ConfigureAwait(false);
+            Transport: transport)).ConfigureAwait(false);
         return response.Ok ? 0 : 1;
+    }
+
+    private static bool? TryGetBoolProperty(object? data, string propertyName)
+    {
+        if (data is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            JsonElement element = data is JsonElement existing
+                ? existing
+                : JsonSerializer.SerializeToElement(data);
+            if (element.ValueKind == JsonValueKind.Object &&
+                element.TryGetProperty(propertyName, out JsonElement prop) &&
+                (prop.ValueKind == JsonValueKind.True || prop.ValueKind == JsonValueKind.False))
+            {
+                return prop.GetBoolean();
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static object? AttachDaemonLaunchMetadataToData(object? data, WorkspaceHostLaunchMetadata? metadata)
+    {
+        if (data is null || metadata is null)
+        {
+            return data;
+        }
+
+        try
+        {
+            System.Text.Json.Nodes.JsonNode? node = data is JsonElement element
+                ? System.Text.Json.Nodes.JsonNode.Parse(element.GetRawText())
+                : JsonSerializer.SerializeToNode(data);
+            if (node is System.Text.Json.Nodes.JsonObject obj)
+            {
+                if (metadata.DaemonPid.HasValue)
+                {
+                    obj["daemon_pid"] = metadata.DaemonPid.Value;
+                }
+
+                if (!string.IsNullOrWhiteSpace(metadata.LaunchMode))
+                {
+                    obj["launch_mode"] = metadata.LaunchMode;
+                }
+
+                if (!string.IsNullOrWhiteSpace(metadata.DaemonLifetime))
+                {
+                    obj["daemon_lifetime"] = metadata.DaemonLifetime;
+                }
+
+                if (!string.IsNullOrWhiteSpace(metadata.DaemonLifetimeNote))
+                {
+                    obj["daemon_lifetime_note"] = metadata.DaemonLifetimeNote;
+                }
+
+                if (!string.IsNullOrWhiteSpace(metadata.CallerJobFlags))
+                {
+                    obj["caller_job_flags"] = metadata.CallerJobFlags;
+                }
+
+                if (!string.IsNullOrWhiteSpace(metadata.LaunchWarning))
+                {
+                    obj["launch_warning"] = metadata.LaunchWarning;
+                }
+
+                obj["daemon_reused"] = metadata.Reused;
+                return obj;
+            }
+        }
+        catch
+        {
+        }
+
+        return data;
     }
 
     private static WorkspaceHostRequest ApplyPersistedWorkspaceAlias(
@@ -1490,7 +1831,11 @@ Workflow:
                     Timings: new CommandTransportTimings(
                         ValidateMs: Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
                         RoundtripMs: Math.Round(roundtripTimer.Elapsed.TotalMilliseconds, 3),
-                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+                        TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3)),
+                    DaemonLifetime: failure?.DaemonLifetime,
+                    DaemonLifetimeNote: WorkspaceHostDaemonManager.GetDaemonLifetimeNote(failure?.DaemonLifetime),
+                    LaunchMode: failure?.LaunchMode,
+                    CallerJobFlags: failure?.CallerJobFlags),
             }).ConfigureAwait(false);
             return 1;
         }
@@ -1881,15 +2226,98 @@ Workflow:
         return false;
     }
 
+    private readonly record struct DaemonCliOptions(
+        string? RepoRoot,
+        string? HostPath,
+        bool? ExitOnStdinEof,
+        bool? NoDetach,
+        TimeSpan? IdleTimeout);
+
+    private readonly record struct WorkspaceDaemonLaunchOptions(
+        bool? NoDetach,
+        TimeSpan? IdleTimeout);
+
+    private static bool TryParseOptionalBooleanFlag(
+        string[] args,
+        ref int index,
+        string? inlineValue,
+        string commandId,
+        string optionName,
+        out bool value,
+        out CommandEnvelope? error)
+    {
+        error = null;
+        string? rawBool = inlineValue;
+        if (rawBool is null && index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            string candidate = args[index + 1];
+            if (TryParseBooleanLiteral(candidate, out bool nextBool))
+            {
+                index++;
+                value = nextBool;
+                return true;
+            }
+        }
+
+        if (rawBool is null)
+        {
+            value = true;
+            return true;
+        }
+
+        if (TryParseBooleanLiteral(rawBool, out bool parsedBool))
+        {
+            value = parsedBool;
+            return true;
+        }
+
+        value = false;
+        error = ErrorEnvelope(commandId, "invalid_args", $"Option '{optionName}' expects a boolean value (true|false), got '{rawBool}'.");
+        return false;
+    }
+
+    private static bool TryParseBooleanLiteral(string raw, out bool value)
+    {
+        if (bool.TryParse(raw, out value))
+        {
+            return true;
+        }
+
+        if (string.Equals(raw, "1", StringComparison.Ordinal) ||
+            string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(raw, "on", StringComparison.OrdinalIgnoreCase))
+        {
+            value = true;
+            return true;
+        }
+
+        if (string.Equals(raw, "0", StringComparison.Ordinal) ||
+            string.Equals(raw, "no", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(raw, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            value = false;
+            return true;
+        }
+
+        value = false;
+        return false;
+    }
+
     private static bool TryGetDaemonOptions(
         string[] args,
         bool allowHostPath,
-        out string? repoRoot,
-        out string? hostPath,
+        bool allowExitOnStdinEof,
+        bool allowLaunchOptions,
+        bool allowIdleTimeout,
+        out DaemonCliOptions parsed,
         out CommandEnvelope? error)
     {
-        repoRoot = null;
-        hostPath = null;
+        string? repoRoot = null;
+        string? hostPath = null;
+        bool? exitOnStdinEof = null;
+        bool? noDetach = null;
+        TimeSpan? idleTimeout = null;
+        parsed = default;
         error = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -1918,7 +2346,7 @@ Workflow:
             {
                 if (!allowHostPath)
                 {
-                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--host-path' is only supported by daemon.start and daemon.restart.");
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--host-path' is only supported by daemon.start, daemon.run, and daemon.restart.");
                     return false;
                 }
 
@@ -1931,10 +2359,115 @@ Workflow:
                 continue;
             }
 
+            if (string.Equals(arg, "--exit-on-stdin-eof", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!allowExitOnStdinEof)
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--exit-on-stdin-eof' is only supported by daemon.run.");
+                    return false;
+                }
+
+                if (!TryParseOptionalBooleanFlag(args, ref i, inlineValue, "daemon", arg, out bool parsedExit, out error))
+                {
+                    return false;
+                }
+
+                exitOnStdinEof = parsedExit;
+                continue;
+            }
+
+            if (string.Equals(arg, "--nodetach", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!allowLaunchOptions)
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--nodetach' is only supported by daemon.start and daemon.restart.");
+                    return false;
+                }
+
+                if (!TryParseOptionalBooleanFlag(args, ref i, inlineValue, "daemon", arg, out bool parsedNoDetach, out error))
+                {
+                    return false;
+                }
+
+                noDetach = parsedNoDetach;
+                continue;
+            }
+
+            if (string.Equals(arg, "--launch-mode", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!allowLaunchOptions)
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--launch-mode' is only supported by daemon.start and daemon.restart.");
+                    return false;
+                }
+
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? launchModeValue))
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--launch-mode' requires a value (auto|nodetach).");
+                    return false;
+                }
+
+                if (string.Equals(launchModeValue, "nodetach", StringComparison.OrdinalIgnoreCase))
+                {
+                    noDetach = true;
+                    continue;
+                }
+
+                if (string.Equals(launchModeValue, "auto", StringComparison.OrdinalIgnoreCase))
+                {
+                    noDetach = false;
+                    continue;
+                }
+
+                error = ErrorEnvelope("daemon", "invalid_args", $"Option '--launch-mode' must be 'auto' or 'nodetach', got '{launchModeValue}'.");
+                return false;
+            }
+
+            if (string.Equals(arg, "--idle-timeout-minutes", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!allowIdleTimeout)
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--idle-timeout-minutes' is only supported by daemon.start, daemon.run, and daemon.restart.");
+                    return false;
+                }
+
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? rawMinutes) ||
+                    !double.TryParse(rawMinutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double minutes) ||
+                    double.IsNaN(minutes) || double.IsInfinity(minutes))
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--idle-timeout-minutes' expects a numeric value (>= 0).");
+                    return false;
+                }
+
+                idleTimeout = minutes > 0 ? TimeSpan.FromMinutes(minutes) : TimeSpan.Zero;
+                continue;
+            }
+
+            if (string.Equals(arg, "--idle-timeout-seconds", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!allowIdleTimeout)
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--idle-timeout-seconds' is only supported by daemon.start, daemon.run, and daemon.restart.");
+                    return false;
+                }
+
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? rawSeconds) ||
+                    !double.TryParse(rawSeconds, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) ||
+                    double.IsNaN(seconds) || double.IsInfinity(seconds))
+                {
+                    error = ErrorEnvelope("daemon", "invalid_args", "Option '--idle-timeout-seconds' expects a numeric value (>= 0).");
+                    return false;
+                }
+
+                idleTimeout = seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero;
+                continue;
+            }
+
             error = ErrorEnvelope("daemon", "invalid_args", $"Unknown daemon option '{arg}'.");
             return false;
         }
 
+        parsed = new DaemonCliOptions(repoRoot, hostPath, exitOnStdinEof, noDetach, idleTimeout);
         return true;
     }
 
@@ -1942,12 +2475,16 @@ Workflow:
         string verb,
         string[] args,
         out string? repoRoot,
+        out WorkspaceDaemonLaunchOptions launchOptions,
         out WorkspaceHostRequest? request,
         out CommandEnvelope? error)
     {
         repoRoot = null;
+        launchOptions = default;
         request = null;
         error = null;
+        bool? noDetach = null;
+        TimeSpan? idleTimeout = null;
         List<string> positional = new();
         Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
 
@@ -1974,6 +2511,69 @@ Workflow:
                 return false;
             }
 
+            if (string.Equals(arg, "--nodetach", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseOptionalBooleanFlag(args, ref i, inlineValue, verb, arg, out bool parsedNoDetach, out error))
+                {
+                    return false;
+                }
+
+                noDetach = parsedNoDetach;
+                continue;
+            }
+
+            if (string.Equals(arg, "--launch-mode", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? launchModeValue))
+                {
+                    error = ErrorEnvelope(verb, "invalid_args", "Option '--launch-mode' requires a value (auto|nodetach).");
+                    return false;
+                }
+
+                if (string.Equals(launchModeValue, "nodetach", StringComparison.OrdinalIgnoreCase))
+                {
+                    noDetach = true;
+                    continue;
+                }
+
+                if (string.Equals(launchModeValue, "auto", StringComparison.OrdinalIgnoreCase))
+                {
+                    noDetach = false;
+                    continue;
+                }
+
+                error = ErrorEnvelope(verb, "invalid_args", $"Option '--launch-mode' must be 'auto' or 'nodetach', got '{launchModeValue}'.");
+                return false;
+            }
+
+            if (string.Equals(arg, "--idle-timeout-minutes", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? rawMinutes) ||
+                    !double.TryParse(rawMinutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double minutes) ||
+                    double.IsNaN(minutes) || double.IsInfinity(minutes))
+                {
+                    error = ErrorEnvelope(verb, "invalid_args", "Option '--idle-timeout-minutes' expects a numeric value (>= 0).");
+                    return false;
+                }
+
+                idleTimeout = minutes > 0 ? TimeSpan.FromMinutes(minutes) : TimeSpan.Zero;
+                continue;
+            }
+
+            if (string.Equals(arg, "--idle-timeout-seconds", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? rawSeconds) ||
+                    !double.TryParse(rawSeconds, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) ||
+                    double.IsNaN(seconds) || double.IsInfinity(seconds))
+                {
+                    error = ErrorEnvelope(verb, "invalid_args", "Option '--idle-timeout-seconds' expects a numeric value (>= 0).");
+                    return false;
+                }
+
+                idleTimeout = seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero;
+                continue;
+            }
+
             if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? value))
             {
                 error = ErrorEnvelope(verb, "invalid_args", $"Option '{arg}' requires a value.");
@@ -1982,6 +2582,8 @@ Workflow:
 
             options[arg] = value!;
         }
+
+        launchOptions = new WorkspaceDaemonLaunchOptions(noDetach, idleTimeout);
 
         options.TryGetValue("--repo-root", out repoRoot);
         string? alias = options.TryGetValue("--alias", out string? aliasValue)
@@ -2137,7 +2739,11 @@ Workflow:
                    string.Equals(option, "--require-solution", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(option, "--include-generated", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(option, "--max-files", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(option, "--mode", StringComparison.OrdinalIgnoreCase);
+                   string.Equals(option, "--mode", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--nodetach", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--launch-mode", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--idle-timeout-minutes", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--idle-timeout-seconds", StringComparison.OrdinalIgnoreCase);
         }
 
         return verb is "workspace.status" or "workspace.refresh" or "workspace.close"
@@ -4969,17 +5575,35 @@ Workflow:
             };
         }
 
+        if (string.Equals(commandId, "daemon.run", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "daemon.run [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>] [--exit-on-stdin-eof true|false] [--idle-timeout-minutes <N>] [--idle-timeout-seconds <N>]",
+                required_properties = Array.Empty<string>(),
+                optional_properties = new[] { "repo_root", "host_path", "exit_on_stdin_eof", "idle_timeout_minutes", "idle_timeout_seconds" },
+                notes = new[]
+                {
+                    "Runs the workspace host in the foreground until stopped via daemon.stop, SIGINT/SIGTERM, idle timeout, or EOF on a piped stdin.",
+                    "Preferred when a host runner (such as a background job) can own the process: visible and stoppable there, and reused automatically by later workspace.use calls.",
+                    "Emits a ready JSON envelope to stdout once the host is listening.",
+                },
+            };
+        }
+
         if (string.Equals(commandId, "daemon.start", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(commandId, "daemon.restart", StringComparison.OrdinalIgnoreCase))
         {
             return new
             {
-                direct = $"{commandId} [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]",
+                direct = $"{commandId} [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>] [--nodetach] [--launch-mode auto|nodetach] [--idle-timeout-minutes <N>] [--idle-timeout-seconds <N>]",
                 required_properties = Array.Empty<string>(),
-                optional_properties = new[] { "repo_root", "host_path" },
+                optional_properties = new[] { "repo_root", "host_path", "nodetach", "launch_mode", "idle_timeout_minutes", "idle_timeout_seconds" },
                 notes = new[]
                 {
                     "Normally no --host-path is needed when roscli is installed from the packaged tool.",
+                    "Reuses any live host for the same workspace key (including a foreground daemon.run host); otherwise launches detached (breakaway, or logged WMI fallback on Windows unless ROSCLI_DAEMON_LAUNCH=nodetach / --nodetach).",
+                    "Bounded by idle timeout (default 30 min) and per-user host cap (default 8; ROSLYNSKILLS_MAX_DAEMON_HOSTS).",
                     "Use --host-path only when testing a locally built WorkspaceHost assembly.",
                 },
             };
@@ -4992,6 +5616,35 @@ Workflow:
                 direct = "daemon.stop [--repo-root <path>]",
                 required_properties = Array.Empty<string>(),
                 optional_properties = new[] { "repo_root" },
+            };
+        }
+
+        if (string.Equals(commandId, "daemon.list", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "daemon.list",
+                required_properties = Array.Empty<string>(),
+                optional_properties = Array.Empty<string>(),
+                notes = new[]
+                {
+                    "Lists every live workspace host for the current user (workspace_key, daemon_pid, launch_mode, daemon_lifetime, idle_seconds, memory_mb) and removes dead-PID stale manifests.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "daemon.prune", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "daemon.prune [--all] [--dry-run]",
+                required_properties = Array.Empty<string>(),
+                optional_properties = new[] { "all", "dry_run" },
+                notes = new[]
+                {
+                    "Stops hosts whose worktree folder no longer exists and removes dead-PID stale manifests.",
+                    "Pass --all to stop all live workspace hosts owned by the current user.",
+                },
             };
         }
 
@@ -5767,12 +6420,15 @@ Workflow:
               agent-start [--solution <path.sln|path.slnx>]
               text.measure --text <value>
               llmstxt [--full]
-              daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
+              daemon.start [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>] [--nodetach] [--launch-mode auto|nodetach] [--idle-timeout-minutes <N>]
+              daemon.run [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>] [--exit-on-stdin-eof true|false] [--idle-timeout-minutes <N>]
               daemon.status [--repo-root <path>]
               daemon.stop [--repo-root <path>]
-              daemon.restart [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>]
-              workspace.use <solution-or-project-path> [--alias default] [--require-solution true] [--repo-root <path>]
-              workspace.preload <solution-or-project-path> [--alias name] [--require-solution true] [--repo-root <path>]
+              daemon.restart [--repo-root <path>] [--host-path <RoslynSkills.WorkspaceHost.dll>] [--nodetach] [--idle-timeout-minutes <N>]
+              daemon.list
+              daemon.prune [--all] [--dry-run]
+              workspace.use <solution-or-project-path> [--alias default] [--require-solution true] [--repo-root <path>] [--nodetach] [--idle-timeout-minutes <N>]
+              workspace.preload <solution-or-project-path> [--alias name] [--require-solution true] [--repo-root <path>] [--nodetach] [--idle-timeout-minutes <N>]
               workspace.status [alias|workspace-handle] [--repo-root <path>]
               workspace.refresh [alias|workspace-handle] [--mode balanced|strict|reload|none] [--repo-root <path>]
               workspace.close [alias|workspace-handle] [--repo-root <path>]
@@ -5786,7 +6442,9 @@ Workflow:
               - Start with quickstart for an agent-ready pit-of-success workflow brief.
               - Use csharp-start for the shortest C# workflow: preload, ctx.member_source, claim, edit, verify.
               - Use llmstxt for one-shot markdown bootstrap guidance (stable-first by default).
-              - Use workspace.use <solution.slnx> to start the daemon, load a full solution, and bind the default alias.
+              - Use workspace.use <solution.slnx> to start or reuse the daemon (detached and bounded by 30m idle timeout & 8-host cap; set ROSCLI_DAEMON_LAUNCH=nodetach to forbid detached WMI fallback), load a full solution, and bind the default alias.
+              - Where a long-lived runner exists (e.g., a background job), running `roscli daemon.run` under that runner is preferred: the host stays visible and stoppable there, and later `workspace.use` calls reuse it automatically.
+              - Inspect all user daemons with `roscli daemon.list` and clean up missing-worktree or all hosts with `roscli daemon.prune [--all]`.
               - workspace.use/preload infer daemon repo root from the target solution/project path unless --repo-root is provided.
               - Daemon-capable tool calls with file_path/workspace_path infer the same daemon repo root, so supervising from another cwd still finds the target hot workspace.
               - Semantic nav/ctx/analyze/diag commands and the exact/semantic edits run on the daemon's hot workspace (ROSCLI_DAEMON=auto by default; a bound alias is refreshed from disk before each call); pass --no-daemon or set ROSCLI_DAEMON=off to force the in-process path.

@@ -359,42 +359,638 @@ public sealed class DaemonSurvivalAndErgonomicsTests
     }
 
     [Fact]
-    public async Task WindowsKillOnJobClose_DaemonSurvivesParentShellJobTermination()
+    public async Task WindowsKillOnJobClose_WithoutBreakaway_NoDetachReportsCallerJobAndFailsFastAfterShellExit()
     {
         if (!OperatingSystem.IsWindows())
         {
             return;
         }
 
-        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-jobobj-{Guid.NewGuid():N}");
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-jobobj-caller-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempRoot);
         int? daemonPid = null;
 
         try
         {
+            _ = await CreateSingleProjectSlnxFixtureAsync(tempRoot, "CallerJobFixture", "RunJobCheck");
+
             string cliDll = Path.Combine(AppContext.BaseDirectory, "RoslynSkills.Cli.dll");
             string dotnetExe = ResolveDotnetPath();
             string cmdLine = WorkspaceHostDaemonManager.BuildWindowsCommandLine(
                 dotnetExe,
-                new[] { cliDll, "daemon.start", "--repo-root", tempRoot });
+                new[] { cliDll, "workspace.use", "CallerJobFixture.slnx", "--require-solution", "true", "--nodetach" });
 
-            int childExitCode = RunCommandInsideKillOnCloseJobWindows(cmdLine, tempRoot, TimeSpan.FromSeconds(30));
-            Assert.Equal(0, childExitCode);
+            (int childExitCode, string useOut, string useErr) = RunCommandInsideKillOnCloseJobWindows(
+                cmdLine,
+                tempRoot,
+                allowBreakaway: false,
+                TimeSpan.FromSeconds(60));
+            Assert.True(childExitCode == 0, $"workspace.use --nodetach inside no-breakaway job failed ({childExitCode}).\nSTDOUT:\n{useOut}\nSTDERR:\n{useErr}");
 
-            // The parent job object is now closed and any process still inside it was terminated by Windows.
+            using (JsonDocument useDoc = JsonDocument.Parse(useOut))
+            {
+                Assert.True(useDoc.RootElement.GetProperty("Ok").GetBoolean());
+                JsonElement data = useDoc.RootElement.GetProperty("Data");
+                Assert.Equal("caller_job", data.GetProperty("launch_mode").GetString());
+                Assert.Equal(WorkspaceHostDaemonManager.LifetimeCallerJob, data.GetProperty("daemon_lifetime").GetString());
+                Assert.Contains("KILL_ON_JOB_CLOSE", data.GetProperty("caller_job_flags").GetString() ?? string.Empty, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(data.GetProperty("launch_warning").GetString()));
+                string dataNote = data.GetProperty("daemon_lifetime_note").GetString() ?? string.Empty;
+                Assert.Contains("KILL_ON_JOB_CLOSE", dataNote, StringComparison.Ordinal);
+                Assert.Contains("daemon.run", dataNote, StringComparison.Ordinal);
+
+                JsonElement transport = useDoc.RootElement.GetProperty("Transport");
+                Assert.Equal("caller_job", transport.GetProperty("launch_mode").GetString());
+                Assert.Equal(WorkspaceHostDaemonManager.LifetimeCallerJob, transport.GetProperty("daemon_lifetime").GetString());
+                Assert.Contains("KILL_ON_JOB_CLOSE", transport.GetProperty("caller_job_flags").GetString() ?? string.Empty, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(transport.GetProperty("daemon_lifetime_note").GetString()));
+                daemonPid = data.GetProperty("daemon_pid").GetInt32();
+            }
+
+            // The parent job object is now closed and the daemon inside it was terminated by Windows.
+            Assert.NotNull(daemonPid);
+            await WaitForProcessIdGoneAsync(daemonPid.Value, TimeSpan.FromSeconds(5));
+
+            Stopwatch sw = Stopwatch.StartNew();
+            (int navExit, string navOut, string navErr) = await RunCliProcessAsync(
+                workingDirectory: tempRoot,
+                arguments: new[] { "nav.find_references", "Program.cs:5:24" },
+                requireDaemon: true,
+                timeoutMilliseconds: 15_000);
+            sw.Stop();
+
+            Assert.NotEqual(0, navExit);
+            Assert.True(
+                sw.Elapsed < TimeSpan.FromSeconds(10),
+                $"Dead caller_job host call took {sw.Elapsed.TotalSeconds:F2}s (expected <10s).\nSTDOUT:\n{navOut}\nSTDERR:\n{navErr}");
+
+            using JsonDocument navDoc = JsonDocument.Parse(navOut);
+            Assert.False(navDoc.RootElement.GetProperty("Ok").GetBoolean());
+            JsonElement error = navDoc.RootElement.GetProperty("Errors")[0];
+            Assert.Equal(WorkspaceHostProtocol.ErrorCode.DaemonUnavailable, error.GetProperty("Code").GetString());
+            string message = error.GetProperty("Message").GetString() ?? string.Empty;
+            Assert.Contains("caller_job", message, StringComparison.Ordinal);
+            Assert.Contains("daemon.run", message, StringComparison.Ordinal);
+
+            JsonElement details = error.GetProperty("Details");
+            Assert.Equal("host_exited", details.GetProperty("reason").GetString());
+            Assert.Equal(WorkspaceHostDaemonManager.LifetimeCallerJob, details.GetProperty("daemon_lifetime").GetString());
+            Assert.Equal("caller_job", details.GetProperty("launch_mode").GetString());
+            Assert.Contains("KILL_ON_JOB_CLOSE", details.GetProperty("caller_job_flags").GetString() ?? string.Empty, StringComparison.Ordinal);
+            Assert.Equal(daemonPid.Value, details.GetProperty("daemon_pid").GetInt32());
+
+            JsonElement navTransport = navDoc.RootElement.GetProperty("Transport");
+            Assert.Equal(WorkspaceHostDaemonManager.LifetimeCallerJob, navTransport.GetProperty("daemon_lifetime").GetString());
+
+            // Dead-PID stale manifest should be removed after reporting host_exited.
+            Assert.False(File.Exists(RepositoryRootDiscovery.GetWorkspaceDaemonManifestPath(tempRoot)));
+        }
+        finally
+        {
+            await CleanupDaemonAndTempRootAsync(tempRoot, daemonPid);
+        }
+    }
+
+    [Fact]
+    public async Task WindowsKillOnJobClose_WithoutBreakaway_DefaultLaunchesDetachedViaWmiWithLoggedWarning()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-jobobj-wmi-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        int? daemonPid = null;
+
+        try
+        {
+            _ = await CreateSingleProjectSlnxFixtureAsync(tempRoot, "WmiJobFixture", "RunWmiCheck");
+
+            string cliDll = Path.Combine(AppContext.BaseDirectory, "RoslynSkills.Cli.dll");
+            string dotnetExe = ResolveDotnetPath();
+            string cmdLine = WorkspaceHostDaemonManager.BuildWindowsCommandLine(
+                dotnetExe,
+                new[] { cliDll, "workspace.use", "WmiJobFixture.slnx", "--require-solution", "true", "--idle-timeout-seconds", "60" });
+
+            (int childExitCode, string useOut, string useErr) = RunCommandInsideKillOnCloseJobWindows(
+                cmdLine,
+                tempRoot,
+                allowBreakaway: false,
+                TimeSpan.FromSeconds(60));
+            Assert.True(childExitCode == 0, $"workspace.use inside no-breakaway job (default WMI) failed ({childExitCode}).\nSTDOUT:\n{useOut}\nSTDERR:\n{useErr}");
+
+            using (JsonDocument useDoc = JsonDocument.Parse(useOut))
+            {
+                Assert.True(useDoc.RootElement.GetProperty("Ok").GetBoolean());
+                JsonElement data = useDoc.RootElement.GetProperty("Data");
+                Assert.Equal("wmi_win32_process", data.GetProperty("launch_mode").GetString());
+                Assert.Equal(WorkspaceHostDaemonManager.LifetimeDetached, data.GetProperty("daemon_lifetime").GetString());
+                Assert.Contains("KILL_ON_JOB_CLOSE", data.GetProperty("caller_job_flags").GetString() ?? string.Empty, StringComparison.Ordinal);
+
+                string warning = data.GetProperty("launch_warning").GetString() ?? string.Empty;
+                Assert.Contains("KILL_ON_JOB_CLOSE", warning, StringComparison.Ordinal);
+                Assert.Contains("caller_chain=", warning, StringComparison.Ordinal);
+                Assert.Contains("WMI", warning, StringComparison.Ordinal);
+
+                JsonElement transport = useDoc.RootElement.GetProperty("Transport");
+                Assert.Equal("wmi_win32_process", transport.GetProperty("launch_mode").GetString());
+                Assert.Equal(WorkspaceHostDaemonManager.LifetimeDetached, transport.GetProperty("daemon_lifetime").GetString());
+                Assert.Equal(warning, transport.GetProperty("launch_warning").GetString());
+                daemonPid = data.GetProperty("daemon_pid").GetInt32();
+            }
+
+            Assert.NotNull(daemonPid);
+            string logPath = RepositoryRootDiscovery.GetWorkspaceDaemonLogPath(tempRoot);
+            Assert.True(File.Exists(logPath), $"Expected host log at '{logPath}'.");
+            string logText = await File.ReadAllTextAsync(logPath);
+            Assert.Contains("launch_warning", logText, StringComparison.Ordinal);
+            Assert.Contains("KILL_ON_JOB_CLOSE", logText, StringComparison.Ordinal);
+            Assert.Contains("caller_chain=", logText, StringComparison.Ordinal);
+
+            // The parent job object is now closed; the WMI-detached daemon must survive and serve queries.
+            (int navExit, string navOut, string navErr) = await RunCliProcessAsync(
+                workingDirectory: tempRoot,
+                arguments: new[] { "nav.find_references", "Program.cs:5:24" },
+                requireDaemon: true,
+                timeoutMilliseconds: 15_000);
+            Assert.True(navExit == 0, $"WMI-detached daemon did not survive KillOnJobClose job termination.\nSTDOUT:\n{navOut}\nSTDERR:\n{navErr}");
+            using JsonDocument navDoc = JsonDocument.Parse(navOut);
+            Assert.True(navDoc.RootElement.GetProperty("Ok").GetBoolean());
+            Assert.Equal("daemon", navDoc.RootElement.GetProperty("Transport").GetProperty("mode").GetString());
+            Assert.True(navDoc.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32() >= 2);
+        }
+        finally
+        {
+            await CleanupDaemonAndTempRootAsync(tempRoot, daemonPid);
+            if (daemonPid.HasValue)
+            {
+                await WaitForProcessIdGoneAsync(daemonPid.Value, TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+
+    [Fact]
+    public async Task WindowsKillOnJobClose_WithBreakawayAllowed_DaemonSurvivesAndReportsDetached()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-jobobj-breakaway-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        int? daemonPid = null;
+
+        try
+        {
+            _ = await CreateSingleProjectSlnxFixtureAsync(tempRoot, "BreakawayFixture", "RunBreakawayCheck");
+
+            string cliDll = Path.Combine(AppContext.BaseDirectory, "RoslynSkills.Cli.dll");
+            string dotnetExe = ResolveDotnetPath();
+            string cmdLine = WorkspaceHostDaemonManager.BuildWindowsCommandLine(
+                dotnetExe,
+                new[] { cliDll, "workspace.use", "BreakawayFixture.slnx", "--require-solution", "true" });
+
+            (int childExitCode, string useOut, string useErr) = RunCommandInsideKillOnCloseJobWindows(
+                cmdLine,
+                tempRoot,
+                allowBreakaway: true,
+                TimeSpan.FromSeconds(60));
+            Assert.True(childExitCode == 0, $"workspace.use inside breakaway-ok job failed ({childExitCode}).\nSTDOUT:\n{useOut}\nSTDERR:\n{useErr}");
+
             WorkspaceHostDaemonManager manager = new();
             daemonPid = manager.TryGetDaemonProcessId(tempRoot);
             Assert.NotNull(daemonPid);
 
-            // Verify the daemon survived job termination and still answers daemon.status.
-            (int statusExit, string statusOut, string statusErr) = await RunCliProcessAsync(
+            using (JsonDocument useDoc = JsonDocument.Parse(useOut))
+            {
+                Assert.True(useDoc.RootElement.GetProperty("Ok").GetBoolean());
+                JsonElement data = useDoc.RootElement.GetProperty("Data");
+                Assert.Equal("create_process_breakaway", data.GetProperty("launch_mode").GetString());
+                Assert.Equal(WorkspaceHostDaemonManager.LifetimeDetached, data.GetProperty("daemon_lifetime").GetString());
+                Assert.False(data.TryGetProperty("launch_warning", out _), "Breakaway launch should not emit launch_warning.");
+                Assert.Equal(WorkspaceHostDaemonManager.LifetimeDetached, useDoc.RootElement.GetProperty("Transport").GetProperty("daemon_lifetime").GetString());
+                Assert.Equal("create_process_breakaway", useDoc.RootElement.GetProperty("Transport").GetProperty("launch_mode").GetString());
+            }
+
+            // The parent job object is now closed; a broken-away daemon must survive and serve queries.
+            (int navExit, string navOut, string navErr) = await RunCliProcessAsync(
                 workingDirectory: tempRoot,
-                arguments: new[] { "daemon.status", "--repo-root", tempRoot },
-                requireDaemon: false,
+                arguments: new[] { "nav.find_references", "Program.cs:5:24" },
+                requireDaemon: true,
                 timeoutMilliseconds: 15_000);
-            Assert.True(statusExit == 0, $"Daemon did not survive KillOnJobClose termination.\nSTDOUT:\n{statusOut}\nSTDERR:\n{statusErr}");
-            using JsonDocument doc = JsonDocument.Parse(statusOut);
-            Assert.Equal(daemonPid.Value, doc.RootElement.GetProperty("Data").GetProperty("daemon_pid").GetInt32());
+            Assert.True(navExit == 0, $"Daemon did not survive KillOnJobClose+BreakawayOk job termination.\nSTDOUT:\n{navOut}\nSTDERR:\n{navErr}");
+            using JsonDocument navDoc = JsonDocument.Parse(navOut);
+            Assert.True(navDoc.RootElement.GetProperty("Ok").GetBoolean());
+            Assert.Equal("daemon", navDoc.RootElement.GetProperty("Transport").GetProperty("mode").GetString());
+            Assert.True(navDoc.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32() >= 2);
+        }
+        finally
+        {
+            await CleanupDaemonAndTempRootAsync(tempRoot, daemonPid);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentWorkspaceUse_ReusesSingleHostProcess()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-concurrent-use-{Guid.NewGuid():N}");
+        string stateDir = Path.Combine(tempRoot, ".state");
+        string repoDir = Path.Combine(tempRoot, "repo");
+        Directory.CreateDirectory(stateDir);
+        Directory.CreateDirectory(repoDir);
+        Dictionary<string, string?> env = new(StringComparer.Ordinal)
+        {
+            ["ROSLYNSKILLS_WORKSPACE_HOST_DIR"] = stateDir,
+        };
+        int? daemonPid = null;
+
+        try
+        {
+            _ = await CreateSingleProjectSlnxFixtureAsync(repoDir, "ConcurrentFixture", "Ping");
+
+            Task<(int ExitCode, string StdOut, string StdErr)> call1 = RunCliProcessAsync(
+                workingDirectory: repoDir,
+                arguments: new[] { "workspace.use", "ConcurrentFixture.slnx", "--require-solution", "true", "--idle-timeout-seconds", "60" },
+                requireDaemon: false,
+                extraEnv: env);
+            Task<(int ExitCode, string StdOut, string StdErr)> call2 = RunCliProcessAsync(
+                workingDirectory: repoDir,
+                arguments: new[] { "workspace.use", "ConcurrentFixture.slnx", "--require-solution", "true", "--idle-timeout-seconds", "60" },
+                requireDaemon: false,
+                extraEnv: env);
+
+            await Task.WhenAll(call1, call2);
+            (int exit1, string out1, string err1) = await call1;
+            (int exit2, string out2, string err2) = await call2;
+            Assert.True(exit1 == 0, $"First concurrent workspace.use failed.\nSTDOUT:\n{out1}\nSTDERR:\n{err1}");
+            Assert.True(exit2 == 0, $"Second concurrent workspace.use failed.\nSTDOUT:\n{out2}\nSTDERR:\n{err2}");
+
+            using JsonDocument doc1 = JsonDocument.Parse(out1);
+            using JsonDocument doc2 = JsonDocument.Parse(out2);
+            int pid1 = doc1.RootElement.GetProperty("Data").GetProperty("daemon_pid").GetInt32();
+            int pid2 = doc2.RootElement.GetProperty("Data").GetProperty("daemon_pid").GetInt32();
+            daemonPid = pid1;
+            Assert.True(pid1 > 0);
+            Assert.Equal(pid1, pid2);
+        }
+        finally
+        {
+            await CleanupIsolatedStateDirAsync(stateDir, tempRoot, daemonPid);
+        }
+    }
+
+    [Fact]
+    public async Task DaemonIdleTimeout_ExitsCleanlyLogsReasonAndRemovesManifest()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-idle-timeout-{Guid.NewGuid():N}");
+        string stateDir = Path.Combine(tempRoot, ".state");
+        string repoDir = Path.Combine(tempRoot, "repo");
+        Directory.CreateDirectory(stateDir);
+        Directory.CreateDirectory(repoDir);
+        Dictionary<string, string?> env = new(StringComparer.Ordinal)
+        {
+            ["ROSLYNSKILLS_WORKSPACE_HOST_DIR"] = stateDir,
+        };
+        int? daemonPid = null;
+
+        try
+        {
+            _ = await CreateSingleProjectSlnxFixtureAsync(repoDir, "IdleFixture", "Sleepy");
+
+            (int startExit, string startOut, string startErr) = await RunCliProcessAsync(
+                workingDirectory: repoDir,
+                arguments: new[] { "daemon.start", "--repo-root", repoDir, "--idle-timeout-seconds", "2" },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(startExit == 0, $"daemon.start failed.\nSTDOUT:\n{startOut}\nSTDERR:\n{startErr}");
+
+            string manifestPath;
+            string logPath;
+            using (JsonDocument startDoc = JsonDocument.Parse(startOut))
+            {
+                JsonElement data = startDoc.RootElement.GetProperty("Data");
+                daemonPid = data.GetProperty("daemon_pid").GetInt32();
+                manifestPath = data.GetProperty("manifest_path").GetString()!;
+                logPath = data.GetProperty("log_path").GetString()!;
+                Assert.True(File.Exists(manifestPath));
+            }
+
+            // Probe daemon.status once — read-only status pings must NOT reset the idle timer.
+            (int statusExit, string statusOut, string statusErr) = await RunCliProcessAsync(
+                workingDirectory: repoDir,
+                arguments: new[] { "daemon.status", "--repo-root", repoDir },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(statusExit == 0, $"daemon.status failed.\nSTDOUT:\n{statusOut}\nSTDERR:\n{statusErr}");
+
+            await WaitForProcessIdGoneAsync(daemonPid.Value, TimeSpan.FromSeconds(12));
+            bool exitedOnOwn = !IsProcessAlive(daemonPid.Value);
+            Assert.True(exitedOnOwn, $"Expected WorkspaceHost PID {daemonPid.Value} to exit on 2 s idle timeout.");
+
+            // Wait briefly for finally manifest cleanup to settle on disk.
+            Stopwatch manifestSw = Stopwatch.StartNew();
+            while (File.Exists(manifestPath) && manifestSw.Elapsed < TimeSpan.FromSeconds(3))
+            {
+                await Task.Delay(50);
+            }
+
+            Assert.False(File.Exists(manifestPath), $"Expected manifest '{manifestPath}' to be removed on clean idle exit.");
+            Assert.True(File.Exists(logPath), $"Expected log file '{logPath}' to exist.");
+            string logText = await File.ReadAllTextAsync(logPath);
+            Assert.Contains("host_idle_timeout", logText, StringComparison.Ordinal);
+            daemonPid = null;
+        }
+        finally
+        {
+            await CleanupIsolatedStateDirAsync(stateDir, tempRoot, daemonPid);
+        }
+    }
+
+    [Fact]
+    public async Task DaemonHostCap_ListAndPrune_EnforcesCapListsHostsAndPrunesMissingFolders()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-cap-prune-{Guid.NewGuid():N}");
+        string stateDir = Path.Combine(tempRoot, ".state");
+        string repoA = Path.Combine(tempRoot, "repo-a");
+        string repoB = Path.Combine(tempRoot, "repo-b");
+        string repoC = Path.Combine(tempRoot, "repo-c");
+        Directory.CreateDirectory(stateDir);
+        Directory.CreateDirectory(repoA);
+        Directory.CreateDirectory(repoB);
+        Directory.CreateDirectory(repoC);
+        Dictionary<string, string?> env = new(StringComparer.Ordinal)
+        {
+            ["ROSLYNSKILLS_WORKSPACE_HOST_DIR"] = stateDir,
+            ["ROSLYNSKILLS_MAX_DAEMON_HOSTS"] = "2",
+        };
+        int? pidA = null;
+        int? pidB = null;
+
+        try
+        {
+            _ = await CreateSingleProjectSlnxFixtureAsync(repoA, "CapA", "CallA");
+            _ = await CreateSingleProjectSlnxFixtureAsync(repoB, "CapB", "CallB");
+            _ = await CreateSingleProjectSlnxFixtureAsync(repoC, "CapC", "CallC");
+
+            // Drop a dead-PID stale manifest into the isolated state dir to verify cleanup.
+            string staleManifestPath = Path.Combine(stateDir, "deadbeef00000000.json");
+            await File.WriteAllTextAsync(staleManifestPath, """
+                {
+                  "ManifestVersion": "1.0",
+                  "Transport": "named-pipe",
+                  "PipeName": "roslynskills-deadbeef00000000",
+                  "SocketPath": null,
+                  "RepoRoot": "C:\\nonexistent\\stale",
+                  "HostPath": "RoslynSkills.WorkspaceHost.dll",
+                  "AuthToken": "dead",
+                  "ProcessId": 999999,
+                  "StartedAtUtc": "2026-01-01T00:00:00Z"
+                }
+                """, Utf8NoBom);
+
+            // Start 2 hosts (at cap = 2).
+            (int useAExit, string useAOut, string useAErr) = await RunCliProcessAsync(
+                repoA,
+                new[] { "workspace.use", "CapA.slnx", "--require-solution", "true", "--idle-timeout-seconds", "120" },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(useAExit == 0, $"repo-a workspace.use failed.\nSTDOUT:\n{useAOut}\nSTDERR:\n{useAErr}");
+            using (JsonDocument docA = JsonDocument.Parse(useAOut))
+            {
+                pidA = docA.RootElement.GetProperty("Data").GetProperty("daemon_pid").GetInt32();
+            }
+
+            // Starting repo-a should already have cleaned the dead-PID stale manifest during the cap scan.
+            Assert.False(File.Exists(staleManifestPath), "Expected dead-PID stale manifest to be cleaned automatically.");
+
+            (int useBExit, string useBOut, string useBErr) = await RunCliProcessAsync(
+                repoB,
+                new[] { "workspace.use", "CapB.slnx", "--require-solution", "true", "--idle-timeout-seconds", "120" },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(useBExit == 0, $"repo-b workspace.use failed.\nSTDOUT:\n{useBOut}\nSTDERR:\n{useBErr}");
+            using (JsonDocument docB = JsonDocument.Parse(useBOut))
+            {
+                pidB = docB.RootElement.GetProperty("Data").GetProperty("daemon_pid").GetInt32();
+            }
+
+            // 3rd workspace.use must be refused with daemon_host_limit_reached and list the 2 active hosts.
+            (int useCExit, string useCOut, string useCErr) = await RunCliProcessAsync(
+                repoC,
+                new[] { "workspace.use", "CapC.slnx", "--require-solution", "true", "--idle-timeout-seconds", "120" },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.NotEqual(0, useCExit);
+            using (JsonDocument docC = JsonDocument.Parse(useCOut))
+            {
+                Assert.False(docC.RootElement.GetProperty("Ok").GetBoolean());
+                JsonElement err = docC.RootElement.GetProperty("Errors")[0];
+                Assert.Equal("daemon_host_limit_reached", err.GetProperty("Code").GetString());
+                JsonElement details = err.GetProperty("Details");
+                Assert.Equal(2, details.GetProperty("max_hosts").GetInt32());
+                Assert.Equal(2, details.GetProperty("active_count").GetInt32());
+                Assert.Equal(2, details.GetProperty("hosts").GetArrayLength());
+            }
+
+            // daemon.list returns both hosts with workspace_key, daemon_pid, launch_mode, idle_seconds, memory_mb.
+            (int listExit, string listOut, string listErr) = await RunCliProcessAsync(
+                tempRoot,
+                new[] { "daemon.list" },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(listExit == 0, $"daemon.list failed.\nSTDOUT:\n{listOut}\nSTDERR:\n{listErr}");
+            using (JsonDocument listDoc = JsonDocument.Parse(listOut))
+            {
+                JsonElement data = listDoc.RootElement.GetProperty("Data");
+                Assert.Equal(2, data.GetProperty("active_count").GetInt32());
+                Assert.Equal(2, data.GetProperty("max_hosts").GetInt32());
+                JsonElement hosts = data.GetProperty("hosts");
+                Assert.Equal(2, hosts.GetArrayLength());
+                foreach (JsonElement host in hosts.EnumerateArray())
+                {
+                    Assert.False(string.IsNullOrWhiteSpace(host.GetProperty("workspace_key").GetString()));
+                    Assert.True(host.GetProperty("daemon_pid").GetInt32() > 0);
+                    Assert.False(string.IsNullOrWhiteSpace(host.GetProperty("launch_mode").GetString()));
+                    Assert.Equal(JsonValueKind.Number, host.GetProperty("idle_seconds").ValueKind);
+                    Assert.True(host.GetProperty("memory_mb").GetDouble() > 0);
+                }
+            }
+
+            // Close repo-b's workspace (releasing Windows FileSystemWatcher handle while leaving repo-b's host alive),
+            // delete repo-b folder, and run daemon.prune: repo-b host is stopped, repo-a survives!
+            (int closeBExit, string closeBOut, string closeBErr) = await RunCliProcessAsync(
+                repoB,
+                new[] { "workspace.close", "--repo-root", repoB },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(closeBExit == 0, $"repo-b workspace.close failed.\nSTDOUT:\n{closeBOut}\nSTDERR:\n{closeBErr}");
+            Assert.True(IsProcessAlive(pidB!.Value), "Expected repo-b host process to remain alive after workspace.close.");
+
+            Directory.Delete(repoB, recursive: true);
+            (int pruneExit, string pruneOut, string pruneErr) = await RunCliProcessAsync(
+                tempRoot,
+                new[] { "daemon.prune" },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(pruneExit == 0, $"daemon.prune failed.\nSTDOUT:\n{pruneOut}\nSTDERR:\n{pruneErr}");
+            using (JsonDocument pruneDoc = JsonDocument.Parse(pruneOut))
+            {
+                JsonElement data = pruneDoc.RootElement.GetProperty("Data");
+                Assert.Equal(1, data.GetProperty("stopped_count").GetInt32());
+                Assert.Equal(1, data.GetProperty("remaining_live_hosts").GetInt32());
+                JsonElement stopped = data.GetProperty("stopped_hosts")[0];
+                Assert.Equal(pidB!.Value, stopped.GetProperty("daemon_pid").GetInt32());
+                Assert.Equal("worktree_missing", stopped.GetProperty("reason").GetString());
+            }
+
+            await WaitForProcessIdGoneAsync(pidB!.Value, TimeSpan.FromSeconds(5));
+            Assert.False(IsProcessAlive(pidB.Value));
+            Assert.True(IsProcessAlive(pidA!.Value));
+            pidB = null;
+
+            // daemon.prune --all stops the remaining host (repo-a).
+            (int pruneAllExit, string pruneAllOut, string pruneAllErr) = await RunCliProcessAsync(
+                tempRoot,
+                new[] { "daemon.prune", "--all" },
+                requireDaemon: false,
+                extraEnv: env);
+            Assert.True(pruneAllExit == 0, $"daemon.prune --all failed.\nSTDOUT:\n{pruneAllOut}\nSTDERR:\n{pruneAllErr}");
+            using (JsonDocument pruneAllDoc = JsonDocument.Parse(pruneAllOut))
+            {
+                JsonElement data = pruneAllDoc.RootElement.GetProperty("Data");
+                Assert.Equal(1, data.GetProperty("stopped_count").GetInt32());
+                Assert.Equal(0, data.GetProperty("remaining_live_hosts").GetInt32());
+            }
+
+            await WaitForProcessIdGoneAsync(pidA.Value, TimeSpan.FromSeconds(5));
+            Assert.False(IsProcessAlive(pidA.Value));
+            pidA = null;
+        }
+        finally
+        {
+            await CleanupIsolatedStateDirAsync(stateDir, tempRoot, pidA, pidB);
+        }
+    }
+
+    [Fact]
+    public async Task DaemonRun_ServesInForegroundUntilStoppedOrStdinCloses()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-daemon-run-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        int? daemonPid = null;
+
+        try
+        {
+            _ = await CreateSingleProjectSlnxFixtureAsync(tempRoot, "ForegroundFixture", "RunForeground");
+
+            // 1. Default piped stdin: serves workspace.use (reusing the exact daemon.run PID) + nav.find_references,
+            //    then exits cleanly when stdin closes.
+            using (Process runProc = StartCliDaemonRunProcess(tempRoot, exitOnStdinEof: null))
+            {
+                try
+                {
+                    string readyJson = await ReadJsonEnvelopeFromStreamAsync(runProc.StandardOutput, TimeSpan.FromSeconds(20));
+                    using (JsonDocument readyDoc = JsonDocument.Parse(readyJson))
+                    {
+                        Assert.True(readyDoc.RootElement.GetProperty("Ok").GetBoolean(), $"daemon.run ready envelope failed:\n{readyJson}");
+                        Assert.Equal("daemon.run", readyDoc.RootElement.GetProperty("CommandId").GetString());
+                        JsonElement data = readyDoc.RootElement.GetProperty("Data");
+                        Assert.True(data.GetProperty("foreground").GetBoolean());
+                        Assert.Equal(WorkspaceHostDaemonManager.LifetimeForeground, data.GetProperty("daemon_lifetime").GetString());
+                        Assert.True(data.GetProperty("exit_on_stdin_eof").GetBoolean());
+                        daemonPid = data.GetProperty("daemon_pid").GetInt32();
+                        Assert.True(daemonPid > 0);
+                    }
+
+                    (int useExit, string useOut, string useErr) = await RunCliProcessAsync(
+                        workingDirectory: tempRoot,
+                        arguments: new[] { "workspace.use", "ForegroundFixture.slnx", "--require-solution", "true" },
+                        requireDaemon: false);
+                    Assert.True(useExit == 0, $"workspace.use against daemon.run failed.\nSTDOUT:\n{useOut}\nSTDERR:\n{useErr}");
+                    using (JsonDocument useDoc = JsonDocument.Parse(useOut))
+                    {
+                        JsonElement useData = useDoc.RootElement.GetProperty("Data");
+                        Assert.Equal(WorkspaceHostDaemonManager.LifetimeForeground, useData.GetProperty("daemon_lifetime").GetString());
+                        Assert.Equal(daemonPid.Value, useData.GetProperty("daemon_pid").GetInt32());
+                        Assert.True(useData.GetProperty("daemon_reused").GetBoolean());
+                    }
+
+                    (int navExit, string navOut, string navErr) = await RunCliProcessAsync(
+                        workingDirectory: tempRoot,
+                        arguments: new[] { "nav.find_references", "Program.cs:5:24" },
+                        requireDaemon: true);
+                    Assert.True(navExit == 0, $"nav.find_references against daemon.run failed.\nSTDOUT:\n{navOut}\nSTDERR:\n{navErr}");
+                    using (JsonDocument navDoc = JsonDocument.Parse(navOut))
+                    {
+                        Assert.Equal("daemon", navDoc.RootElement.GetProperty("Transport").GetProperty("mode").GetString());
+                        Assert.True(navDoc.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32() >= 2);
+                    }
+
+                    // Closing stdin pipe must cleanly shut down daemon.run and its WorkspaceHost child.
+                    runProc.StandardInput.Close();
+                    using CancellationTokenSource exitCts = new(TimeSpan.FromSeconds(15));
+                    await runProc.WaitForExitAsync(exitCts.Token);
+                    Assert.Equal(0, runProc.ExitCode);
+                    await WaitForProcessIdGoneAsync(daemonPid.Value, TimeSpan.FromSeconds(5));
+                    Assert.False(File.Exists(RepositoryRootDiscovery.GetWorkspaceDaemonManifestPath(tempRoot)));
+                    daemonPid = null;
+                }
+                finally
+                {
+                    if (!runProc.HasExited)
+                    {
+                        try { runProc.Kill(entireProcessTree: true); } catch { }
+                    }
+                }
+            }
+
+            // 2. With --exit-on-stdin-eof false: ignores stdin EOF and exits cleanly on daemon.stop.
+            using (Process runProc = StartCliDaemonRunProcess(tempRoot, exitOnStdinEof: false))
+            {
+                try
+                {
+                    string readyJson = await ReadJsonEnvelopeFromStreamAsync(runProc.StandardOutput, TimeSpan.FromSeconds(20));
+                    using (JsonDocument readyDoc = JsonDocument.Parse(readyJson))
+                    {
+                        Assert.True(readyDoc.RootElement.GetProperty("Ok").GetBoolean(), $"daemon.run ready envelope failed:\n{readyJson}");
+                        JsonElement data = readyDoc.RootElement.GetProperty("Data");
+                        Assert.Equal(WorkspaceHostDaemonManager.LifetimeForeground, data.GetProperty("daemon_lifetime").GetString());
+                        Assert.False(data.GetProperty("exit_on_stdin_eof").GetBoolean());
+                        daemonPid = data.GetProperty("daemon_pid").GetInt32();
+                    }
+
+                    runProc.StandardInput.Close();
+                    await Task.Delay(300);
+                    Assert.False(runProc.HasExited, "daemon.run exited on stdin EOF despite --exit-on-stdin-eof false.");
+
+                    (int statusExit, string statusOut, string statusErr) = await RunCliProcessAsync(
+                        workingDirectory: tempRoot,
+                        arguments: new[] { "daemon.status", "--repo-root", tempRoot },
+                        requireDaemon: false);
+                    Assert.True(statusExit == 0, $"daemon.status failed while daemon.run running.\nSTDOUT:\n{statusOut}\nSTDERR:\n{statusErr}");
+
+                    (int stopExit, string stopOut, string stopErr) = await RunCliProcessAsync(
+                        workingDirectory: tempRoot,
+                        arguments: new[] { "daemon.stop", "--repo-root", tempRoot },
+                        requireDaemon: false);
+                    Assert.True(stopExit == 0, $"daemon.stop failed.\nSTDOUT:\n{stopOut}\nSTDERR:\n{stopErr}");
+
+                    using CancellationTokenSource exitCts = new(TimeSpan.FromSeconds(15));
+                    await runProc.WaitForExitAsync(exitCts.Token);
+                    Assert.Equal(0, runProc.ExitCode);
+                    await WaitForProcessIdGoneAsync(daemonPid.Value, TimeSpan.FromSeconds(5));
+                    daemonPid = null;
+                }
+                finally
+                {
+                    if (!runProc.HasExited)
+                    {
+                        try { runProc.Kill(entireProcessTree: true); } catch { }
+                    }
+                }
+            }
         }
         finally
         {
@@ -515,7 +1111,8 @@ public sealed class DaemonSurvivalAndErgonomicsTests
         string workingDirectory,
         string[] arguments,
         bool requireDaemon,
-        int timeoutMilliseconds = 60_000)
+        int timeoutMilliseconds = 60_000,
+        IReadOnlyDictionary<string, string?>? extraEnv = null)
     {
         string cliDll = Path.Combine(AppContext.BaseDirectory, "RoslynSkills.Cli.dll");
         string[] fullArgs = new[] { cliDll }.Concat(arguments).ToArray();
@@ -525,6 +1122,14 @@ public sealed class DaemonSurvivalAndErgonomicsTests
             ["ROSCLI_REQUIRE_HOT_WORKSPACE"] = null,
             ["ROSCLI_WORKSPACE_ALIAS"] = null,
         };
+        if (extraEnv is not null)
+        {
+            foreach ((string key, string? value) in extraEnv)
+            {
+                env[key] = value;
+            }
+        }
+
         return RunProcessAsync(ResolveDotnetPath(), workingDirectory, fullArgs, env, timeoutMilliseconds);
     }
 
@@ -607,6 +1212,45 @@ public sealed class DaemonSurvivalAndErgonomicsTests
         }
     }
 
+    private static async Task CleanupIsolatedStateDirAsync(string stateDir, string tempRoot, params int?[] knownPids)
+    {
+        try
+        {
+            if (Directory.Exists(stateDir))
+            {
+                Dictionary<string, string?> env = new(StringComparer.Ordinal)
+                {
+                    ["ROSLYNSKILLS_WORKSPACE_HOST_DIR"] = stateDir,
+                };
+                string workDir = Directory.Exists(tempRoot) ? tempRoot : Path.GetTempPath();
+                _ = await RunCliProcessAsync(workDir, new[] { "daemon.prune", "--all" }, requireDaemon: false, timeoutMilliseconds: 15_000, extraEnv: env);
+            }
+        }
+        catch
+        {
+        }
+
+        foreach (int? pid in knownPids)
+        {
+            if (pid.HasValue)
+            {
+                KillProcessTreeById(pid.Value);
+                await WaitForProcessIdGoneAsync(pid.Value, TimeSpan.FromSeconds(3));
+            }
+        }
+
+        try
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
     private static async Task CleanupDaemonAndTempRootAsync(string tempRoot, int? daemonPid)
     {
         try
@@ -629,7 +1273,7 @@ public sealed class DaemonSurvivalAndErgonomicsTests
             string manifest = RepositoryRootDiscovery.GetWorkspaceDaemonManifestPath(tempRoot);
             string log = RepositoryRootDiscovery.GetWorkspaceDaemonLogPath(tempRoot);
             string aliases = new WorkspaceAliasStore(tempRoot).Path;
-            foreach (string file in new[] { manifest, log, aliases })
+            foreach (string file in new[] { manifest, $"{manifest}.lock", log, aliases })
             {
                 if (File.Exists(file))
                 {
@@ -650,6 +1294,23 @@ public sealed class DaemonSurvivalAndErgonomicsTests
         }
         catch
         {
+        }
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 
@@ -707,13 +1368,123 @@ public sealed class DaemonSurvivalAndErgonomicsTests
         return "dotnet";
     }
 
+    private static Process StartCliDaemonRunProcess(string repoRoot, bool? exitOnStdinEof)
+    {
+        string cliDll = Path.Combine(AppContext.BaseDirectory, "RoslynSkills.Cli.dll");
+        ProcessStartInfo startInfo = new(ResolveDotnetPath())
+        {
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(cliDll);
+        startInfo.ArgumentList.Add("daemon.run");
+        startInfo.ArgumentList.Add("--repo-root");
+        startInfo.ArgumentList.Add(repoRoot);
+        if (exitOnStdinEof.HasValue)
+        {
+            startInfo.ArgumentList.Add("--exit-on-stdin-eof");
+            startInfo.ArgumentList.Add(exitOnStdinEof.Value ? "true" : "false");
+        }
+
+        startInfo.Environment.Remove("ROSCLI_DAEMON");
+        startInfo.Environment.Remove("ROSCLI_REQUIRE_HOT_WORKSPACE");
+        startInfo.Environment.Remove("ROSCLI_WORKSPACE_ALIAS");
+
+        Process process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start roscli daemon.run.");
+        _ = Task.Run(async () =>
+        {
+            try { await process.StandardError.ReadToEndAsync(); } catch { }
+        });
+        return process;
+    }
+
+    private static async Task<string> ReadJsonEnvelopeFromStreamAsync(StreamReader reader, TimeSpan timeout)
+    {
+        using CancellationTokenSource cts = new(timeout);
+        StringBuilder buffer = new();
+        int braceDepth = 0;
+        bool started = false;
+        bool inString = false;
+        bool escaped = false;
+
+        while (true)
+        {
+            string? line = await reader.ReadLineAsync(cts.Token);
+            if (line is null)
+            {
+                throw new InvalidOperationException($"Stream ended before a complete JSON envelope was emitted. Partial output:\n{buffer}");
+            }
+
+            buffer.AppendLine(line);
+            foreach (char ch in line)
+            {
+                if (inString)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (ch == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (ch == '"')
+                    {
+                        inString = false;
+                    }
+
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    inString = true;
+                }
+                else if (ch == '{')
+                {
+                    started = true;
+                    braceDepth++;
+                }
+                else if (ch == '}')
+                {
+                    braceDepth--;
+                }
+            }
+
+            if (started && braceDepth == 0)
+            {
+                return buffer.ToString();
+            }
+        }
+    }
+
     [SupportedOSPlatform("windows")]
-    private static int RunCommandInsideKillOnCloseJobWindows(string commandLine, string workingDirectory, TimeSpan timeout)
+    private static (int ExitCode, string StdOut, string StdErr) RunCommandInsideKillOnCloseJobWindows(
+        string commandLine,
+        string workingDirectory,
+        bool allowBreakaway,
+        TimeSpan timeout)
     {
         const uint CreateSuspended = 0x00000004;
         const uint CreateNoWindow = 0x08000000;
+        const uint StartfUseStdHandles = 0x00000100;
         const int JobObjectExtendedLimitInformation = 9;
+        const uint JobObjectLimitBreakawayOk = 0x00000800;
         const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        const uint GenericWrite = 0x40000000;
+        const uint FileShareRead = 0x00000001;
+        const uint FileShareWrite = 0x00000002;
+        const uint CreateAlways = 2;
+        const uint FileAttributeNormal = 0x00000080;
+        IntPtr invalidHandle = new(-1);
+
+        string stdoutPath = Path.Combine(workingDirectory, $".job-stdout-{Guid.NewGuid():N}.txt");
+        string stderrPath = Path.Combine(workingDirectory, $".job-stderr-{Guid.NewGuid():N}.txt");
 
         IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
         if (job == IntPtr.Zero)
@@ -723,10 +1494,13 @@ public sealed class DaemonSurvivalAndErgonomicsTests
 
         IntPtr hProcess = IntPtr.Zero;
         IntPtr hThread = IntPtr.Zero;
+        IntPtr hOutFile = invalidHandle;
+        IntPtr hErrFile = invalidHandle;
         try
         {
             JobObjectExtendedLimitInfo limitInfo = new();
-            limitInfo.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+            limitInfo.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose |
+                (allowBreakaway ? JobObjectLimitBreakawayOk : 0u);
             int size = Marshal.SizeOf<JobObjectExtendedLimitInfo>();
             IntPtr ptr = Marshal.AllocHGlobal(size);
             try
@@ -742,14 +1516,34 @@ public sealed class DaemonSurvivalAndErgonomicsTests
                 Marshal.FreeHGlobal(ptr);
             }
 
-            StartupInfoW si = new() { cb = Marshal.SizeOf<StartupInfoW>() };
+            SecurityAttributes sa = new()
+            {
+                nLength = Marshal.SizeOf<SecurityAttributes>(),
+                lpSecurityDescriptor = IntPtr.Zero,
+                bInheritHandle = 1,
+            };
+            hOutFile = CreateFileW(stdoutPath, GenericWrite, FileShareRead | FileShareWrite, ref sa, CreateAlways, FileAttributeNormal, IntPtr.Zero);
+            hErrFile = CreateFileW(stderrPath, GenericWrite, FileShareRead | FileShareWrite, ref sa, CreateAlways, FileAttributeNormal, IntPtr.Zero);
+            if (hOutFile == invalidHandle || hErrFile == invalidHandle)
+            {
+                throw new InvalidOperationException($"CreateFileW for job stdout/stderr failed: {Marshal.GetLastWin32Error()}");
+            }
+
+            StartupInfoW si = new()
+            {
+                cb = Marshal.SizeOf<StartupInfoW>(),
+                dwFlags = StartfUseStdHandles,
+                hStdInput = IntPtr.Zero,
+                hStdOutput = hOutFile,
+                hStdError = hErrFile,
+            };
             StringBuilder cmd = new(commandLine);
             if (!CreateProcessW(
                 null,
                 cmd,
                 IntPtr.Zero,
                 IntPtr.Zero,
-                false,
+                true,
                 CreateSuspended | CreateNoWindow,
                 IntPtr.Zero,
                 workingDirectory,
@@ -782,16 +1576,71 @@ public sealed class DaemonSurvivalAndErgonomicsTests
             }
 
             GetExitCodeProcess(hProcess, out uint exitCode);
-            return (int)exitCode;
+
+            CloseHandle(hOutFile);
+            hOutFile = invalidHandle;
+            CloseHandle(hErrFile);
+            hErrFile = invalidHandle;
+            CloseHandle(hThread);
+            hThread = IntPtr.Zero;
+            CloseHandle(hProcess);
+            hProcess = IntPtr.Zero;
+
+            // Closing the job handle terminates EVERY process still inside the job object
+            // before we read the redirected stdout/stderr files.
+            CloseHandle(job);
+            job = IntPtr.Zero;
+
+            string stdoutText = ReadFileSharedText(stdoutPath);
+            string stderrText = ReadFileSharedText(stderrPath);
+            return ((int)exitCode, stdoutText, stderrText);
         }
         finally
         {
+            if (hOutFile != invalidHandle && hOutFile != IntPtr.Zero) CloseHandle(hOutFile);
+            if (hErrFile != invalidHandle && hErrFile != IntPtr.Zero) CloseHandle(hErrFile);
             if (hThread != IntPtr.Zero) CloseHandle(hThread);
             if (hProcess != IntPtr.Zero) CloseHandle(hProcess);
             // Closing the job handle terminates EVERY process still inside the job object.
-            CloseHandle(job);
+            if (job != IntPtr.Zero) CloseHandle(job);
+            try { if (File.Exists(stdoutPath)) File.Delete(stdoutPath); } catch { }
+            try { if (File.Exists(stderrPath)) File.Delete(stderrPath); } catch { }
         }
     }
+
+    private static string ReadFileSharedText(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return string.Empty;
+        }
+
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using StreamReader reader = new(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                return reader.ReadToEnd();
+            }
+            catch (IOException) when (attempt < 9)
+            {
+                Thread.Sleep(50);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileW(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        ref SecurityAttributes lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string? lpName);
@@ -829,6 +1678,14 @@ public sealed class DaemonSurvivalAndErgonomicsTests
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SecurityAttributes
+    {
+        public int nLength;
+        public IntPtr lpSecurityDescriptor;
+        public int bInheritHandle;
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct StartupInfoW
