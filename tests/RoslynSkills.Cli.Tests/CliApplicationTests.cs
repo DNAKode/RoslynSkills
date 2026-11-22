@@ -26,6 +26,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("nav.find_symbol", output);
         Assert.Contains("nav.find_symbol_batch", output);
+        Assert.Contains("nav.go_to_definition", output);
         Assert.Contains("nav.find_references", output);
         Assert.Contains("nav.find_invocations", output);
         Assert.Contains("nav.call_hierarchy", output);
@@ -3747,6 +3748,142 @@ public sealed class CliApplicationTests
         finally
         {
             File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task DirectShorthand_NavAndWorkspaceSnapshot_WorkAcrossProjects()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-nav-{Guid.NewGuid():N}");
+        string srcDir = Path.Combine(root, "src");
+        string libDir = Path.Combine(srcDir, "Lib");
+        string appDir = Path.Combine(srcDir, "App");
+        Directory.CreateDirectory(libDir);
+        Directory.CreateDirectory(appDir);
+
+        try
+        {
+            const string libCsproj = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <ImplicitUsings>enable</ImplicitUsings>
+                    <Nullable>enable</Nullable>
+                  </PropertyGroup>
+                </Project>
+                """;
+            const string appCsproj = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <ImplicitUsings>enable</ImplicitUsings>
+                    <Nullable>enable</Nullable>
+                  </PropertyGroup>
+                  <ItemGroup><ProjectReference Include="../Lib/Lib.csproj" /></ItemGroup>
+                </Project>
+                """;
+            string libProjPath = Path.Combine(libDir, "Lib.csproj");
+            string appProjPath = Path.Combine(appDir, "App.csproj");
+            await File.WriteAllTextAsync(libProjPath, libCsproj);
+            await File.WriteAllTextAsync(appProjPath, appCsproj);
+
+            string libFile = Path.Combine(libDir, "Sample.cs");
+            string appFile = Path.Combine(appDir, "UseSample.cs");
+            await File.WriteAllTextAsync(libFile, """
+                namespace Lib;
+                public interface IThing { void Go(); }
+                public sealed class Thing : IThing
+                {
+                    public void Go() { }
+                }
+                """);
+            await File.WriteAllTextAsync(appFile, """
+                namespace App;
+                public static class Runner
+                {
+                    public static void Run()
+                    {
+                        Lib.IThing t = new Lib.Thing();
+                        t.Go();
+                    }
+                }
+                """);
+
+            string slnxPath = Path.Combine(root, "CliNav.slnx");
+            await File.WriteAllTextAsync(slnxPath, """
+                <Solution>
+                  <Project Path="src/Lib/Lib.csproj" />
+                  <Project Path="src/App/App.csproj" />
+                </Solution>
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+
+            // nav.go_to_definition direct shorthand on Thing in App -> resolves to Lib/Sample.cs:3.
+            StringWriter defOut = new();
+            int defExit = await app.RunAsync(
+                new[] { "nav.go_to_definition", appFile, "6", "32", "--workspace-path", slnxPath },
+                defOut, new StringWriter(), CancellationToken.None);
+            Assert.Equal(0, defExit);
+            Assert.Contains("\"CommandId\": \"nav.go_to_definition\"", defOut.ToString());
+            Assert.Contains("\"location_kind\": \"source\"", defOut.ToString());
+            Assert.Contains("Sample.cs", defOut.ToString());
+
+            // nav.find_implementations direct shorthand -> returns identifier column > 1.
+            StringWriter implOut = new();
+            int implExit = await app.RunAsync(
+                new[] { "nav.find_implementations", libFile, "2", "18", "--workspace-path", slnxPath },
+                implOut, new StringWriter(), CancellationToken.None);
+            Assert.Equal(0, implExit);
+            using (JsonDocument implDoc = JsonDocument.Parse(implOut.ToString()))
+            {
+                JsonElement match = implDoc.RootElement.GetProperty("Data").GetProperty("matches")[0];
+                Assert.True(match.GetProperty("column").GetInt32() > 1);
+            }
+
+            // nav.find_references direct shorthand on Thing -> includes new Lib.Thing() in App.
+            StringWriter refOut = new();
+            int refExit = await app.RunAsync(
+                new[] { "nav.find_references", libFile, "3", "21", "--workspace-path", slnxPath },
+                refOut, new StringWriter(), CancellationToken.None);
+            Assert.Equal(0, refExit);
+            Assert.Contains("UseSample.cs", refOut.ToString());
+
+            // diag.get_workspace_snapshot with directory, solution file, and single project file.
+            StringWriter snapDirOut = new();
+            int snapDirExit = await app.RunAsync(
+                new[] { "diag.get_workspace_snapshot", srcDir },
+                snapDirOut, new StringWriter(), CancellationToken.None);
+            Assert.Equal(0, snapDirExit);
+            using (JsonDocument doc = JsonDocument.Parse(snapDirOut.ToString()))
+            {
+                Assert.Equal(2, doc.RootElement.GetProperty("Data").GetProperty("analyzed_projects").GetInt32());
+                Assert.Equal(0, doc.RootElement.GetProperty("Data").GetProperty("errors").GetInt32());
+            }
+
+            StringWriter snapSlnOut = new();
+            int snapSlnExit = await app.RunAsync(
+                new[] { "diag.get_workspace_snapshot", slnxPath },
+                snapSlnOut, new StringWriter(), CancellationToken.None);
+            Assert.Equal(0, snapSlnExit);
+            using (JsonDocument doc = JsonDocument.Parse(snapSlnOut.ToString()))
+            {
+                Assert.Equal(2, doc.RootElement.GetProperty("Data").GetProperty("analyzed_projects").GetInt32());
+            }
+
+            StringWriter snapProjOut = new();
+            int snapProjExit = await app.RunAsync(
+                new[] { "diag.get_workspace_snapshot", appProjPath },
+                snapProjOut, new StringWriter(), CancellationToken.None);
+            Assert.Equal(0, snapProjExit);
+            using (JsonDocument doc = JsonDocument.Parse(snapProjOut.ToString()))
+            {
+                Assert.Equal(1, doc.RootElement.GetProperty("Data").GetProperty("analyzed_projects").GetInt32());
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
 

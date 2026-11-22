@@ -1188,6 +1188,20 @@ Workflow:
                 return true;
             }
 
+            if (TryGetString(element, "directory_path", out string directoryPath) &&
+                !string.IsNullOrWhiteSpace(directoryPath))
+            {
+                targetPath = directoryPath;
+                return true;
+            }
+
+            if (TryGetString(element, "source_file_path", out string sourceFilePath) &&
+                !string.IsNullOrWhiteSpace(sourceFilePath))
+            {
+                targetPath = sourceFilePath;
+                return true;
+            }
+
             foreach (JsonProperty property in element.EnumerateObject())
             {
                 if (TryFindWorkspaceOrFilePath(property.Value, out targetPath))
@@ -1913,7 +1927,11 @@ Workflow:
             TryPromoteOptionToPositional(options, "symbol_name", ref positionalArgs, 1);
         }
 
-        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "nav.go_to_definition", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "nav.find_references", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "nav.find_implementations", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "nav.find_overrides", StringComparison.OrdinalIgnoreCase))
         {
             TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 0);
             TryPromoteOptionToPositional(options, "line", ref positionalArgs, 1);
@@ -1980,7 +1998,6 @@ Workflow:
                 break;
 
             case "diag.get_solution_snapshot":
-            case "diag.get_workspace_snapshot":
                 if (positionalArgs.Length > 1)
                 {
                     error = ErrorEnvelope(
@@ -1993,6 +2010,34 @@ Workflow:
                 if (positionalArgs.Length == 1)
                 {
                     input["directory_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                }
+                break;
+
+            case "diag.get_workspace_snapshot":
+                if (positionalArgs.Length > 1)
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, $"{commandId} [directory-or-workspace-path] [--option value ...]"));
+                    return false;
+                }
+
+                if (positionalArgs.Length == 1)
+                {
+                    string normalizedTarget = NormalizeCliPathValue(positionalArgs[0]);
+                    string ext = Path.GetExtension(normalizedTarget);
+                    if (string.Equals(ext, ".sln", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(ext, ".slnx", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(ext, ".csproj", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(ext, ".vbproj", StringComparison.OrdinalIgnoreCase))
+                    {
+                        input["workspace_path"] = normalizedTarget;
+                    }
+                    else
+                    {
+                        input["directory_path"] = normalizedTarget;
+                    }
                 }
                 break;
 
@@ -2050,6 +2095,10 @@ Workflow:
                 input["queries"] = symbolBatchQueries;
                 break;
 
+            case "nav.go_to_definition":
+            case "nav.find_references":
+            case "nav.find_implementations":
+            case "nav.find_overrides":
             case "nav.find_invocations":
                 if (positionalArgs.Length != 3 ||
                     string.IsNullOrWhiteSpace(positionalArgs[0]) ||
@@ -2059,7 +2108,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "nav.find_invocations <file-path> <line> <column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> <line> <column> [--option value ...]"));
                     return false;
                 }
 
@@ -2511,6 +2560,10 @@ Workflow:
             "repair.propose_from_diagnostics" => true,
             "nav.find_symbol" => true,
             "nav.find_symbol_batch" => true,
+            "nav.go_to_definition" => true,
+            "nav.find_references" => true,
+            "nav.find_implementations" => true,
+            "nav.find_overrides" => true,
             "nav.find_invocations" => true,
             "nav.call_hierarchy" => true,
             "nav.call_path" => true,
@@ -3159,7 +3212,36 @@ Workflow:
             }
         }
 
-        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "nav.go_to_definition", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalDefinitions = TryGetInt(element, "total_definitions", out int defs) ? defs : -1;
+            int sourceCount = TryGetInt(element, "source_definition_count", out int src) ? src : 0;
+            int metadataCount = TryGetInt(element, "metadata_definition_count", out int meta) ? meta : 0;
+            string workspaceMode = ResolveWorkspaceMode(element);
+            if (totalDefinitions >= 0)
+            {
+                string summary = $"definitions={totalDefinitions} (source={sourceCount}, metadata={metadataCount})";
+                return string.IsNullOrWhiteSpace(workspaceMode)
+                    ? summary
+                    : $"{summary}, workspace={workspaceMode}";
+            }
+        }
+
+        if (string.Equals(commandId, "nav.find_references", StringComparison.OrdinalIgnoreCase))
+        {
+            int totalMatches = TryGetInt(element, "total_matches", out int matches) ? matches : -1;
+            string workspaceMode = ResolveWorkspaceMode(element);
+            if (totalMatches >= 0)
+            {
+                return string.IsNullOrWhiteSpace(workspaceMode)
+                    ? $"references={totalMatches}"
+                    : $"references={totalMatches}, workspace={workspaceMode}";
+            }
+        }
+
+        if (string.Equals(commandId, "nav.find_implementations", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "nav.find_overrides", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
         {
             int totalMatches = TryGetInt(element, "total_matches", out int matches) ? matches : -1;
             string workspaceMode = ResolveWorkspaceMode(element);
@@ -3409,6 +3491,7 @@ Workflow:
         if (string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(commandId, "diag.get_workspace_snapshot", StringComparison.OrdinalIgnoreCase))
         {
+            int projects = TryGetInt(element, "analyzed_projects", out int ap) ? ap : -1;
             int files = TryGetInt(element, "total_files", out int tf) ? tf : -1;
             int diagnostics = TryGetInt(element, "total_diagnostics", out int td) ? td : -1;
             int errors = TryGetInt(element, "errors", out int err) ? err : -1;
@@ -3417,9 +3500,10 @@ Workflow:
                                   TryGetString(analysisScope, "analysis_mode", out string mode)
                 ? mode
                 : string.Empty;
-            if (files >= 0 || diagnostics >= 0)
+            if (projects >= 0 || files >= 0 || diagnostics >= 0)
             {
-                string summary = $"files={Math.Max(files, 0)}, diagnostics={Math.Max(diagnostics, 0)}, errors={Math.Max(errors, 0)}, warnings={Math.Max(warnings, 0)}";
+                string projectsPrefix = projects >= 0 ? $"projects={projects}, " : string.Empty;
+                string summary = $"{projectsPrefix}files={Math.Max(files, 0)}, diagnostics={Math.Max(diagnostics, 0)}, errors={Math.Max(errors, 0)}, warnings={Math.Max(warnings, 0)}";
                 return string.IsNullOrWhiteSpace(analysisMode)
                     ? summary
                     : $"{summary}, analysis={analysisMode}";
@@ -3871,6 +3955,67 @@ Workflow:
             };
         }
 
+        if (string.Equals(commandId, "nav.go_to_definition", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.go_to_definition <file-path> <line> <column> [--option value ...]",
+                run = "run nav.go_to_definition --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "brief", "context_lines", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Resolves the symbol under line/column to its source declaration(s) or metadata assembly/type identity.",
+                    "Handles partial declarations, extension methods, generic definitions, and implicit parameterless constructors.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.find_references", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.find_references <file-path> <line> <column> [--option value ...]",
+                run = "run nav.find_references --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"max_results\":200}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "include_declaration", "max_results", "context_lines", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "When anchored on a type, includes both type references and constructor/object-creation sites (explicit and target-typed new).",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.find_implementations", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.find_implementations <file-path> <line> <column> [--option value ...]",
+                run = "run nav.find_implementations --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "max_results", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Returns declaration identifier coordinates so each match can be passed straight to another nav.* command.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "nav.find_overrides", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "nav.find_overrides <file-path> <line> <column> [--option value ...]",
+                run = "run nav.find_overrides --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15}'",
+                required_properties = new[] { "file_path", "line", "column" },
+                optional_properties = new[] { "max_results", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Returns declaration identifier coordinates for every override across the loaded solution.",
+                },
+            };
+        }
+
         if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
         {
             return new
@@ -3881,7 +4026,7 @@ Workflow:
                 optional_properties = new[] { "brief", "max_results", "context_lines", "include_object_creations", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
-                    "Use line/column anchored on a method declaration or method reference token.",
+                    "Use line/column anchored on a method, constructor, primary constructor, or type declaration/reference token.",
                     "For project-backed files, set require_workspace=true to fail closed if context falls back to ad_hoc.",
                 },
             };
@@ -4866,10 +5011,14 @@ Workflow:
                 ctx.member_source <file-path> <line> <column> [member|body]
                 diag.get_file_diagnostics <file-path>
                 diag.get_solution_snapshot [directory-path]
-                diag.get_workspace_snapshot [directory-path]
+                diag.get_workspace_snapshot [directory-or-workspace-path]
                 repair.propose_from_diagnostics <file-path>
                 nav.find_symbol <file-path> <symbol-name>
                 nav.find_symbol_batch [queries-json-or-file]
+                nav.go_to_definition <file-path> <line> <column>
+                nav.find_references <file-path> <line> <column>
+                nav.find_implementations <file-path> <line> <column>
+                nav.find_overrides <file-path> <line> <column>
                 nav.find_invocations <file-path> <line> <column>
                 nav.call_hierarchy <file-path> <line> <column>
                 nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column>

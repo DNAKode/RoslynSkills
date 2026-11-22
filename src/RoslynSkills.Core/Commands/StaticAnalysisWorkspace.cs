@@ -284,6 +284,143 @@ internal sealed class StaticAnalysisWorkspace
         }
     }
 
+    public static async Task<(StaticAnalysisWorkspace? Workspace, CommandError? Error)> LoadProjectsAsync(
+        string rootDirectory,
+        IReadOnlyList<string> projectFilePaths,
+        bool includeGenerated,
+        int maxFiles,
+        CancellationToken cancellationToken)
+    {
+        if (projectFilePaths.Count == 0)
+        {
+            return (null, new CommandError("workspace_not_found", $"No MSBuild project files were found under '{rootDirectory}'."));
+        }
+
+        if (!WorkspaceSemanticLoader.TryEnsureMsBuildRegistered(out string? registrationError))
+        {
+            return (null, new CommandError("msbuild_registration_failed", registrationError ?? "MSBuild registration failed."));
+        }
+
+        string normalizedRoot = Path.GetFullPath(rootDirectory);
+        string[] orderedProjects = projectFilePaths
+            .Select(Path.GetFullPath)
+            .Distinct(PathComparer)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (orderedProjects.Length == 1)
+        {
+            return await LoadMsBuildWorkspaceAsync(
+                    normalizedRoot,
+                    orderedProjects[0],
+                    includeGenerated,
+                    maxFiles,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        List<string> diagnostics = new();
+        MSBuildWorkspace msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
+            diagnostics,
+            includeAllFailureMessages: true);
+
+        async Task<Solution> OpenAllProjectsAsync(MSBuildWorkspace workspace)
+        {
+            Solution? last = null;
+            HashSet<string> loaded = new(PathComparer);
+            foreach (string projectPath in orderedProjects)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (loaded.Contains(projectPath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    Project project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    last = project.Solution;
+                    foreach (Project p in last.Projects)
+                    {
+                        if (!string.IsNullOrWhiteSpace(p.FilePath))
+                        {
+                            loaded.Add(Path.GetFullPath(p.FilePath));
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex.Message.Contains("already part of the workspace", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Referenced projects can be loaded transitively before their explicit entry is processed.
+                }
+            }
+
+            return last ?? workspace.CurrentSolution;
+        }
+
+        Solution solution;
+        try
+        {
+            solution = await OpenAllProjectsAsync(msbuildWorkspace).ConfigureAwait(false);
+            if (WorkspaceAutoRestore.IsEnabled)
+            {
+                IReadOnlyList<UnresolvedProjectInfo> projectsNeedingRestore = WorkspaceAutoRestore.GetProjectsNeedingRestore(solution);
+                if (projectsNeedingRestore.Count > 0)
+                {
+                    bool restoredAny = false;
+                    foreach (UnresolvedProjectInfo unresolved in projectsNeedingRestore)
+                    {
+                        if (!string.IsNullOrWhiteSpace(unresolved.project_path) &&
+                            await WorkspaceAutoRestore.TryRestoreAsync(unresolved.project_path, diagnostics, cancellationToken, new[] { unresolved }).ConfigureAwait(false))
+                        {
+                            restoredAny = true;
+                        }
+                    }
+
+                    if (restoredAny)
+                    {
+                        msbuildWorkspace.Dispose();
+                        msbuildWorkspace = WorkspaceSemanticLoader.CreateTrackedMsBuildWorkspace(
+                            diagnostics,
+                            includeAllFailureMessages: true);
+                        solution = await OpenAllProjectsAsync(msbuildWorkspace).ConfigureAwait(false);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            msbuildWorkspace.Dispose();
+            return (null, new CommandError("workspace_load_failed", $"Failed to load projects under '{normalizedRoot}': {ex.Message}"));
+        }
+
+        try
+        {
+            solution = SolutionEditSupport.EnsureDocumentationCommentParsing(solution);
+            if (!solution.Projects.Any())
+            {
+                return (null, new CommandError("workspace_load_failed", $"Directory '{normalizedRoot}' did not load any MSBuild projects."));
+            }
+
+            return await FromSolutionAsync(
+                    solution,
+                    normalizedRoot,
+                    normalizedRoot,
+                    normalizedRoot,
+                    analysisMode: "msbuild_directory",
+                    workspaceKind: "directory",
+                    diagnostics,
+                    includeGenerated,
+                    maxFiles,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            msbuildWorkspace.Dispose();
+        }
+    }
+
     public static IReadOnlyList<Project> FindContainingProjectsForNewSourceFile(Solution solution, string filePath)
     {
         string normalizedFilePath = Path.GetFullPath(filePath);
@@ -648,7 +785,7 @@ internal sealed class StaticAnalysisWorkspace
         return projectCandidates.Length == 0 ? null : Path.GetFullPath(projectCandidates[0]);
     }
 
-    private static bool IsMsBuildWorkspaceFile(string path)
+    public static bool IsMsBuildWorkspaceFile(string path)
     {
         string extension = Path.GetExtension(path);
         return string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase) ||

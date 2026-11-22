@@ -84,9 +84,8 @@ public sealed class FindInvocationsCommand : IAgentCommand
 
         SyntaxToken anchorToken = analysis.FindAnchorToken(line, column);
         ISymbol? anchorSymbol = SymbolResolution.GetSymbolForToken(anchorToken, analysis.SemanticModel, cancellationToken);
-        IMethodSymbol? targetMethod = anchorSymbol as IMethodSymbol;
 
-        if (targetMethod is null)
+        if (!SolutionSearchScope.IsInvocationTarget(anchorSymbol))
         {
             return new CommandExecutionResult(
                 null,
@@ -94,17 +93,18 @@ public sealed class FindInvocationsCommand : IAgentCommand
                 {
                     new CommandError(
                         "invalid_target",
-                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method. Anchor to a method declaration/reference and retry."),
+                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method, constructor, or constructible type. Anchor to a method, constructor, or class/struct/record and retry."),
                 });
         }
 
+        ISymbol targetSymbol = anchorSymbol!;
         List<InvocationMatch> matches = new();
         bool truncated = false;
         int searchedSyntaxTreeCount = 0;
 
         // The target's own project plus every project that depends on it, not just the anchor file's compilation.
-        SearchScope scope = await SolutionSearchScope.ResolveAsync(analysis, targetMethod, includeGenerated, cancellationToken).ConfigureAwait(false);
-        string? searchName = SolutionSearchScope.GetSearchName(targetMethod);
+        SearchScope scope = await SolutionSearchScope.ResolveAsync(analysis, targetSymbol, includeGenerated, cancellationToken).ConfigureAwait(false);
+        string? searchName = SolutionSearchScope.GetSearchName(targetSymbol);
         HashSet<string> seenMatches = new(StringComparer.Ordinal);
 
         foreach (SearchUnit unit in scope.Units)
@@ -125,7 +125,7 @@ public sealed class FindInvocationsCommand : IAgentCommand
                          includeObjectCreations,
                          cancellationToken))
             {
-                if (!IsSameTargetMethod(callSite.callee, targetMethod))
+                if (!SolutionSearchScope.MatchesInvocationCallee(callSite.callee, targetSymbol))
                 {
                     continue;
                 }
@@ -188,10 +188,10 @@ public sealed class FindInvocationsCommand : IAgentCommand
             },
             symbol = new
             {
-                symbol_display = targetMethod.ToDisplayString(),
-                symbol_kind = targetMethod.Kind.ToString(),
-                symbol_id = CommandTextFormatting.GetStableSymbolId(targetMethod),
-                method_kind = targetMethod.MethodKind.ToString(),
+                symbol_display = targetSymbol.ToDisplayString(),
+                symbol_kind = targetSymbol.Kind.ToString(),
+                symbol_id = CommandTextFormatting.GetStableSymbolId(targetSymbol),
+                method_kind = (targetSymbol as IMethodSymbol)?.MethodKind.ToString(),
             },
             searched_syntax_trees = searchedSyntaxTreeCount,
             search = scope.ToPayload(),
@@ -233,38 +233,6 @@ public sealed class FindInvocationsCommand : IAgentCommand
             call_kind: callKind,
             symbol_display: calledMethod.ToDisplayString(),
             snippet: snippet));
-    }
-
-    private static bool IsSameTargetMethod(IMethodSymbol? candidate, IMethodSymbol target)
-    {
-        if (candidate is null)
-        {
-            return false;
-        }
-
-        if (SymbolEqualityComparer.Default.Equals(candidate, target) ||
-            SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, target.OriginalDefinition))
-        {
-            return true;
-        }
-
-        IMethodSymbol? candidateReduced = candidate.ReducedFrom;
-        IMethodSymbol? targetReduced = target.ReducedFrom;
-        if (candidateReduced is not null &&
-            (SymbolEqualityComparer.Default.Equals(candidateReduced, target) ||
-             SymbolEqualityComparer.Default.Equals(candidateReduced.OriginalDefinition, target.OriginalDefinition)))
-        {
-            return true;
-        }
-
-        if (targetReduced is not null &&
-            (SymbolEqualityComparer.Default.Equals(candidate, targetReduced) ||
-             SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, targetReduced.OriginalDefinition)))
-        {
-            return true;
-        }
-
-        return false;
     }
 
     private sealed record InvocationMatch(

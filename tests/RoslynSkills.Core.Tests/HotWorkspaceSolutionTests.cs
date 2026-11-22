@@ -79,7 +79,7 @@ public sealed class HotWorkspaceSolutionTests
 
         string[] expectedHot =
         {
-            "nav.find_symbol", "nav.find_symbol_batch", "nav.find_references", "nav.find_invocations",
+            "nav.find_symbol", "nav.find_symbol_batch", "nav.go_to_definition", "nav.find_references", "nav.find_invocations",
             "nav.call_hierarchy", "nav.call_path", "nav.find_implementations", "nav.find_overrides",
             "ctx.member_source", "ctx.call_chain_slice", "ctx.dependency_slice", "ctx.symbol_envelope",
             "analyze.impact_slice", "analyze.control_flow_graph", "analyze.dataflow_slice",
@@ -327,6 +327,465 @@ public sealed class HotWorkspaceSolutionTests
         {
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    [Fact]
+    public async Task HotHost_NavigationCompletenessAndMultiProjectSnapshot_CoversAllFiveRequirements()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-nav-completeness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        using Process process = StartHostProcess();
+
+        try
+        {
+            const string libCsproj = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <ImplicitUsings>enable</ImplicitUsings>
+                    <Nullable>enable</Nullable>
+                  </PropertyGroup>
+                </Project>
+                """;
+            const string appCsproj = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <ImplicitUsings>enable</ImplicitUsings>
+                    <Nullable>enable</Nullable>
+                  </PropertyGroup>
+                  <ItemGroup><ProjectReference Include="../Lib/Lib.csproj" /></ItemGroup>
+                </Project>
+                """;
+            const string consumerCsproj = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <ImplicitUsings>enable</ImplicitUsings>
+                    <Nullable>enable</Nullable>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Lib/Lib.csproj" />
+                    <ProjectReference Include="../App/App.csproj" />
+                  </ItemGroup>
+                </Project>
+                """;
+
+            string srcDir = Path.Combine(root, "src");
+            string libDir = Path.Combine(srcDir, "Lib");
+            string appDir = Path.Combine(srcDir, "App");
+            string consumerDir = Path.Combine(srcDir, "Consumer");
+            Directory.CreateDirectory(libDir);
+            Directory.CreateDirectory(appDir);
+            Directory.CreateDirectory(consumerDir);
+
+            string libProjPath = Path.Combine(libDir, "Lib.csproj");
+            string appProjPath = Path.Combine(appDir, "App.csproj");
+            string consumerProjPath = Path.Combine(consumerDir, "Consumer.csproj");
+            await File.WriteAllTextAsync(libProjPath, libCsproj);
+            await File.WriteAllTextAsync(appProjPath, appCsproj);
+            await File.WriteAllTextAsync(consumerProjPath, consumerCsproj);
+
+            const string libTypesSource = """
+                namespace Lib;
+
+                public interface IPageSource
+                {
+                    int PageCount { get; }
+                }
+
+                public sealed class FilePageSource : IPageSource
+                {
+                    public int PageCount => 1;
+                }
+
+                public sealed class EditFrame
+                {
+                    public int Id { get; }
+                    public EditFrame(int id) => Id = id;
+                    public void Update(RowWriter writer) => writer.CompileInsert();
+                }
+
+                public sealed class PrimaryNode(int value)
+                {
+                    public int Value => value;
+                }
+
+                public sealed class PlainMarker
+                {
+                }
+
+                public sealed class RowWriter
+                {
+                    public void CompileInsert() { }
+                }
+
+                public sealed class RecordsetObject
+                {
+                    public static RecordsetObject Create() => new RecordsetObject();
+                }
+
+                public partial class SplitModel
+                {
+                    public string Name { get; set; } = string.Empty;
+                }
+
+                public static class LibApi
+                {
+                    public static int Compute(int value) => value + 1;
+                }
+                """;
+
+            const string libPartialSource = """
+                namespace Lib;
+
+                public partial class SplitModel
+                {
+                    public int Version { get; set; }
+                }
+                """;
+
+            const string appRunnerSource = """
+                using System.Text;
+
+                namespace App;
+
+                public sealed class MemoryPageSource : Lib.IPageSource
+                {
+                    public int PageCount => 2;
+                }
+
+                public static class AppHost
+                {
+                    public static void CommitRowChange(Lib.EditFrame frame, Action action) => action();
+                    public static int AcceptFrame(Lib.EditFrame frame) => frame.Id;
+                    public static int AcceptPrimary(Lib.PrimaryNode node) => node.Value;
+
+                    public static void InsertOneRow(Lib.RowWriter writer)
+                    {
+                        Lib.EditFrame explicitFrame = new Lib.EditFrame(1);
+                        Lib.EditFrame targetTypedFrame = new(2);
+                        CommitRowChange(explicitFrame, () => explicitFrame.Update(writer));
+                        _ = targetTypedFrame;
+                    }
+
+                    public static int UseTypes(Lib.SplitModel model, string text)
+                    {
+                        Lib.PrimaryNode p1 = new Lib.PrimaryNode(10);
+                        Lib.PrimaryNode p2 = new(20);
+                        Lib.PlainMarker marker = new Lib.PlainMarker();
+                        string normalized = text.Normalize(NormalizationForm.FormC);
+                        return Lib.LibApi.Compute(p1.Value + p2.Value + model.Version + normalized.Length + marker.GetHashCode());
+                    }
+                }
+                """;
+
+            // Notice TargetTypedOnly.cs deliberately never spells "EditFrame" or "PrimaryNode".
+            const string consumerTargetTypedSource = """
+                namespace Consumer;
+
+                public sealed class TargetTypedOnly
+                {
+                    public static int Invoke()
+                    {
+                        int a = App.AppHost.AcceptFrame(new(3));
+                        int b = App.AppHost.AcceptPrimary(new(30));
+                        return a + b + Lib.LibApi.Compute(5);
+                    }
+                }
+                """;
+
+            const string consumerActivationSource = """
+                namespace Consumer;
+
+                public sealed class DiskPageSource : Lib.IPageSource
+                {
+                    public int PageCount => 3;
+                }
+
+                public sealed record ClassDescriptor(string Name, Func<Lib.RecordsetObject> Factory);
+
+                public static class Activation
+                {
+                    public static readonly ClassDescriptor OwnRecordset = new("Own", Lib.RecordsetObject.Create);
+                    public static readonly ClassDescriptor CompatibilityRecordset = new("Compat", Lib.RecordsetObject.Create);
+
+                    public static object[] CreateAllSources() =>
+                    [
+                        new Lib.FilePageSource(),
+                        new App.MemoryPageSource(),
+                        new DiskPageSource(),
+                    ];
+                }
+                """;
+
+            string libTypesPath = Path.Combine(libDir, "LibTypes.cs");
+            string libPartialPath = Path.Combine(libDir, "SplitModel.Part2.cs");
+            string appRunnerPath = Path.Combine(appDir, "AppHost.cs");
+            string consumerTargetTypedPath = Path.Combine(consumerDir, "TargetTypedOnly.cs");
+            string consumerActivationPath = Path.Combine(consumerDir, "Activation.cs");
+
+            await File.WriteAllTextAsync(libTypesPath, libTypesSource);
+            await File.WriteAllTextAsync(libPartialPath, libPartialSource);
+            await File.WriteAllTextAsync(appRunnerPath, appRunnerSource);
+            await File.WriteAllTextAsync(consumerTargetTypedPath, consumerTargetTypedSource);
+            await File.WriteAllTextAsync(consumerActivationPath, consumerActivationSource);
+
+            string solutionPath = Path.Combine(root, "NavSuite.slnx");
+            await File.WriteAllTextAsync(
+                solutionPath,
+                """
+                <Solution>
+                  <Project Path="src/Lib/Lib.csproj" />
+                  <Project Path="src/App/App.csproj" />
+                  <Project Path="src/Consumer/Consumer.csproj" />
+                </Solution>
+                """);
+
+            HostSession host = new(process);
+            JsonElement preload = await host.SendAsync(new
+            {
+                id = "preload",
+                method = WorkspaceHostProtocol.Method.WorkspacePreload,
+                workspace_alias = "default",
+                input = new { workspace_path = solutionPath, require_solution = true, max_files = 100 },
+            }, timeoutSeconds: 120);
+            Assert.True(preload.GetProperty("ok").GetBoolean(), preload.GetRawText());
+            string handle = preload.GetProperty("envelope").GetProperty("Data").GetProperty("workspace_handle").GetString()!;
+
+            // 1. Object creations & constructors in nav.find_references and nav.find_invocations (including target-typed new & primary ctor).
+            (int editFrameLine, int editFrameCol) = FindTokenPosition(libTypesSource, "class EditFrame", "EditFrame");
+            JsonElement editFrameRefs = await host.CallAsync("nav.find_references", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = editFrameLine, column = editFrameCol, require_workspace = true,
+            });
+            JsonElement editFrameRefsData = DataOf(editFrameRefs);
+            JsonElement[] editFrameRefMatches = editFrameRefsData.GetProperty("matches").EnumerateArray().ToArray();
+            Assert.Contains(editFrameRefMatches, m => Path.GetFileName(m.GetProperty("file_path").GetString()!) == "AppHost.cs" && m.GetProperty("line").GetInt32() == FindLineNumber(appRunnerSource, "new Lib.EditFrame(1)"));
+            Assert.Contains(editFrameRefMatches, m => Path.GetFileName(m.GetProperty("file_path").GetString()!) == "AppHost.cs" && m.GetProperty("line").GetInt32() == FindLineNumber(appRunnerSource, "targetTypedFrame = new(2)"));
+            Assert.Contains(editFrameRefMatches, m => Path.GetFileName(m.GetProperty("file_path").GetString()!) == "TargetTypedOnly.cs" && m.GetProperty("line").GetInt32() == FindLineNumber(consumerTargetTypedSource, "AcceptFrame(new(3))"));
+
+            JsonElement editFrameInvocations = await host.CallAsync("nav.find_invocations", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = editFrameLine, column = editFrameCol, require_workspace = true,
+            });
+            JsonElement editFrameInvData = DataOf(editFrameInvocations);
+            Assert.Equal(3, editFrameInvData.GetProperty("total_matches").GetInt32());
+
+            // Primary constructor class (both identifier and parameter-list '(' anchor).
+            (int primaryLine, int primaryCol) = FindTokenPosition(libTypesSource, "class PrimaryNode(int value)", "PrimaryNode");
+            JsonElement primaryInvocations = await host.CallAsync("nav.find_invocations", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = primaryLine, column = primaryCol, require_workspace = true,
+            });
+            Assert.Equal(3, DataOf(primaryInvocations).GetProperty("total_matches").GetInt32());
+
+            (int primaryParenLine, int primaryParenCol) = FindTokenPosition(libTypesSource, "class PrimaryNode(int value)", "(");
+            JsonElement primaryParenInvocations = await host.CallAsync("nav.find_invocations", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = primaryParenLine, column = primaryParenCol, require_workspace = true,
+            });
+            Assert.Equal(3, DataOf(primaryParenInvocations).GetProperty("total_matches").GetInt32());
+
+            // Implicit parameterless constructor class.
+            (int plainLine, int plainCol) = FindTokenPosition(libTypesSource, "class PlainMarker", "PlainMarker");
+            JsonElement plainInvocations = await host.CallAsync("nav.find_invocations", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = plainLine, column = plainCol, require_workspace = true,
+            });
+            Assert.Equal(1, DataOf(plainInvocations).GetProperty("total_matches").GetInt32());
+
+            // 2. nav.call_hierarchy follows lambdas (2 levels up) and method-group registrations in field initializers.
+            (int compileLine, int compileCol) = FindTokenPosition(libTypesSource, "void CompileInsert()", "CompileInsert");
+            JsonElement compileHierarchy = await host.CallAsync("nav.call_hierarchy", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = compileLine, column = compileCol,
+                direction = "incoming", max_depth = 2, require_workspace = true,
+            });
+            JsonElement compileHierarchyData = DataOf(compileHierarchy);
+            string compileNodesRaw = compileHierarchyData.GetProperty("nodes").GetRawText();
+            Assert.Contains("EditFrame.Update", compileNodesRaw);
+            Assert.Contains("AppHost.InsertOneRow", compileNodesRaw);
+            int lambdaLine = FindLineNumber(appRunnerSource, "() => explicitFrame.Update(writer)");
+            Assert.Contains(
+                compileHierarchyData.GetProperty("edges").EnumerateArray(),
+                e => e.GetProperty("via_lambda").GetBoolean() && e.GetProperty("line").GetInt32() == lambdaLine);
+
+            (int createLine, int createCol) = FindTokenPosition(libTypesSource, "RecordsetObject Create()", "Create");
+            JsonElement createHierarchy = await host.CallAsync("nav.call_hierarchy", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = createLine, column = createCol,
+                direction = "incoming", max_depth = 1, require_workspace = true,
+            });
+            JsonElement createHierarchyData = DataOf(createHierarchy);
+            string createNodesRaw = createHierarchyData.GetProperty("nodes").GetRawText();
+            Assert.Contains("Activation.OwnRecordset", createNodesRaw);
+            Assert.Contains("Activation.CompatibilityRecordset", createNodesRaw);
+            JsonElement[] methodGroupEdges = createHierarchyData.GetProperty("edges").EnumerateArray()
+                .Where(e => e.GetProperty("call_kind").GetString() == "method_group")
+                .ToArray();
+            Assert.Equal(2, methodGroupEdges.Length);
+
+            // 3. nav.go_to_definition resolves source (single & partial) and metadata symbols cleanly.
+            (int computeUseLine, int computeUseCol) = FindTokenPosition(appRunnerSource, "Lib.LibApi.Compute(", "Compute");
+            (int computeDeclLine, int computeDeclCol) = FindTokenPosition(libTypesSource, "int Compute(int value)", "Compute");
+            JsonElement sourceDef = await host.CallAsync("nav.go_to_definition", new
+            {
+                workspace_handle = handle, file_path = appRunnerPath, line = computeUseLine, column = computeUseCol, require_workspace = true,
+            });
+            JsonElement sourceDefData = DataOf(sourceDef);
+            Assert.Equal(1, sourceDefData.GetProperty("source_definition_count").GetInt32());
+            Assert.Equal(0, sourceDefData.GetProperty("metadata_definition_count").GetInt32());
+            JsonElement firstSourceDef = sourceDefData.GetProperty("definitions")[0];
+            Assert.Equal("source", firstSourceDef.GetProperty("location_kind").GetString());
+            Assert.Equal("LibTypes.cs", Path.GetFileName(firstSourceDef.GetProperty("file_path").GetString()!));
+            Assert.Equal(computeDeclLine, firstSourceDef.GetProperty("line").GetInt32());
+            Assert.Equal(computeDeclCol, firstSourceDef.GetProperty("column").GetInt32());
+            Assert.Equal("Lib", firstSourceDef.GetProperty("assembly_name").GetString());
+
+            // Metadata definition (System.Text.NormalizationForm).
+            (int metaLine, int metaCol) = FindTokenPosition(appRunnerSource, "NormalizationForm.FormC", "NormalizationForm");
+            JsonElement metaDef = await host.CallAsync("nav.go_to_definition", new
+            {
+                workspace_handle = handle, file_path = appRunnerPath, line = metaLine, column = metaCol, require_workspace = true,
+            });
+            JsonElement metaDefData = DataOf(metaDef);
+            Assert.Equal(0, metaDefData.GetProperty("source_definition_count").GetInt32());
+            Assert.True(metaDefData.GetProperty("metadata_definition_count").GetInt32() >= 1);
+            JsonElement firstMetaDef = metaDefData.GetProperty("definitions")[0];
+            Assert.Equal("metadata", firstMetaDef.GetProperty("location_kind").GetString());
+            Assert.Equal("System.Text.NormalizationForm", firstMetaDef.GetProperty("metadata_name").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(firstMetaDef.GetProperty("assembly_name").GetString()));
+
+            // Partial type definition returns both source declarations.
+            (int splitUseLine, int splitUseCol) = FindTokenPosition(appRunnerSource, "Lib.SplitModel model", "SplitModel");
+            JsonElement splitDef = await host.CallAsync("nav.go_to_definition", new
+            {
+                workspace_handle = handle, file_path = appRunnerPath, line = splitUseLine, column = splitUseCol, require_workspace = true,
+            });
+            Assert.Equal(2, DataOf(splitDef).GetProperty("source_definition_count").GetInt32());
+
+            // 5. nav.find_implementations returns identifier column (not column 1) and chains straight into nav.* commands.
+            (int ifaceLine, int ifaceCol) = FindTokenPosition(libTypesSource, "interface IPageSource", "IPageSource");
+            JsonElement impls = await host.CallAsync("nav.find_implementations", new
+            {
+                workspace_handle = handle, file_path = libTypesPath, line = ifaceLine, column = ifaceCol, require_workspace = true,
+            });
+            JsonElement[] implMatches = DataOf(impls).GetProperty("matches").EnumerateArray().ToArray();
+            Assert.Equal(3, implMatches.Length);
+            foreach (JsonElement impl in implMatches)
+            {
+                int col = impl.GetProperty("column").GetInt32();
+                Assert.True(col > 1, $"Expected identifier column > 1 for {impl.GetRawText()}");
+
+                JsonElement chainedInvocations = await host.CallAsync("nav.find_invocations", new
+                {
+                    workspace_handle = handle,
+                    file_path = impl.GetProperty("file_path").GetString()!,
+                    line = impl.GetProperty("line").GetInt32(),
+                    column = col,
+                    require_workspace = true,
+                });
+                Assert.Equal(1, DataOf(chainedInvocations).GetProperty("total_matches").GetInt32());
+            }
+
+            // 4. diag.get_workspace_snapshot covers every project under directory/solution (per project, summed)
+            //    and keeps single-project arguments single-project.
+            JsonElement cleanSnapshot = await host.CallAsync("diag.get_workspace_snapshot", new
+            {
+                workspace_handle = handle, directory_path = srcDir, require_workspace = true,
+            });
+            JsonElement cleanData = DataOf(cleanSnapshot);
+            Assert.Equal(3, cleanData.GetProperty("analyzed_projects").GetInt32());
+            Assert.Equal(0, cleanData.GetProperty("errors").GetInt32());
+
+            // Introduce a deliberate signature break in Lib that breaks both App and Consumer.
+            await File.WriteAllTextAsync(
+                libTypesPath,
+                libTypesSource.Replace("public static int Compute(int value) => value + 1;", "public static int Compute(int value, int extra) => value + extra;"));
+            File.SetLastWriteTimeUtc(libTypesPath, DateTime.UtcNow.AddMinutes(1));
+
+            JsonElement srcBroken = await host.CallAsync("diag.get_workspace_snapshot", new
+            {
+                workspace_handle = handle, directory_path = srcDir, require_workspace = true,
+            });
+            JsonElement srcBrokenData = DataOf(srcBroken);
+            Assert.Equal(3, srcBrokenData.GetProperty("analyzed_projects").GetInt32());
+            Assert.Equal(2, srcBrokenData.GetProperty("projects_with_errors").GetInt32());
+            Assert.Equal(2, srcBrokenData.GetProperty("errors").GetInt32());
+            Dictionary<string, int> perProjectErrors = srcBrokenData.GetProperty("projects").EnumerateArray()
+                .ToDictionary(p => p.GetProperty("project_name").GetString()!, p => p.GetProperty("errors").GetInt32(), StringComparer.OrdinalIgnoreCase);
+            Assert.Equal(0, perProjectErrors["Lib"]);
+            Assert.Equal(1, perProjectErrors["App"]);
+            Assert.Equal(1, perProjectErrors["Consumer"]);
+            Assert.Equal(srcBrokenData.GetProperty("errors").GetInt32(), perProjectErrors.Values.Sum());
+
+            // Solution file covers all 3 projects.
+            JsonElement slnBroken = await host.CallAsync("diag.get_workspace_snapshot", new
+            {
+                workspace_handle = handle, workspace_path = solutionPath, require_workspace = true,
+            });
+            Assert.Equal(3, DataOf(slnBroken).GetProperty("analyzed_projects").GetInt32());
+            Assert.Equal(2, DataOf(slnBroken).GetProperty("errors").GetInt32());
+
+            // Single-project argument (.csproj or project dir) stays single-project.
+            JsonElement appOnlyProj = await host.CallAsync("diag.get_workspace_snapshot", new
+            {
+                workspace_handle = handle, workspace_path = appProjPath, require_workspace = true,
+            });
+            Assert.Equal(1, DataOf(appOnlyProj).GetProperty("analyzed_projects").GetInt32());
+            Assert.Equal(1, DataOf(appOnlyProj).GetProperty("errors").GetInt32());
+
+            JsonElement appOnlyDir = await host.CallAsync("diag.get_workspace_snapshot", new
+            {
+                workspace_handle = handle, directory_path = appDir, require_workspace = true,
+            });
+            Assert.Equal(1, DataOf(appOnlyDir).GetProperty("analyzed_projects").GetInt32());
+            Assert.Equal(1, DataOf(appOnlyDir).GetProperty("errors").GetInt32());
+
+            await process.StandardInput.WriteLineAsync("{\"id\":\"shutdown\",\"method\":\"shutdown\"}");
+            _ = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after shutdown.");
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static (int Line, int Column) FindTokenPosition(string source, string lineContains, string token)
+    {
+        string[] lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].Contains(lineContains, StringComparison.Ordinal))
+            {
+                int idx = lines[i].IndexOf(token, StringComparison.Ordinal);
+                Assert.True(idx >= 0, $"Token '{token}' not found on line '{lines[i]}'.");
+                return (i + 1, idx + 1);
+            }
+        }
+
+        throw new InvalidOperationException($"Line containing '{lineContains}' was not found.");
+    }
+
+    private static int FindLineNumber(string source, string lineContains)
+    {
+        string[] lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].Contains(lineContains, StringComparison.Ordinal))
+            {
+                return i + 1;
+            }
+        }
+
+        throw new InvalidOperationException($"Line containing '{lineContains}' was not found.");
     }
 
     private static IEnumerable<IAgentCommand> HotCommands()

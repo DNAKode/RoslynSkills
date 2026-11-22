@@ -154,12 +154,105 @@ internal static class SolutionSearchScope
         {
             case IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.LocalFunction } method:
                 return method.Name;
-            case IPropertySymbol or IFieldSymbol or IEventSymbol or INamedTypeSymbol:
+            case IPropertySymbol or IFieldSymbol or IEventSymbol:
                 return symbol.Name;
+            // Named types can be instantiated via target-typed `new(...)` or type aliases without spelling their name.
             default:
                 return null;
         }
     }
+
+    /// <summary>Whether <paramref name="candidate"/> refers to the same semantic symbol as <paramref name="target"/>.</summary>
+    public static bool IsSameSymbol(ISymbol? candidate, ISymbol target)
+    {
+        if (candidate is null)
+        {
+            return false;
+        }
+
+        if (SymbolEqualityComparer.Default.Equals(candidate, target) ||
+            SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, target.OriginalDefinition))
+        {
+            return true;
+        }
+
+        if (candidate is IMethodSymbol candidateMethod && candidateMethod.ReducedFrom is { } candidateReduced)
+        {
+            if (SymbolEqualityComparer.Default.Equals(candidateReduced, target) ||
+                SymbolEqualityComparer.Default.Equals(candidateReduced.OriginalDefinition, target.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+
+        if (target is IMethodSymbol targetMethod && targetMethod.ReducedFrom is { } targetReduced)
+        {
+            if (SymbolEqualityComparer.Default.Equals(candidate, targetReduced) ||
+                SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, targetReduced.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a <c>SymbolFinder.FindReferencesAsync</c> group belongs to <paramref name="target"/>:
+    /// the target itself, or any constructor of <paramref name="target"/> when the target is a named type
+    /// (so <c>new Type(...)</c> and target-typed <c>new(...)</c> object creations are included).
+    /// </summary>
+    public static bool MatchesReferenceDefinition(ISymbol? definition, ISymbol target, out bool isConstructorOfTargetType)
+    {
+        isConstructorOfTargetType = false;
+        if (definition is null)
+        {
+            return false;
+        }
+
+        if (IsSameSymbol(definition, target))
+        {
+            return true;
+        }
+
+        if (target is INamedTypeSymbol targetType &&
+            definition is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor &&
+            IsSameSymbol(ctor.ContainingType, targetType))
+        {
+            isConstructorOfTargetType = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="symbol"/> can be invoked or constructed (a method, constructor, or instantiable type).</summary>
+    public static bool IsInvocationTarget(ISymbol? symbol)
+        => symbol is IMethodSymbol
+            || symbol is INamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Struct or TypeKind.Delegate };
+
+    /// <summary>Whether a call site's <paramref name="callee"/> invokes <paramref name="target"/> (including constructors of a target type).</summary>
+    public static bool MatchesInvocationCallee(IMethodSymbol? callee, ISymbol target)
+    {
+        if (callee is null)
+        {
+            return false;
+        }
+
+        if (target is IMethodSymbol targetMethod)
+        {
+            return IsSameSymbol(callee, targetMethod);
+        }
+
+        if (target is INamedTypeSymbol targetType)
+        {
+            return callee.MethodKind == MethodKind.Constructor &&
+                   IsSameSymbol(callee.ContainingType, targetType);
+        }
+
+        return false;
+    }
+
 
     private static List<Project> SelectProjects(Solution solution, Project anchorProject, ISymbol? target)
     {

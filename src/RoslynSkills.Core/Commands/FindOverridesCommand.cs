@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -162,7 +162,7 @@ public sealed class FindOverridesCommand : IAgentCommand
                 continue;
             }
 
-            FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
+            FileLinePositionSpan lineSpan = (SymbolResolution.GetDeclarationIdentifierLocation(candidate, declaration) ?? declaration.GetLocation()).GetLineSpan();
             matches.Add(new OverrideMatch(
                 kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
@@ -199,7 +199,7 @@ public sealed class FindOverridesCommand : IAgentCommand
                 continue;
             }
 
-            FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
+            FileLinePositionSpan lineSpan = (SymbolResolution.GetDeclarationIdentifierLocation(candidate, declaration) ?? declaration.GetLocation()).GetLineSpan();
             matches.Add(new OverrideMatch(
                 kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,
@@ -236,7 +236,7 @@ public sealed class FindOverridesCommand : IAgentCommand
                 continue;
             }
 
-            FileLinePositionSpan lineSpan = declaration.GetLocation().GetLineSpan();
+            FileLinePositionSpan lineSpan = (SymbolResolution.GetDeclarationIdentifierLocation(candidate, declaration) ?? declaration.GetLocation()).GetLineSpan();
             matches.Add(new OverrideMatch(
                 kind: declaration.GetType().Name,
                 line: lineSpan.StartLinePosition.Line + 1,

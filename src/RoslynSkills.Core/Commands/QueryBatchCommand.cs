@@ -14,6 +14,7 @@ public sealed class QueryBatchCommand : IAgentCommand
             ["ctx.member_source"] = static () => new MemberSourceCommand(),
             ["nav.find_symbol"] = static () => new FindSymbolCommand(),
             ["nav.find_symbol_batch"] = static () => new FindSymbolBatchCommand(),
+            ["nav.go_to_definition"] = static () => new GoToDefinitionCommand(),
             ["nav.find_references"] = static () => new FindReferencesCommand(),
             ["nav.find_invocations"] = static () => new FindInvocationsCommand(),
             ["nav.call_hierarchy"] = static () => new CallHierarchyCommand(),

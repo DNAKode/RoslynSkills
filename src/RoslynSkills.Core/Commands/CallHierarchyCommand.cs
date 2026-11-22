@@ -113,8 +113,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
 
         SyntaxToken anchorToken = analysis.FindAnchorToken(line, column);
         ISymbol? anchorSymbol = SymbolResolution.GetSymbolForToken(anchorToken, analysis.SemanticModel, cancellationToken);
-        IMethodSymbol? anchorMethod = anchorSymbol as IMethodSymbol;
-        if (anchorMethod is null)
+        if (anchorSymbol is not (IMethodSymbol or IFieldSymbol or IPropertySymbol or IEventSymbol))
         {
             return new CommandExecutionResult(
                 null,
@@ -122,10 +121,11 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 {
                     new CommandError(
                         "invalid_target",
-                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method. Anchor to a method declaration/reference and retry."),
+                        $"Symbol '{anchorSymbol?.ToDisplayString() ?? "<unknown>"}' is not a method or member. Anchor to a method or member declaration/reference and retry."),
                 });
         }
 
+        ISymbol normalizedAnchor = NormalizeGraphSymbol(anchorSymbol);
         SearchScope scope = await SolutionSearchScope.ResolveAsync(analysis, target: null, includeGenerated, cancellationToken).ConfigureAwait(false);
         CallGraph graph = await BuildCallGraphAsync(
             scope,
@@ -135,7 +135,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
             brief,
             cancellationToken).ConfigureAwait(false);
 
-        string anchorId = graph.GetOrAddNode(anchorMethod).symbol_id;
+        string anchorId = graph.GetOrAddNode(normalizedAnchor).symbol_id;
         graph.TryUpdateNodeSourceLocation(anchorId, analysis.FilePath, line, column);
 
         HashSet<string> selectedNodes = new(StringComparer.Ordinal) { anchorId };
@@ -228,6 +228,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 edge.from_symbol_id,
                 edge.to_symbol_id,
                 edge.call_kind,
+                edge.via_lambda,
                 edge.file_path,
                 edge.line,
                 edge.column,
@@ -266,10 +267,10 @@ public sealed class CallHierarchyCommand : IAgentCommand
             },
             symbol = new
             {
-                symbol_display = anchorMethod.ToDisplayString(),
-                symbol_kind = anchorMethod.Kind.ToString(),
+                symbol_display = normalizedAnchor.ToDisplayString(),
+                symbol_kind = normalizedAnchor.Kind.ToString(),
                 symbol_id = anchorId,
-                method_kind = anchorMethod.MethodKind.ToString(),
+                method_kind = (normalizedAnchor as IMethodSymbol)?.MethodKind.ToString(),
             },
             scanned_syntax_trees = graph.scannedSyntaxTreeCount,
             search = scope.ToPayload(),
@@ -360,7 +361,10 @@ public sealed class CallHierarchyCommand : IAgentCommand
                     continue;
                 }
 
-                if (!includeExternal && (!IsInSource(callSite.caller) || !IsInSource(callSite.callee)))
+                ISymbol caller = NormalizeGraphSymbol(callSite.caller);
+                IMethodSymbol callee = (IMethodSymbol)NormalizeGraphSymbol(callSite.callee);
+
+                if (!includeExternal && (!IsInSource(caller) || !IsInSource(callee)))
                 {
                     continue;
                 }
@@ -370,9 +374,10 @@ public sealed class CallHierarchyCommand : IAgentCommand
                     outgoingEdgesByNodeId,
                     incomingEdgesByNodeId,
                     edgeKeys,
-                    callSite.caller,
-                    callSite.callee,
+                    caller,
+                    callee,
                     callKind: callSite.call_kind,
+                    viaLambda: callSite.via_lambda,
                     callSite.node.Span,
                     sourceText,
                     treeFilePath,
@@ -384,6 +389,16 @@ public sealed class CallHierarchyCommand : IAgentCommand
         return new CallGraph(nodesById, outgoingEdgesByNodeId, incomingEdgesByNodeId, scannedSyntaxTreeCount);
     }
 
+    private static ISymbol NormalizeGraphSymbol(ISymbol symbol)
+    {
+        if (symbol is IMethodSymbol method)
+        {
+            return (method.ReducedFrom ?? method).OriginalDefinition;
+        }
+
+        return symbol.OriginalDefinition;
+    }
+
     private static bool IsInSource(ISymbol symbol)
         => symbol.Locations.Any(location => location.IsInSource);
 
@@ -392,9 +407,10 @@ public sealed class CallHierarchyCommand : IAgentCommand
         Dictionary<string, List<CallHierarchyEdge>> outgoingEdgesByNodeId,
         Dictionary<string, List<CallHierarchyEdge>> incomingEdgesByNodeId,
         HashSet<string> edgeKeys,
-        IMethodSymbol caller,
+        ISymbol caller,
         IMethodSymbol callee,
         string callKind,
+        bool viaLambda,
         TextSpan callSpan,
         SourceText sourceText,
         string filePath,
@@ -420,6 +436,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
             from_symbol_id: callerNode.symbol_id,
             to_symbol_id: calleeNode.symbol_id,
             call_kind: callKind,
+            via_lambda: viaLambda,
             file_path: filePath,
             line: line,
             column: column,
@@ -443,16 +460,20 @@ public sealed class CallHierarchyCommand : IAgentCommand
         list.Add(edge);
     }
 
-    private static CallHierarchyNode GetOrAddNode(Dictionary<string, CallHierarchyNode> nodesById, IMethodSymbol methodSymbol)
+    private static CallHierarchyNode GetOrAddNode(Dictionary<string, CallHierarchyNode> nodesById, ISymbol symbol)
     {
-        string symbolId = CommandTextFormatting.GetStableSymbolId(methodSymbol)
-            ?? methodSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        string symbolId = SymbolResolution.GetUniqueGraphSymbolId(symbol);
         if (nodesById.TryGetValue(symbolId, out CallHierarchyNode? existing))
         {
             return existing;
         }
 
-        Location? sourceLocation = methodSymbol.Locations.FirstOrDefault(location => location.IsInSource);
+        Location? sourceLocation = SymbolResolution.GetDeclarationIdentifierLocation(symbol);
+        if (sourceLocation is not { IsInSource: true })
+        {
+            sourceLocation = null;
+        }
+
         string? filePath = sourceLocation?.SourceTree?.FilePath;
         int? line = null;
         int? column = null;
@@ -465,11 +486,11 @@ public sealed class CallHierarchyCommand : IAgentCommand
 
         CallHierarchyNode created = new(
             symbol_id: symbolId,
-            symbol_display: methodSymbol.ToDisplayString(),
-            symbol_kind: methodSymbol.Kind.ToString(),
-            method_kind: methodSymbol.MethodKind.ToString(),
-            containing_type: methodSymbol.ContainingType?.ToDisplayString(),
-            is_external: !IsInSource(methodSymbol),
+            symbol_display: symbol.ToDisplayString(),
+            symbol_kind: symbol.Kind.ToString(),
+            method_kind: (symbol as IMethodSymbol)?.MethodKind.ToString(),
+            containing_type: symbol.ContainingType?.ToDisplayString(),
+            is_external: !IsInSource(symbol),
             file_path: string.IsNullOrWhiteSpace(filePath) ? null : Path.GetFullPath(filePath),
             line: line,
             column: column);
@@ -543,8 +564,8 @@ public sealed class CallHierarchyCommand : IAgentCommand
             this.scannedSyntaxTreeCount = scannedSyntaxTreeCount;
         }
 
-        public CallHierarchyNode GetOrAddNode(IMethodSymbol methodSymbol)
-            => CallHierarchyCommand.GetOrAddNode(nodesById, methodSymbol);
+        public CallHierarchyNode GetOrAddNode(ISymbol symbol)
+            => CallHierarchyCommand.GetOrAddNode(nodesById, symbol);
 
         public void TryUpdateNodeSourceLocation(string nodeId, string filePath, int line, int column)
         {
@@ -571,7 +592,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
         string symbol_id,
         string symbol_display,
         string symbol_kind,
-        string method_kind,
+        string? method_kind,
         string? containing_type,
         bool is_external,
         string? file_path,
@@ -583,6 +604,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
         string from_symbol_id,
         string to_symbol_id,
         string call_kind,
+        bool via_lambda,
         string file_path,
         int line,
         int column,

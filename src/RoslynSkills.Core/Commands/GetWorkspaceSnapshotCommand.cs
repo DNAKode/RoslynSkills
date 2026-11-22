@@ -1,5 +1,7 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace RoslynSkills.Core.Commands;
@@ -9,10 +11,13 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
     private const string DefaultMode = "compact";
     private static readonly string[] SupportedModes = ["raw", "compact", "guided"];
     private static readonly string[] DefaultSeverityFilter = ["Error", "Warning"];
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
 
     public CommandDescriptor Descriptor { get; } = new(
         Id: "diag.get_workspace_snapshot",
-        Summary: "Analyze project/workspace-backed C# diagnostics for a file set (single resolved .csproj workspace).",
+        Summary: "Analyze project/workspace-backed diagnostics across a directory, solution, project, or file set (per project, summed).",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -25,25 +30,29 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         List<CommandError> errors = new();
         string[] filePaths = InputParsing.GetOptionalStringArray(input, "file_paths");
         IReadOnlyDictionary<string, string> overrides = ParseFileOverrides(input, errors);
-        string? directoryPath = null;
-        if (input.TryGetProperty("directory_path", out JsonElement directoryProperty) && directoryProperty.ValueKind == JsonValueKind.String)
-        {
-            directoryPath = directoryProperty.GetString();
-        }
+        string? directoryPath = GetOptionalStringProperty(input, "directory_path");
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
-        if (filePaths.Length == 0 && string.IsNullOrWhiteSpace(directoryPath) && overrides.Count == 0)
+        if (filePaths.Length == 0 &&
+            string.IsNullOrWhiteSpace(directoryPath) &&
+            overrides.Count == 0 &&
+            string.IsNullOrWhiteSpace(workspacePath) &&
+            string.IsNullOrWhiteSpace(workspaceHandle))
         {
             errors.Add(new CommandError(
                 "invalid_input",
-                "At least one of 'file_paths', 'directory_path', or 'file_overrides' must be provided."));
+                "At least one of 'directory_path', 'workspace_path', 'workspace_handle', 'file_paths', or 'file_overrides' must be provided."));
             return errors;
         }
 
-        if (!string.IsNullOrWhiteSpace(directoryPath) && !Directory.Exists(directoryPath))
+        if (!string.IsNullOrWhiteSpace(directoryPath) &&
+            !Directory.Exists(directoryPath) &&
+            !(File.Exists(directoryPath) && StaticAnalysisWorkspace.IsMsBuildWorkspaceFile(directoryPath)))
         {
             errors.Add(new CommandError(
                 "directory_not_found",
@@ -167,7 +176,9 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
             defaultValue: string.Equals(mode, "raw", StringComparison.OrdinalIgnoreCase) && !brief);
         bool useSdkDefaults = InputParsing.GetOptionalBool(input, "use_sdk_defaults", defaultValue: true);
 
-        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? rawWorkspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        string? rawDirectoryPath = GetOptionalStringProperty(input, "directory_path");
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: true);
 
         HashSet<string> severityFilter = ParseSeverityFilter(input);
@@ -177,9 +188,34 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         string[] additionalGlobalUsings = InputParsing.GetOptionalStringArray(input, "global_usings");
         IReadOnlyDictionary<string, string> overrides = ParseFileOverrides(input, errors: null);
         string[] explicitFilePaths = InputParsing.GetOptionalStringArray(input, "file_paths");
-        HashSet<string> candidatePaths = new(StringComparer.OrdinalIgnoreCase);
-        int skippedGeneratedFiles = 0;
 
+        string? effectiveWorkspacePath = string.IsNullOrWhiteSpace(rawWorkspacePath)
+            ? null
+            : Path.GetFullPath(rawWorkspacePath);
+        string? effectiveDirectoryPath = null;
+
+        if (!string.IsNullOrWhiteSpace(rawDirectoryPath))
+        {
+            string fullDirOrFile = Path.GetFullPath(rawDirectoryPath);
+            if (File.Exists(fullDirOrFile) && StaticAnalysisWorkspace.IsMsBuildWorkspaceFile(fullDirOrFile))
+            {
+                effectiveWorkspacePath ??= fullDirOrFile;
+            }
+            else
+            {
+                effectiveDirectoryPath = NormalizeDirectoryPath(fullDirOrFile);
+            }
+        }
+
+        if (effectiveDirectoryPath is null &&
+            effectiveWorkspacePath is not null &&
+            Directory.Exists(effectiveWorkspacePath))
+        {
+            effectiveDirectoryPath = NormalizeDirectoryPath(effectiveWorkspacePath);
+        }
+
+        HashSet<string> explicitFileSet = new(PathComparer);
+        int skippedGeneratedFiles = 0;
         foreach (string explicitPath in explicitFilePaths)
         {
             string fullPath = Path.GetFullPath(explicitPath);
@@ -189,31 +225,7 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
                 continue;
             }
 
-            candidatePaths.Add(fullPath);
-        }
-
-        if (input.TryGetProperty("directory_path", out JsonElement directoryProperty) &&
-            directoryProperty.ValueKind == JsonValueKind.String)
-        {
-            string? directoryPath = directoryProperty.GetString();
-            if (!string.IsNullOrWhiteSpace(directoryPath))
-            {
-                IEnumerable<string> discovered = Directory.EnumerateFiles(
-                    directoryPath,
-                    "*.cs",
-                    recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
-                foreach (string filePath in discovered)
-                {
-                    string fullPath = Path.GetFullPath(filePath);
-                    if (!includeGenerated && IsGeneratedPath(fullPath))
-                    {
-                        skippedGeneratedFiles++;
-                        continue;
-                    }
-
-                    candidatePaths.Add(fullPath);
-                }
-            }
+            explicitFileSet.Add(fullPath);
         }
 
         foreach (string overridePath in overrides.Keys)
@@ -224,40 +236,23 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
                 continue;
             }
 
-            candidatePaths.Add(overridePath);
+            explicitFileSet.Add(overridePath);
         }
 
-        string[] filePaths = candidatePaths
-            .Where(path => File.Exists(path) || overrides.ContainsKey(path))
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Take(maxFiles)
-            .ToArray();
+        Stopwatch loadTimer = Stopwatch.StartNew();
+        ResolvedSnapshotWorkspace? resolved = await ResolveSnapshotWorkspaceAsync(
+                effectiveWorkspacePath,
+                effectiveDirectoryPath,
+                workspaceHandle,
+                explicitFileSet,
+                overrides,
+                recursive,
+                includeGenerated,
+                cancellationToken)
+            .ConfigureAwait(false);
+        loadTimer.Stop();
 
-        if (filePaths.Length == 0)
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("invalid_input", "No C# files were resolved for snapshot diagnostics.") });
-        }
-
-        string? anchorFilePath = filePaths.FirstOrDefault(path => File.Exists(path));
-        if (string.IsNullOrWhiteSpace(anchorFilePath))
-        {
-            if (requireWorkspace)
-            {
-                return new CommandExecutionResult(
-                    null,
-                    new[] { new CommandError("workspace_required", "Workspace-backed snapshot requires at least one on-disk anchor file to infer workspace. Pass workspace_path and retry.") });
-            }
-
-            // Fallback to the ad-hoc snapshot behavior.
-            GetSolutionSnapshotCommand fallback = new();
-            return await fallback.ExecuteAsync(input, cancellationToken).ConfigureAwait(false);
-        }
-
-        CommandFileAnalysis anchorAnalysis = await CommandFileAnalysis.LoadAsync(anchorFilePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
-        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, anchorAnalysis);
-        if (workspaceError is not null)
+        if (resolved is null || resolved.Solution is null)
         {
             if (!requireWorkspace)
             {
@@ -265,29 +260,140 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
                 return await fallback.ExecuteAsync(input, cancellationToken).ConfigureAwait(false);
             }
 
-            return workspaceError;
+            string reason = resolved?.FailureReason
+                ?? "Workspace context could not be resolved for snapshot diagnostics. Pass workspace_path (.sln/.slnx/.csproj/.vbproj or directory) and retry.";
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("workspace_required", reason) });
         }
 
-        // Use the project compilation from the anchor file's resolved workspace.
-        string[] workspaceFilePaths = filePaths
-            .Select(Path.GetFullPath)
-            .Where(path => string.Equals(path, "<roslynskills-global-usings>", StringComparison.OrdinalIgnoreCase) ||
-                           string.Equals(path, "<global>", StringComparison.OrdinalIgnoreCase) ||
-                           File.Exists(path) ||
-                           overrides.ContainsKey(path))
-            .ToArray();
+        Solution workingSolution = ApplyFileOverrides(resolved.Solution, overrides);
+        List<ProjectSelection> selectedProjects = SelectTargetProjects(
+            workingSolution,
+            effectiveWorkspacePath,
+            effectiveDirectoryPath,
+            explicitFileSet,
+            recursive);
 
-        HashSet<string> fileSet = workspaceFilePaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedProjects.Count == 0)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("invalid_input", "No MSBuild projects matched the requested snapshot scope.") });
+        }
 
-        IReadOnlyList<Diagnostic> allDiagnostics = anchorAnalysis.Compilation
-            .GetDiagnostics(cancellationToken)
-            .Where(diagnostic => IsDiagnosticForAnyTargetFile(diagnostic, fileSet))
-            .ToArray();
+        List<NormalizedDiagnostic> normalizedAllList = new();
+        List<NormalizedDiagnostic> filteredDiagnostics = new();
+        List<SnapshotProjectResult> projectResults = new();
+        HashSet<string> analyzedFilePaths = new(PathComparer);
+        List<string> aggregatedProjectIssues = new();
+        HashSet<string> seenProjectIssues = new(StringComparer.Ordinal);
+        int unresolvedSelectedProjectCount = 0;
+        int totalCandidateFiles = 0;
 
-        NormalizedDiagnostic[] normalizedAll = CompilationDiagnostics.Normalize(allDiagnostics);
-        List<NormalizedDiagnostic> filteredDiagnostics = normalizedAll
-            .Where(d => severityFilter.Contains(NormalizeSeverity(d.severity)))
-            .Where(d => diagnosticIdFilter.Count == 0 || diagnosticIdFilter.Contains(d.id))
+        foreach (ProjectSelection selection in selectedProjects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Project project = selection.Project;
+            Compilation? compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+            if (compilation is null)
+            {
+                continue;
+            }
+
+            IReadOnlyList<string> projectIssues = WorkspaceProjectResolution.ResolveProjectIssues(
+                resolved.UnresolvedProjects,
+                project,
+                compilation);
+            bool projectResolved = projectIssues.Count == 0;
+            if (!projectResolved)
+            {
+                unresolvedSelectedProjectCount++;
+                foreach (string issue in projectIssues)
+                {
+                    if (seenProjectIssues.Add(issue))
+                    {
+                        aggregatedProjectIssues.Add(issue);
+                    }
+                }
+            }
+
+            HashSet<string> projectTargetFiles = CollectProjectTargetFiles(
+                project,
+                selection.WholeProject,
+                effectiveDirectoryPath,
+                explicitFileSet,
+                recursive,
+                includeGenerated,
+                ref skippedGeneratedFiles);
+
+            totalCandidateFiles += projectTargetFiles.Count;
+            foreach (string path in projectTargetFiles)
+            {
+                analyzedFilePaths.Add(path);
+            }
+
+            bool includeProjectLevelDiagnostics = selection.WholeProject && explicitFileSet.Count == 0;
+            List<Diagnostic> projectRawDiagnostics = new();
+            foreach (Diagnostic diagnostic in compilation.GetDiagnostics(cancellationToken))
+            {
+                if (diagnostic.IsSuppressed)
+                {
+                    continue;
+                }
+
+                if (IsDiagnosticInProjectScope(
+                        diagnostic,
+                        selection.WholeProject,
+                        includeProjectLevelDiagnostics,
+                        includeGenerated,
+                        projectTargetFiles))
+                {
+                    projectRawDiagnostics.Add(diagnostic);
+                }
+            }
+
+            NormalizedDiagnostic[] projectNormalized = CompilationDiagnostics.Normalize(projectRawDiagnostics);
+            normalizedAllList.AddRange(projectNormalized);
+
+            List<NormalizedDiagnostic> projectFiltered = projectNormalized
+                .Where(d => severityFilter.Contains(NormalizeSeverity(d.severity)))
+                .Where(d => diagnosticIdFilter.Count == 0 || diagnosticIdFilter.Contains(d.id))
+                .ToList();
+            filteredDiagnostics.AddRange(projectFiltered);
+
+            SeverityCounts projectCounts = CountBySeverity(projectFiltered);
+            string[] projectTopIds = projectFiltered
+                .GroupBy(d => d.id, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Take(5)
+                .Select(g => g.Key)
+                .ToArray();
+
+            projectResults.Add(new SnapshotProjectResult(
+                project_name: project.Name,
+                project_path: project.FilePath,
+                project_resolved: projectResolved,
+                project_resolution_issues: projectIssues,
+                analyzed_files: projectTargetFiles.Count,
+                total: projectFiltered.Count,
+                errors: projectCounts.Errors,
+                warnings: projectCounts.Warnings,
+                info: projectCounts.Info,
+                hidden: projectCounts.Hidden,
+                top_diagnostic_ids: projectTopIds));
+        }
+
+        if (projectResults.Count == 0)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("invalid_input", "No C# or VB compilations could be created for the requested snapshot scope.") });
+        }
+
+        NormalizedDiagnostic[] normalizedAll = normalizedAllList.ToArray();
+        filteredDiagnostics = filteredDiagnostics
             .OrderByDescending(d => GetSeverityRank(d.severity))
             .ThenBy(d => d.file_path, StringComparer.OrdinalIgnoreCase)
             .ThenBy(d => d.line)
@@ -296,15 +402,27 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
             .ToList();
 
         NormalizedDiagnostic[] returnedDiagnostics = filteredDiagnostics.Take(maxDiagnostics).ToArray();
-        SeverityCounts filteredCounts = CountBySeverity(returnedDiagnostics);
+        SeverityCounts filteredCounts = CountBySeverity(filteredDiagnostics);
         SeverityCounts unfilteredCounts = CountBySeverity(normalizedAll);
 
-        Dictionary<string, List<NormalizedDiagnostic>> diagnosticsByFile = returnedDiagnostics
-            .GroupBy(d => string.IsNullOrWhiteSpace(d.file_path) ? "<global>" : d.file_path, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<NormalizedDiagnostic>> diagnosticsByFile = filteredDiagnostics
+            .GroupBy(d => string.IsNullOrWhiteSpace(d.file_path) ? "<global>" : Path.GetFullPath(d.file_path), PathComparer)
+            .ToDictionary(g => g.Key, g => g.ToList(), PathComparer);
+
+        foreach (string diagFile in diagnosticsByFile.Keys)
+        {
+            if (!string.Equals(diagFile, "<global>", StringComparison.OrdinalIgnoreCase))
+            {
+                analyzedFilePaths.Add(diagFile);
+            }
+        }
+
+        string[] orderedAnalyzedFiles = analyzedFilePaths
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         List<SnapshotFileResult> fileResults = new();
-        foreach (string filePath in filePaths.OrderBy(v => v, StringComparer.OrdinalIgnoreCase))
+        foreach (string filePath in orderedAnalyzedFiles)
         {
             diagnosticsByFile.TryGetValue(filePath, out List<NormalizedDiagnostic>? perFile);
             perFile ??= new List<NormalizedDiagnostic>();
@@ -338,12 +456,42 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
                 diagnostics: perFilePayload));
         }
 
+        if (diagnosticsByFile.TryGetValue("<global>", out List<NormalizedDiagnostic>? globalDiagnostics) &&
+            globalDiagnostics.Count > 0)
+        {
+            SeverityCounts globalCounts = CountBySeverity(globalDiagnostics);
+            fileResults.Add(new SnapshotFileResult(
+                file_path: "<global>",
+                total: globalDiagnostics.Count,
+                errors: globalCounts.Errors,
+                warnings: globalCounts.Warnings,
+                info: globalCounts.Info,
+                hidden: globalCounts.Hidden,
+                top_diagnostic_ids: globalDiagnostics
+                    .GroupBy(d => d.id, StringComparer.OrdinalIgnoreCase)
+                    .OrderByDescending(g => g.Count())
+                    .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                    .Take(5)
+                    .Select(g => g.Key)
+                    .ToArray(),
+                diagnostics: includePerFileDiagnostics
+                    ? globalDiagnostics.Take(maxDiagnosticsPerFile).ToArray()
+                    : Array.Empty<NormalizedDiagnostic>()));
+        }
+
         SnapshotFileResult[] files = fileResults
             .OrderByDescending(f => f.errors)
             .ThenByDescending(f => f.warnings)
             .ThenByDescending(f => f.total)
             .ThenBy(f => f.file_path, StringComparer.OrdinalIgnoreCase)
             .Take(maxFilesInOutput)
+            .ToArray();
+
+        SnapshotProjectResult[] orderedProjects = projectResults
+            .OrderByDescending(p => p.errors)
+            .ThenByDescending(p => p.warnings)
+            .ThenByDescending(p => p.total)
+            .ThenBy(p => p.project_name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         TopDiagnosticSummary[] topDiagnostics = filteredDiagnostics
@@ -370,9 +518,44 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
             ? BuildGuidance(topDiagnostics, files)
             : Array.Empty<GuidanceSuggestion>();
 
+        bool allSelectedProjectsResolved = unresolvedSelectedProjectCount == 0;
+        int projectsWithErrors = orderedProjects.Count(p => p.errors > 0);
+        int totalSolutionProjects = workingSolution.Projects.Count();
+        int totalSolutionDocuments = workingSolution.Projects.Sum(p => p.Documents.Count());
+        int totalUnresolvedInSolution = Math.Max(unresolvedSelectedProjectCount, resolved.UnresolvedProjects.Count);
+
+        WorkspaceContextInfo workspaceContext = new(
+            mode: "workspace",
+            resolution_source: resolved.ResolutionSource,
+            requested_workspace_path: rawWorkspacePath ?? rawDirectoryPath,
+            resolved_workspace_path: resolved.ResolvedWorkspacePath,
+            project_path: orderedProjects.Length == 1 ? orderedProjects[0].project_path : null,
+            fallback_reason: null,
+            attempted_workspace_paths: resolved.AttemptedWorkspacePaths,
+            workspace_diagnostics: resolved.WorkspaceDiagnostics,
+            workspace_load_duration_ms: (int)loadTimer.ElapsedMilliseconds,
+            msbuild_registration_duration_ms: 0,
+            workspace_cache_mode: resolved.CacheMode,
+            workspace_cache_hit: resolved.CacheHit,
+            workspace_kind: resolved.WorkspaceKind,
+            project_count: totalSolutionProjects,
+            document_count: totalSolutionDocuments,
+            workspace_handle: resolved.WorkspaceHandle,
+            project_resolved: allSelectedProjectsResolved,
+            project_resolution_issues: aggregatedProjectIssues,
+            unresolved_project_count: totalUnresolvedInSolution);
+
+        string diagnosticsNote = !allSelectedProjectsResolved
+            ? $"{unresolvedSelectedProjectCount} of {orderedProjects.Length} analyzed project(s) are unresolved ({string.Join("; ", aggregatedProjectIssues)}); diagnostics may include false missing-type errors until restored."
+            : orderedProjects.Length == 1
+                ? $"Diagnostics are project-backed from '{orderedProjects[0].project_name}' in the resolved workspace."
+                : $"Diagnostics are project-backed and summed across {orderedProjects.Length} project(s) in the resolved workspace.";
+
         object summary = new
         {
-            analyzed_files = filePaths.Length,
+            analyzed_projects = orderedProjects.Length,
+            projects_with_errors = projectsWithErrors,
+            analyzed_files = orderedAnalyzedFiles.Length,
             diagnostics = new
             {
                 total = filteredDiagnostics.Count,
@@ -384,6 +567,7 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
             },
             output = new
             {
+                projects_returned = orderedProjects.Length,
                 files_returned = files.Length,
                 top_diagnostics_returned = topDiagnostics.Length,
                 guidance_returned = guidance.Length,
@@ -397,35 +581,35 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         }
 
         data["mode"] = mode;
-        data["workspace_path"] = workspacePath;
+        data["workspace_path"] = rawWorkspacePath;
         data["require_workspace"] = requireWorkspace;
-        data["workspace_context"] = WorkspaceContextPayload.Build(anchorAnalysis.WorkspaceContext);
-        string diagnosticsNote = anchorAnalysis.WorkspaceContext.project_resolved == false
-            ? $"Anchor project is unresolved ({string.Join("; ", anchorAnalysis.WorkspaceContext.project_resolution_issues ?? Array.Empty<string>())}); diagnostics may include false missing-type errors until restored."
-            : "Diagnostics are project-backed from the resolved workspace of the anchor file.";
+        data["workspace_context"] = WorkspaceContextPayload.Build(workspaceContext);
         data["diagnostics_context"] = new
         {
             mode = "workspace",
-            project_resolved = anchorAnalysis.WorkspaceContext.project_resolved,
+            project_resolved = allSelectedProjectsResolved,
+            analyzed_projects = orderedProjects.Length,
+            unresolved_projects = unresolvedSelectedProjectCount,
             note = diagnosticsNote,
         };
-        data["total_files"] = filePaths.Length;
+        data["analyzed_projects"] = orderedProjects.Length;
+        data["projects_with_errors"] = projectsWithErrors;
+        data["total_files"] = orderedAnalyzedFiles.Length;
         data["total_diagnostics"] = filteredDiagnostics.Count;
         data["returned_diagnostics"] = returnedDiagnostics.Length;
         data["errors"] = filteredCounts.Errors;
         data["warnings"] = filteredCounts.Warnings;
         data["info"] = filteredCounts.Info;
         data["hidden"] = filteredCounts.Hidden;
+        data["projects"] = orderedProjects;
 
         if (includeQuery)
         {
             data["query"] = new
             {
                 file_paths = explicitFilePaths,
-                directory_path = input.TryGetProperty("directory_path", out JsonElement directoryPropertyValue) &&
-                                 directoryPropertyValue.ValueKind == JsonValueKind.String
-                    ? directoryPropertyValue.GetString()
-                    : null,
+                directory_path = rawDirectoryPath,
+                workspace_path = rawWorkspacePath,
                 recursive,
                 brief,
                 include_generated = includeGenerated,
@@ -455,8 +639,9 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         {
             data["resolution"] = new
             {
-                total_candidate_files = candidatePaths.Count,
-                analyzed_files = filePaths.Length,
+                total_candidate_files = totalCandidateFiles,
+                analyzed_files = orderedAnalyzedFiles.Length,
+                analyzed_projects = orderedProjects.Length,
                 skipped_generated_files = skippedGeneratedFiles,
             };
         }
@@ -496,12 +681,538 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 
+    private static async Task<ResolvedSnapshotWorkspace?> ResolveSnapshotWorkspaceAsync(
+        string? effectiveWorkspacePath,
+        string? effectiveDirectoryPath,
+        string? workspaceHandle,
+        HashSet<string> explicitFileSet,
+        IReadOnlyDictionary<string, string> overrides,
+        bool recursive,
+        bool includeGenerated,
+        CancellationToken cancellationToken)
+    {
+        List<string> attemptedPaths = new();
 
-    private static bool IsDiagnosticForAnyTargetFile(Diagnostic diagnostic, HashSet<string> fileSet)
+        // 1. Reuse the hot workspace when it covers the requested scope.
+        if (!string.IsNullOrWhiteSpace(workspaceHandle) &&
+            WorkspaceHostStoreProvider.Current.TryGet(workspaceHandle.Trim(), out HostedWorkspace? hosted) &&
+            hosted?.Workspace.Solution is not null)
+        {
+            StaticAnalysisWorkspace hotWorkspace = hosted.Workspace;
+            if (CanHotWorkspaceSatisfyRequest(hotWorkspace, effectiveWorkspacePath, effectiveDirectoryPath, explicitFileSet, recursive))
+            {
+                return new ResolvedSnapshotWorkspace(
+                    Solution: hotWorkspace.Solution,
+                    UnresolvedProjects: hotWorkspace.UnresolvedProjects,
+                    WorkspaceDiagnostics: hotWorkspace.WorkspaceDiagnostics,
+                    ResolvedWorkspacePath: hotWorkspace.ResolvedWorkspacePath,
+                    WorkspaceKind: hotWorkspace.WorkspaceKind,
+                    ResolutionSource: "workspace_handle",
+                    CacheMode: "process_hot",
+                    CacheHit: true,
+                    WorkspaceHandle: hosted.Handle,
+                    AttemptedWorkspacePaths: new[] { hotWorkspace.ResolvedWorkspacePath },
+                    FailureReason: null);
+            }
+        }
+
+        // 2. Explicit MSBuild workspace file (.sln / .slnx / .csproj / .vbproj).
+        if (!string.IsNullOrWhiteSpace(effectiveWorkspacePath) &&
+            File.Exists(effectiveWorkspacePath) &&
+            StaticAnalysisWorkspace.IsMsBuildWorkspaceFile(effectiveWorkspacePath))
+        {
+            attemptedPaths.Add(effectiveWorkspacePath);
+            (StaticAnalysisWorkspace? loaded, CommandError? error) = await StaticAnalysisWorkspace
+                .LoadAsync(effectiveWorkspacePath, includeGenerated, maxFiles: 100_000, cancellationToken)
+                .ConfigureAwait(false);
+            if (loaded?.Solution is not null)
+            {
+                return FromStaticAnalysisWorkspace(loaded, "explicit_workspace_path", attemptedPaths);
+            }
+
+            return ResolvedSnapshotWorkspace.Failed(error?.Message ?? $"Failed to load workspace '{effectiveWorkspacePath}'.");
+        }
+
+        // 3. Directory scope: prefer local .sln/.slnx, then local single .csproj/.vbproj, then ancestor .sln/.slnx,
+        //    then all .csproj/.vbproj files discovered under the directory.
+        if (!string.IsNullOrWhiteSpace(effectiveDirectoryPath) && Directory.Exists(effectiveDirectoryPath))
+        {
+            string[] topSolutions = EnumerateSolutionFiles(effectiveDirectoryPath);
+            if (topSolutions.Length > 0)
+            {
+                attemptedPaths.Add(topSolutions[0]);
+                (StaticAnalysisWorkspace? loaded, CommandError? error) = await StaticAnalysisWorkspace
+                    .LoadAsync(topSolutions[0], includeGenerated, maxFiles: 100_000, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded?.Solution is not null)
+                {
+                    return FromStaticAnalysisWorkspace(loaded, "directory_solution", attemptedPaths);
+                }
+
+                return ResolvedSnapshotWorkspace.Failed(error?.Message ?? $"Failed to load solution '{topSolutions[0]}'.");
+            }
+
+            string[] topProjects = EnumerateProjectFiles(effectiveDirectoryPath, SearchOption.TopDirectoryOnly);
+            if (topProjects.Length == 1)
+            {
+                attemptedPaths.Add(topProjects[0]);
+                (StaticAnalysisWorkspace? loaded, CommandError? error) = await StaticAnalysisWorkspace
+                    .LoadAsync(topProjects[0], includeGenerated, maxFiles: 100_000, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded?.Solution is not null)
+                {
+                    return FromStaticAnalysisWorkspace(loaded, "directory_project", attemptedPaths);
+                }
+
+                return ResolvedSnapshotWorkspace.Failed(error?.Message ?? $"Failed to load project '{topProjects[0]}'.");
+            }
+
+            if (topProjects.Length > 1)
+            {
+                attemptedPaths.AddRange(topProjects);
+                (StaticAnalysisWorkspace? loaded, CommandError? error) = await StaticAnalysisWorkspace
+                    .LoadProjectsAsync(effectiveDirectoryPath, topProjects, includeGenerated, maxFiles: 100_000, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded?.Solution is not null)
+                {
+                    return FromStaticAnalysisWorkspace(loaded, "directory_projects", attemptedPaths);
+                }
+
+                return ResolvedSnapshotWorkspace.Failed(error?.Message ?? $"Failed to load projects in '{effectiveDirectoryPath}'.");
+            }
+
+            // No solution or project directly in this directory (e.g., "src" or a subfolder inside a project).
+            // First check ancestor directories for a solution that covers this directory.
+            string? ancestorSolution = FindAncestorSolution(effectiveDirectoryPath);
+            if (!string.IsNullOrWhiteSpace(ancestorSolution))
+            {
+                attemptedPaths.Add(ancestorSolution);
+                (StaticAnalysisWorkspace? loaded, _) = await StaticAnalysisWorkspace
+                    .LoadAsync(ancestorSolution, includeGenerated, maxFiles: 100_000, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded?.Solution is not null &&
+                    SelectTargetProjects(loaded.Solution, effectiveWorkspacePath: null, effectiveDirectoryPath, explicitFileSet, recursive).Count > 0)
+                {
+                    return FromStaticAnalysisWorkspace(loaded, "ancestor_solution", attemptedPaths);
+                }
+            }
+
+            // Next check for any projects discovered beneath this directory.
+            string[] nestedProjects = recursive
+                ? EnumerateProjectFiles(effectiveDirectoryPath, SearchOption.AllDirectories)
+                : Array.Empty<string>();
+            if (nestedProjects.Length > 0)
+            {
+                attemptedPaths.AddRange(nestedProjects);
+                (StaticAnalysisWorkspace? loaded, CommandError? error) = await StaticAnalysisWorkspace
+                    .LoadProjectsAsync(effectiveDirectoryPath, nestedProjects, includeGenerated, maxFiles: 100_000, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded?.Solution is not null)
+                {
+                    return FromStaticAnalysisWorkspace(loaded, "directory_projects", attemptedPaths);
+                }
+
+                return ResolvedSnapshotWorkspace.Failed(error?.Message ?? $"Failed to load projects under '{effectiveDirectoryPath}'.");
+            }
+
+            // Finally check if this directory is a subfolder inside an ancestor .csproj/.vbproj.
+            string? ancestorProject = FindAncestorProject(effectiveDirectoryPath);
+            if (!string.IsNullOrWhiteSpace(ancestorProject))
+            {
+                attemptedPaths.Add(ancestorProject);
+                (StaticAnalysisWorkspace? loaded, CommandError? error) = await StaticAnalysisWorkspace
+                    .LoadAsync(ancestorProject, includeGenerated, maxFiles: 100_000, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded?.Solution is not null)
+                {
+                    return FromStaticAnalysisWorkspace(loaded, "ancestor_project", attemptedPaths);
+                }
+
+                return ResolvedSnapshotWorkspace.Failed(error?.Message ?? $"Failed to load project '{ancestorProject}'.");
+            }
+
+            return ResolvedSnapshotWorkspace.Failed($"No solution or MSBuild project was found for directory '{effectiveDirectoryPath}'.");
+        }
+
+        // 4. File-set only scope (no directory_path or workspace_path).
+        string[] onDiskFiles = explicitFileSet
+            .Where(File.Exists)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (onDiskFiles.Length == 0)
+        {
+            return ResolvedSnapshotWorkspace.Failed("Workspace-backed snapshot requires at least one on-disk file or workspace_path to resolve MSBuild projects.");
+        }
+
+        HashSet<string> inferredProjects = new(PathComparer);
+        foreach (string filePath in onDiskFiles)
+        {
+            string? dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                string? proj = FindAncestorProject(dir);
+                if (!string.IsNullOrWhiteSpace(proj))
+                {
+                    inferredProjects.Add(proj);
+                }
+            }
+        }
+
+        if (inferredProjects.Count > 1)
+        {
+            string? commonAnchorDir = Path.GetDirectoryName(onDiskFiles[0]);
+            string? ancestorSolution = !string.IsNullOrWhiteSpace(commonAnchorDir)
+                ? FindAncestorSolution(commonAnchorDir)
+                : null;
+            if (!string.IsNullOrWhiteSpace(ancestorSolution))
+            {
+                attemptedPaths.Add(ancestorSolution);
+                (StaticAnalysisWorkspace? loaded, _) = await StaticAnalysisWorkspace
+                    .LoadAsync(ancestorSolution, includeGenerated, maxFiles: 100_000, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded?.Solution is not null)
+                {
+                    return FromStaticAnalysisWorkspace(loaded, "ancestor_solution", attemptedPaths);
+                }
+            }
+
+            string[] projectList = inferredProjects.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+            attemptedPaths.AddRange(projectList);
+            (StaticAnalysisWorkspace? multiLoaded, CommandError? multiError) = await StaticAnalysisWorkspace
+                .LoadProjectsAsync(Path.GetDirectoryName(projectList[0]) ?? Environment.CurrentDirectory, projectList, includeGenerated, maxFiles: 100_000, cancellationToken)
+                .ConfigureAwait(false);
+            if (multiLoaded?.Solution is not null)
+            {
+                return FromStaticAnalysisWorkspace(multiLoaded, "inferred_projects", attemptedPaths);
+            }
+
+            return ResolvedSnapshotWorkspace.Failed(multiError?.Message ?? "Failed to load inferred projects for requested files.");
+        }
+
+        CommandFileAnalysis anchorAnalysis = await CommandFileAnalysis
+            .LoadAsync(onDiskFiles[0], cancellationToken, workspacePath: null, workspaceHandle: null)
+            .ConfigureAwait(false);
+        if (anchorAnalysis.Document?.Project.Solution is null ||
+            !string.Equals(anchorAnalysis.WorkspaceContext.mode, "workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            return ResolvedSnapshotWorkspace.Failed(
+                anchorAnalysis.WorkspaceContext.fallback_reason ??
+                $"Workspace context could not be resolved for '{onDiskFiles[0]}'.");
+        }
+
+        Solution anchorSolution = anchorAnalysis.Document.Project.Solution;
+        IReadOnlyList<UnresolvedProjectInfo> anchorUnresolved = WorkspaceProjectResolution.InspectSolution(anchorSolution);
+        return new ResolvedSnapshotWorkspace(
+            Solution: anchorSolution,
+            UnresolvedProjects: anchorUnresolved,
+            WorkspaceDiagnostics: anchorAnalysis.WorkspaceContext.workspace_diagnostics,
+            ResolvedWorkspacePath: anchorAnalysis.WorkspaceContext.resolved_workspace_path,
+            WorkspaceKind: anchorAnalysis.WorkspaceContext.workspace_kind,
+            ResolutionSource: anchorAnalysis.WorkspaceContext.resolution_source,
+            CacheMode: anchorAnalysis.WorkspaceContext.workspace_cache_mode,
+            CacheHit: anchorAnalysis.WorkspaceContext.workspace_cache_hit,
+            WorkspaceHandle: anchorAnalysis.WorkspaceContext.workspace_handle,
+            AttemptedWorkspacePaths: anchorAnalysis.WorkspaceContext.attempted_workspace_paths,
+            FailureReason: null);
+    }
+
+    private static bool CanHotWorkspaceSatisfyRequest(
+        StaticAnalysisWorkspace hotWorkspace,
+        string? effectiveWorkspacePath,
+        string? effectiveDirectoryPath,
+        HashSet<string> explicitFileSet,
+        bool recursive)
+    {
+        if (hotWorkspace.Solution is null)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(effectiveWorkspacePath) &&
+            File.Exists(effectiveWorkspacePath) &&
+            StaticAnalysisWorkspace.IsMsBuildWorkspaceFile(effectiveWorkspacePath))
+        {
+            string ext = Path.GetExtension(effectiveWorkspacePath);
+            if (string.Equals(ext, ".sln", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(ext, ".slnx", StringComparison.OrdinalIgnoreCase))
+            {
+                return PathComparer.Equals(Path.GetFullPath(effectiveWorkspacePath), Path.GetFullPath(hotWorkspace.ResolvedWorkspacePath));
+            }
+
+            return hotWorkspace.Solution.Projects.Any(project =>
+                !string.IsNullOrWhiteSpace(project.FilePath) &&
+                PathComparer.Equals(Path.GetFullPath(project.FilePath), effectiveWorkspacePath));
+        }
+
+        if (!string.IsNullOrWhiteSpace(effectiveDirectoryPath))
+        {
+            // If the hot workspace is only a single project, don't let it shadow a multi-project parent directory.
+            if (string.Equals(hotWorkspace.WorkspaceKind, "project", StringComparison.OrdinalIgnoreCase))
+            {
+                string hotRoot = NormalizeDirectoryPath(hotWorkspace.RootDirectory);
+                if (!IsPathUnderDirectory(effectiveDirectoryPath, hotRoot, recursive: true))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                string hotRoot = NormalizeDirectoryPath(hotWorkspace.RootDirectory);
+                if (!IsPathUnderDirectory(effectiveDirectoryPath, hotRoot, recursive: true))
+                {
+                    return false;
+                }
+            }
+
+            return SelectTargetProjects(hotWorkspace.Solution, effectiveWorkspacePath: null, effectiveDirectoryPath, explicitFileSet, recursive).Count > 0;
+        }
+
+        if (explicitFileSet.Count > 0)
+        {
+            return SelectTargetProjects(hotWorkspace.Solution, effectiveWorkspacePath: null, effectiveDirectoryPath: null, explicitFileSet, recursive).Count > 0;
+        }
+
+        return true;
+    }
+
+    private static ResolvedSnapshotWorkspace FromStaticAnalysisWorkspace(
+        StaticAnalysisWorkspace workspace,
+        string resolutionSource,
+        IReadOnlyList<string> attemptedPaths)
+    {
+        return new ResolvedSnapshotWorkspace(
+            Solution: workspace.Solution,
+            UnresolvedProjects: workspace.UnresolvedProjects,
+            WorkspaceDiagnostics: workspace.WorkspaceDiagnostics,
+            ResolvedWorkspacePath: workspace.ResolvedWorkspacePath,
+            WorkspaceKind: workspace.WorkspaceKind,
+            ResolutionSource: resolutionSource,
+            CacheMode: "none",
+            CacheHit: false,
+            WorkspaceHandle: null,
+            AttemptedWorkspacePaths: attemptedPaths.ToArray(),
+            FailureReason: null);
+    }
+
+    private static Solution ApplyFileOverrides(Solution solution, IReadOnlyDictionary<string, string> overrides)
+    {
+        if (overrides.Count == 0)
+        {
+            return solution;
+        }
+
+        Solution current = solution;
+        foreach (KeyValuePair<string, string> entry in overrides)
+        {
+            SourceText text = SourceText.From(entry.Value);
+            bool updatedAny = false;
+            foreach (Project project in current.Projects.ToArray())
+            {
+                foreach (Document document in project.Documents)
+                {
+                    if (!string.IsNullOrWhiteSpace(document.FilePath) &&
+                        PathComparer.Equals(Path.GetFullPath(document.FilePath), entry.Key))
+                    {
+                        current = current.WithDocumentText(document.Id, text);
+                        updatedAny = true;
+                    }
+                }
+            }
+
+            if (!updatedAny)
+            {
+                IReadOnlyList<Project> containingProjects = StaticAnalysisWorkspace.FindContainingProjectsForNewSourceFile(current, entry.Key);
+                foreach (Project project in containingProjects)
+                {
+                    Project? liveProject = current.GetProject(project.Id);
+                    if (liveProject is null)
+                    {
+                        continue;
+                    }
+
+                    Document added = liveProject.AddDocument(Path.GetFileName(entry.Key), text, filePath: entry.Key);
+                    current = added.Project.Solution;
+                }
+            }
+        }
+
+        return current;
+    }
+
+    private static List<ProjectSelection> SelectTargetProjects(
+        Solution solution,
+        string? effectiveWorkspacePath,
+        string? effectiveDirectoryPath,
+        HashSet<string> explicitFileSet,
+        bool recursive)
+    {
+        Project[] allProjects = solution.Projects
+            .OrderBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        // Explicit single project file (.csproj / .vbproj): analyze only that project.
+        if (!string.IsNullOrWhiteSpace(effectiveWorkspacePath) &&
+            File.Exists(effectiveWorkspacePath) &&
+            (effectiveWorkspacePath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
+             effectiveWorkspacePath.EndsWith(".vbproj", StringComparison.OrdinalIgnoreCase)))
+        {
+            string targetProjectPath = Path.GetFullPath(effectiveWorkspacePath);
+            bool wholeProject = explicitFileSet.Count == 0;
+            return allProjects
+                .Where(project => !string.IsNullOrWhiteSpace(project.FilePath) &&
+                                  PathComparer.Equals(Path.GetFullPath(project.FilePath), targetProjectPath))
+                .Select(project => new ProjectSelection(project, wholeProject))
+                .ToList();
+        }
+
+        // Directory scope: cover every project under the directory (or owning files in a subdirectory of a project).
+        if (!string.IsNullOrWhiteSpace(effectiveDirectoryPath))
+        {
+            List<ProjectSelection> selections = new();
+            HashSet<ProjectId> selectedIds = new();
+
+            foreach (Project project in allProjects)
+            {
+                if (string.IsNullOrWhiteSpace(project.FilePath))
+                {
+                    continue;
+                }
+
+                string? projectDir = Path.GetDirectoryName(Path.GetFullPath(project.FilePath));
+                if (!string.IsNullOrWhiteSpace(projectDir) &&
+                    IsPathUnderDirectory(NormalizeDirectoryPath(projectDir), effectiveDirectoryPath, recursive))
+                {
+                    // If explicit files were also supplied, narrow diagnostics to those files + directory.
+                    bool wholeProject = explicitFileSet.Count == 0 && recursive;
+                    selections.Add(new ProjectSelection(project, wholeProject));
+                    selectedIds.Add(project.Id);
+                }
+            }
+
+            // Handle subdirectories inside a project (e.g., src/MyProject/Subfolder) or explicit files in other projects.
+            foreach (Project project in allProjects)
+            {
+                if (selectedIds.Contains(project.Id))
+                {
+                    continue;
+                }
+
+                bool hasDocumentInScope = project.Documents.Any(document =>
+                {
+                    if (string.IsNullOrWhiteSpace(document.FilePath))
+                    {
+                        return false;
+                    }
+
+                    string docFullPath = Path.GetFullPath(document.FilePath);
+                    if (explicitFileSet.Contains(docFullPath))
+                    {
+                        return true;
+                    }
+
+                    string? docDir = Path.GetDirectoryName(docFullPath);
+                    return !string.IsNullOrWhiteSpace(docDir) &&
+                           IsPathUnderDirectory(NormalizeDirectoryPath(docDir), effectiveDirectoryPath, recursive);
+                });
+
+                if (hasDocumentInScope)
+                {
+                    selections.Add(new ProjectSelection(project, WholeProject: false));
+                    selectedIds.Add(project.Id);
+                }
+            }
+
+            return selections;
+        }
+
+        // Explicit file list / overrides without directory_path.
+        if (explicitFileSet.Count > 0)
+        {
+            List<ProjectSelection> selections = new();
+            foreach (Project project in allProjects)
+            {
+                bool ownsAny = project.Documents.Any(document =>
+                    !string.IsNullOrWhiteSpace(document.FilePath) &&
+                    explicitFileSet.Contains(Path.GetFullPath(document.FilePath)));
+                if (ownsAny)
+                {
+                    selections.Add(new ProjectSelection(project, WholeProject: false));
+                }
+            }
+
+            return selections;
+        }
+
+        // Solution file or bare workspace_handle: cover every project in the solution.
+        return allProjects
+            .Select(project => new ProjectSelection(project, WholeProject: true))
+            .ToList();
+    }
+
+    private static HashSet<string> CollectProjectTargetFiles(
+        Project project,
+        bool wholeProject,
+        string? effectiveDirectoryPath,
+        HashSet<string> explicitFileSet,
+        bool recursive,
+        bool includeGenerated,
+        ref int skippedGeneratedFiles)
+    {
+        HashSet<string> targetFiles = new(PathComparer);
+        foreach (Document document in project.Documents)
+        {
+            if (string.IsNullOrWhiteSpace(document.FilePath))
+            {
+                continue;
+            }
+
+            string fullPath = Path.GetFullPath(document.FilePath);
+            if (!CommandLanguageServices.IsSupportedSourceFile(fullPath))
+            {
+                continue;
+            }
+
+            if (!includeGenerated && IsGeneratedPath(fullPath))
+            {
+                skippedGeneratedFiles++;
+                continue;
+            }
+
+            if (wholeProject)
+            {
+                targetFiles.Add(fullPath);
+                continue;
+            }
+
+            bool inExplicit = explicitFileSet.Contains(fullPath);
+            bool inDirectory = false;
+            if (!string.IsNullOrWhiteSpace(effectiveDirectoryPath))
+            {
+                string? docDir = Path.GetDirectoryName(fullPath);
+                inDirectory = !string.IsNullOrWhiteSpace(docDir) &&
+                    IsPathUnderDirectory(NormalizeDirectoryPath(docDir), effectiveDirectoryPath, recursive);
+            }
+
+            if (inExplicit || inDirectory)
+            {
+                targetFiles.Add(fullPath);
+            }
+        }
+
+        return targetFiles;
+    }
+
+    private static bool IsDiagnosticInProjectScope(
+        Diagnostic diagnostic,
+        bool wholeProject,
+        bool includeProjectLevelDiagnostics,
+        bool includeGenerated,
+        HashSet<string> projectTargetFiles)
     {
         if (diagnostic.Location == Location.None || !diagnostic.Location.IsInSource)
         {
-            return false;
+            return includeProjectLevelDiagnostics;
         }
 
         FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
@@ -511,11 +1222,178 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
 
         if (string.IsNullOrWhiteSpace(candidatePath))
         {
+            return includeProjectLevelDiagnostics;
+        }
+
+        string fullPath = Path.GetFullPath(candidatePath);
+        if (!includeGenerated && IsGeneratedPath(fullPath))
+        {
             return false;
         }
 
-        return fileSet.Contains(Path.GetFullPath(candidatePath));
+        if (wholeProject)
+        {
+            return true;
+        }
+
+        return projectTargetFiles.Contains(fullPath);
     }
+
+    private static string[] EnumerateSolutionFiles(string directoryPath)
+    {
+        return Directory.EnumerateFiles(directoryPath, "*.sln", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.EnumerateFiles(directoryPath, "*.slnx", SearchOption.TopDirectoryOnly))
+            .Select(Path.GetFullPath)
+            .Distinct(PathComparer)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string[] EnumerateProjectFiles(string directoryPath, SearchOption searchOption)
+    {
+        return Directory.EnumerateFiles(directoryPath, "*.csproj", searchOption)
+            .Concat(Directory.EnumerateFiles(directoryPath, "*.vbproj", searchOption))
+            .Select(Path.GetFullPath)
+            .Where(path => !IsIgnoredBuildDirectoryPath(path))
+            .Distinct(PathComparer)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? FindAncestorSolution(string startDirectory)
+    {
+        DirectoryInfo? current = new(startDirectory);
+        for (int depth = 0; depth < 8 && current is not null; depth++)
+        {
+            string[] solutions = EnumerateSolutionFiles(current.FullName);
+            if (solutions.Length > 0)
+            {
+                return solutions[0];
+            }
+
+            if (Directory.Exists(Path.Combine(current.FullName, ".git")) ||
+                File.Exists(Path.Combine(current.FullName, ".git")))
+            {
+                break;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
+
+    private static string? FindAncestorProject(string startDirectory)
+    {
+        DirectoryInfo? current = new(startDirectory);
+        for (int depth = 0; depth < 8 && current is not null; depth++)
+        {
+            string[] projects = EnumerateProjectFiles(current.FullName, SearchOption.TopDirectoryOnly);
+            if (projects.Length > 0)
+            {
+                return projects[0];
+            }
+
+            if (Directory.Exists(Path.Combine(current.FullName, ".git")) ||
+                File.Exists(Path.Combine(current.FullName, ".git")))
+            {
+                break;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
+
+    private static bool IsPathUnderDirectory(string candidateDirectory, string rootDirectory, bool recursive)
+    {
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(candidateDirectory, rootDirectory, comparison))
+        {
+            return true;
+        }
+
+        if (!recursive)
+        {
+            return false;
+        }
+
+        string prefix = rootDirectory.EndsWith(Path.DirectorySeparatorChar)
+            ? rootDirectory
+            : rootDirectory + Path.DirectorySeparatorChar;
+        return candidateDirectory.StartsWith(prefix, comparison);
+    }
+
+    private static string NormalizeDirectoryPath(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string root = Path.GetPathRoot(fullPath) ?? string.Empty;
+        if (fullPath.Length > root.Length)
+        {
+            fullPath = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        return fullPath;
+    }
+
+    private static bool IsIgnoredBuildDirectoryPath(string filePath)
+    {
+        string[] segments = filePath.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
+        return segments.Any(segment =>
+            string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(segment, ".vs", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(segment, ".git", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(segment, "node_modules", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? GetOptionalStringProperty(JsonElement input, string propertyName)
+    {
+        if (input.TryGetProperty(propertyName, out JsonElement property) &&
+            property.ValueKind == JsonValueKind.String)
+        {
+            string? value = property.GetString();
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        return null;
+    }
+
+    private sealed record ProjectSelection(Project Project, bool WholeProject);
+
+    private sealed record ResolvedSnapshotWorkspace(
+        Solution? Solution,
+        IReadOnlyList<UnresolvedProjectInfo> UnresolvedProjects,
+        IReadOnlyList<string> WorkspaceDiagnostics,
+        string? ResolvedWorkspacePath,
+        string? WorkspaceKind,
+        string ResolutionSource,
+        string CacheMode,
+        bool CacheHit,
+        string? WorkspaceHandle,
+        IReadOnlyList<string> AttemptedWorkspacePaths,
+        string? FailureReason)
+    {
+        public static ResolvedSnapshotWorkspace Failed(string reason)
+            => new(null, Array.Empty<UnresolvedProjectInfo>(), Array.Empty<string>(), null, null, "failed", "none", false, null, Array.Empty<string>(), reason);
+    }
+
+    private sealed record SnapshotProjectResult(
+        string project_name,
+        string? project_path,
+        bool project_resolved,
+        IReadOnlyList<string> project_resolution_issues,
+        int analyzed_files,
+        int total,
+        int errors,
+        int warnings,
+        int info,
+        int hidden,
+        IReadOnlyList<string> top_diagnostic_ids);
+
     private sealed record SnapshotFileResult(
         string file_path,
         int total,
@@ -552,10 +1430,10 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
     {
         if (!input.TryGetProperty("file_overrides", out JsonElement overridesProperty))
         {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            return new Dictionary<string, string>(PathComparer);
         }
 
-        Dictionary<string, string> overrides = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> overrides = new(PathComparer);
         if (overridesProperty.ValueKind != JsonValueKind.Array)
         {
             errors?.Add(new CommandError("invalid_input", "Property 'file_overrides' must be an array."));
@@ -746,12 +1624,7 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
             return true;
         }
 
-        string[] segments = filePath.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
-        return segments.Any(segment =>
-            string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(segment, ".vs", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(segment, "node_modules", StringComparison.OrdinalIgnoreCase));
+        return IsIgnoredBuildDirectoryPath(filePath);
     }
 
     private static GuidanceSuggestion[] BuildGuidance(
@@ -830,4 +1703,3 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
         return suggestions.ToArray();
     }
 }
-

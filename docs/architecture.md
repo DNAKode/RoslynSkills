@@ -1,6 +1,6 @@
 # RoslynSkills Architecture
 
-Date: 2026-11-21
+Date: 2026-11-22
 Status: Reflects current implementation (supersedes the Feb 2026 planning docs archived in `docs/archive/`).
 
 ## Overview
@@ -13,7 +13,7 @@ RoslynSkills provides Roslyn-native CLI (`roscli`) and MCP tooling for coding ag
 Roslyn workspace management, command implementations, and the command registry.
 
 - **Workspace binding & resolution**: `WorkspaceSemanticLoader` and `StaticAnalysisWorkspace` handle solution/project discovery, `MSBuildLocator` registration (preferring the latest installed .NET SDK MSBuild), auto-restore (`WorkspaceAutoRestore`), and project resolution checks (`WorkspaceProjectResolution`).
-- **Commands**: 64 commands across families (`nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, `daemon.*`, plus `agent-begin`/`csharp-start`/`text.measure`).
+- **Commands**: 65 commands across families (`nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, `daemon.*`, plus `agent-begin`/`csharp-start`/`text.measure`).
 - **Registry**: `DefaultRegistryFactory` wires commands with descriptors (including `RunsOnHotWorkspace`, maturity tags, and traits).
 
 ### `src/RoslynSkills.Cli`
@@ -35,7 +35,7 @@ Daemon for hot-workspace reuse over named pipes (Windows) or Unix domain sockets
 
 - **Command coverage**: `workspace.use` / `workspace.preload` loads a solution once and binds an alias (default: `default`). Every command whose descriptor sets `RunsOnHotWorkspace` — all `nav.*` and `analyze.*` commands, all read-only `ctx.*`/`diag.*`/`repair.propose_*` semantic commands, and exact/semantic `edit.*` commands — runs directly against the in-memory solution without re-running MSBuild.
 - **Freshness before each routed call**: Before executing a routed command, `HotWorkspaceFreshness` checks disk timestamps and applies `refresh_policy` (`auto` default incrementally updates modified source documents in the in-memory Roslyn solution; `strict` also reloads on structural/project changes; `none` skips refresh). Structured hot edits (`edit.rename_symbol`, `edit.change_signature`) refresh modified files in the host immediately after writing.
-- **Solution-wide semantic searches**: Usage and hierarchy queries (`nav.find_references`, `nav.find_implementations`, `nav.find_overrides`, `nav.find_invocations`, `nav.call_hierarchy`, `nav.call_path`, `analyze.impact_slice`) span every project in the loaded solution. Call-site searches (`nav.find_invocations`, `nav.call_hierarchy`, `nav.call_path`) include method groups converted to delegates and `new`/constructor sites (including implicit `new()` object creation).
+- **Solution-wide semantic searches**: Navigation and hierarchy queries (`nav.go_to_definition`, `nav.find_references`, `nav.find_implementations`, `nav.find_overrides`, `nav.find_invocations`, `nav.call_hierarchy`, `nav.call_path`, `analyze.impact_slice`) span every project in the loaded solution. Type reference and invocation queries include explicit and target-typed `new(...)` object creations and primary constructors; call hierarchy follows lambdas (attributing calls to the enclosing member) and method-group initializers; `nav.find_implementations`/`nav.find_overrides` return declaration identifier coordinates; `diag.get_workspace_snapshot` covers every project under a directory or solution (per project, summed).
 
 ### `src/XmlSkills.*`
 In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monorepo.
@@ -44,10 +44,10 @@ In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monor
 
 | Family | Purpose | Maturity |
 |---|---|---|
-| `nav.*` | Solution-wide symbol, references, implementations, overrides, invocations, call hierarchy/path | 50 stable |
+| `nav.*` | Solution-wide go-to-definition, symbol, references, implementations, overrides, invocations, call hierarchy/path | 51 stable |
 | `ctx.*` | File outline, member source, text search, changed files, symbol envelope | + 11 advanced |
 | `edit.*` | Semantic renames/signature changes, batch-exact edits, replace-in-member, insert/claim/create | + 3 experimental |
-| `diag.*` | File/solution/workspace diagnostics snapshots and diffs | = 64 total |
+| `diag.*` | File, multi-project workspace/directory, and solution diagnostics snapshots and diffs | = 65 total |
 | `analyze.*` | Control flow, dataflow, impact slice, async risk, dependency violations, unused symbols | |
 | `repair.*` | Diagnostics-driven repair planning and application | |
 | `session.*` | Non-destructive .cs/.csx edit loop with diff/commit | |

@@ -354,7 +354,10 @@ public sealed class CallPathCommand : IAgentCommand
                     continue;
                 }
 
-                if (!includeExternal && (!IsInSource(callSite.caller) || !IsInSource(callSite.callee)))
+                ISymbol caller = NormalizeGraphSymbol(callSite.caller);
+                IMethodSymbol callee = (IMethodSymbol)NormalizeGraphSymbol(callSite.callee);
+
+                if (!includeExternal && (!IsInSource(caller) || !IsInSource(callee)))
                 {
                     continue;
                 }
@@ -363,8 +366,8 @@ public sealed class CallPathCommand : IAgentCommand
                     nodesById,
                     outgoingEdgesByNodeId,
                     edgeKeys,
-                    callSite.caller,
-                    callSite.callee,
+                    caller,
+                    callee,
                     callKind: callSite.call_kind,
                     callSite.node.Span,
                     sourceText,
@@ -380,6 +383,16 @@ public sealed class CallPathCommand : IAgentCommand
             scannedSyntaxTreeCount,
             edgeKeys.Count,
             truncatedByEdgeLimit);
+    }
+
+    private static ISymbol NormalizeGraphSymbol(ISymbol symbol)
+    {
+        if (symbol is IMethodSymbol method)
+        {
+            return (method.ReducedFrom ?? method).OriginalDefinition;
+        }
+
+        return symbol.OriginalDefinition;
     }
 
     private static PathSearchResult FindShortestPath(
@@ -494,7 +507,7 @@ public sealed class CallPathCommand : IAgentCommand
         Dictionary<string, CallPathNode> nodesById,
         Dictionary<string, List<CallPathEdge>> outgoingEdgesByNodeId,
         HashSet<string> edgeKeys,
-        IMethodSymbol caller,
+        ISymbol caller,
         IMethodSymbol callee,
         string callKind,
         TextSpan callSpan,
@@ -544,16 +557,20 @@ public sealed class CallPathCommand : IAgentCommand
         list.Add(edge);
     }
 
-    private static CallPathNode GetOrAddNode(Dictionary<string, CallPathNode> nodesById, IMethodSymbol methodSymbol)
+    private static CallPathNode GetOrAddNode(Dictionary<string, CallPathNode> nodesById, ISymbol symbol)
     {
-        string symbolId = CommandTextFormatting.GetStableSymbolId(methodSymbol)
-            ?? methodSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        string symbolId = SymbolResolution.GetUniqueGraphSymbolId(symbol);
         if (nodesById.TryGetValue(symbolId, out CallPathNode? existing))
         {
             return existing;
         }
 
-        Location? sourceLocation = methodSymbol.Locations.FirstOrDefault(location => location.IsInSource);
+        Location? sourceLocation = SymbolResolution.GetDeclarationIdentifierLocation(symbol);
+        if (sourceLocation is not { IsInSource: true })
+        {
+            sourceLocation = null;
+        }
+
         string? filePath = sourceLocation?.SourceTree?.FilePath;
         int? line = null;
         int? column = null;
@@ -566,11 +583,11 @@ public sealed class CallPathCommand : IAgentCommand
 
         CallPathNode created = new(
             symbol_id: symbolId,
-            symbol_display: methodSymbol.ToDisplayString(),
-            symbol_kind: methodSymbol.Kind.ToString(),
-            method_kind: methodSymbol.MethodKind.ToString(),
-            containing_type: methodSymbol.ContainingType?.ToDisplayString(),
-            is_external: !IsInSource(methodSymbol),
+            symbol_display: symbol.ToDisplayString(),
+            symbol_kind: symbol.Kind.ToString(),
+            method_kind: (symbol as IMethodSymbol)?.MethodKind.ToString(),
+            containing_type: symbol.ContainingType?.ToDisplayString(),
+            is_external: !IsInSource(symbol),
             file_path: string.IsNullOrWhiteSpace(filePath) ? null : Path.GetFullPath(filePath),
             line: line,
             column: column);
@@ -600,8 +617,8 @@ public sealed class CallPathCommand : IAgentCommand
             this.truncatedByEdgeLimit = truncatedByEdgeLimit;
         }
 
-        public CallPathNode GetOrAddNode(IMethodSymbol methodSymbol)
-            => CallPathCommand.GetOrAddNode(nodesById, methodSymbol);
+        public CallPathNode GetOrAddNode(ISymbol symbol)
+            => CallPathCommand.GetOrAddNode(nodesById, symbol);
 
         public void TryUpdateNodeSourceLocation(string nodeId, string filePath, int line, int column)
         {
@@ -635,7 +652,7 @@ public sealed class CallPathCommand : IAgentCommand
         string symbol_id,
         string symbol_display,
         string symbol_kind,
-        string method_kind,
+        string? method_kind,
         string? containing_type,
         bool is_external,
         string? file_path,

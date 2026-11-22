@@ -2,13 +2,13 @@
 
 RoslynSkills (`DNAKode/RoslynSkills`) is an engineering-first research program evaluating whether Roslyn-native tooling materially improves agentic coding for C#/.NET versus text-first workflows.
 
-## Current State (2026-11-21)
+## Current State (2026-11-22)
 
 ### What's implemented
 
-- **`roscli`**: 64 commands across `nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, and `daemon.*` families (50 stable, 11 advanced, 3 experimental). Built on `net10.0` with Roslyn `5.12.0`, MSBuild `18.12.2`, and `Microsoft.Build.Locator` `1.11.2` (supports both .NET 10 and .NET 11 SDK workspaces and source generators).
+- **`roscli`**: 65 commands across `nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, and `daemon.*` families (51 stable, 11 advanced, 3 experimental). Built on `net10.0` with Roslyn `5.12.0`, MSBuild `18.12.2`, and `Microsoft.Build.Locator` `1.11.2` (supports both .NET 10 and .NET 11 SDK workspaces and source generators).
 - **Hot workspace daemon**: `workspace.use <solution.slnx>` starts the daemon, preloads the solution once, and binds the `default` alias. Every read-only semantic command (`nav.*`, `analyze.*`, read-only `ctx.*`/`diag.*`/`repair.propose_*`) plus exact/semantic `edit.*` commands run on the hot workspace (see `docs/architecture.md` for routing, freshness, and `ROSCLI_DAEMON=required` fail-closed behavior).
-- **Solution-wide semantic queries**: references, implementations, overrides, invocations, call hierarchy, call path, and impact slice span every project in the loaded solution; call-site searches include method groups converted to delegates and `new`/constructor sites.
+- **Solution-wide semantic queries**: `nav.go_to_definition` (source and metadata), references (including object creations for types), implementations (identifier coordinates), overrides, invocations (methods, constructors, primary constructors, types, method groups, explicit/target-typed `new`), call hierarchy (following lambdas and field/property method groups), call path, impact slice, and multi-project `diag.get_workspace_snapshot` (per project, summed) span every project in the loaded solution.
 - **Restore & unresolved-project reporting**: restore first in a fresh worktree (`dotnet restore`). `workspace.use`/`workspace.preload` auto-restores projects missing `project.assets.json` or metadata references by default (`ROSLYNSKILLS_AUTO_RESTORE`), reports every remaining unresolved project in `unresolved_projects` and `workspace_diagnostics`, and marks `workspace_context.project_resolved: false` on queries against unresolved projects.
 - **Edit & coordination primitives**: `edit.rename_symbol`, `edit.change_signature`, `edit.transaction`, `edit.batch_exact`, `edit.replace_in_member`, `edit.replace_text`, `edit.insert_text`, `edit.claim`, `edit.create_file`.
 - **Transport modes**: CLI process-per-call, published-DLL cache, hot workspace daemon, MCP server (stdio JSON-RPC), transport server.
@@ -34,7 +34,7 @@ RoslynSkills (`DNAKode/RoslynSkills`) is an engineering-first research program e
 ```powershell
 # Verify tooling
 roscli --version
-roscli list-commands --ids-only                    # 64 commands
+roscli list-commands --ids-only                    # 65 commands
 
 # Run tests
 dotnet test RoslynSkills.slnx -c Release

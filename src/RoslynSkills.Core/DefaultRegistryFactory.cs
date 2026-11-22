@@ -12,6 +12,7 @@ public static class DefaultRegistryFactory
             new PingCommand(),
             new FindSymbolCommand(),
             new FindSymbolBatchCommand(),
+            new GoToDefinitionCommand(),
             new FindReferencesCommand(),
             new FindInvocationsCommand(),
             new CallHierarchyCommand(),

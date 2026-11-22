@@ -78,11 +78,13 @@ internal static class SolutionSymbolRelations
             }
 
             SyntaxNode node = reference.GetSyntax();
-            Location location = node.GetLocation();
+            Location location = SymbolResolution.GetDeclarationIdentifierLocation(symbol, node) ?? node.GetLocation();
             Microsoft.CodeAnalysis.FileLinePositionSpan span = location.GetLineSpan();
-            string filePath = string.IsNullOrWhiteSpace(reference.SyntaxTree.FilePath)
-                ? "<unknown>"
-                : Path.GetFullPath(reference.SyntaxTree.FilePath);
+            string filePath = string.IsNullOrWhiteSpace(location.SourceTree?.FilePath)
+                ? (string.IsNullOrWhiteSpace(reference.SyntaxTree.FilePath)
+                    ? "<unknown>"
+                    : Path.GetFullPath(reference.SyntaxTree.FilePath))
+                : Path.GetFullPath(location.SourceTree.FilePath);
             found.Add(new RelatedDeclaration(
                 node.GetType().Name,
                 filePath,

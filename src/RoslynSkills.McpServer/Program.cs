@@ -692,14 +692,30 @@ internal static class Program
             return;
         }
 
+        if (string.Equals(commandId, "nav.go_to_definition", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
+            properties["brief"] = BoolProperty("Return compact definition locations without source snippets.");
+            properties["context_lines"] = IntProperty("Number of context lines around each source definition.", 0);
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("file_path");
+            required.Add("line");
+            required.Add("column");
+            return;
+        }
+
         if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
         {
             properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["line"] = IntProperty("1-based line number for method anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for method anchor.", 1);
+            properties["line"] = IntProperty("1-based line number for method, constructor, or type anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for method, constructor, or type anchor.", 1);
             properties["brief"] = BoolProperty("Return compact match payload.");
             properties["max_results"] = IntProperty("Maximum invocation matches to return.", 1);
-            properties["include_object_creations"] = BoolProperty("Include object creation calls for constructor targets.");
+            properties["include_object_creations"] = BoolProperty("Include object creation calls for constructor or type targets.");
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
@@ -1124,6 +1140,7 @@ internal static class Program
                 "roslyn://command/ctx.search_text?pattern=RemoteUserAction&roots=src&mode=literal&max_results=100",
                 "roslyn://command/ctx.file_outline?file_path=Target.vb&include_members=true&max_members=80",
                 "roslyn://command/ctx.member_source?file_path=Target.vb&line=22&column=17&mode=body&brief=true",
+                "roslyn://command/nav.go_to_definition?file_path=Target.cs&line=12&column=15&brief=true",
                 "roslyn://command/nav.find_invocations?file_path=Target.cs&line=12&column=15&brief=true",
                 "roslyn://command/nav.call_hierarchy?file_path=Target.cs&line=12&column=15&direction=both&max_depth=2&brief=true",
                 "roslyn://command/nav.call_path?source_file_path=Caller.cs&source_line=12&source_column=15&target_file_path=Target.cs&target_line=48&target_column=18&max_depth=8&brief=true",

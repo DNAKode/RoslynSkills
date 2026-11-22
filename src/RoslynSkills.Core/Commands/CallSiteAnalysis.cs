@@ -76,8 +76,7 @@ internal static class CallSiteAnalysis
                 continue;
             }
 
-            // Null in field/property initializers: still a use of the callee, but no method contains it.
-            IMethodSymbol? caller = semanticModel.GetEnclosingSymbol(node.SpanStart, cancellationToken) as IMethodSymbol;
+            (ISymbol? caller, bool viaLambda) = ResolveEnclosingCaller(semanticModel, node, cancellationToken);
 
             string calleeId = CommandTextFormatting.GetStableSymbolId(callee)
                 ?? callee.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
@@ -87,13 +86,30 @@ internal static class CallSiteAnalysis
                 continue;
             }
 
-            yield return new CallSite(caller, callee, callKind, node);
+            yield return new CallSite(caller, callee, callKind, node, viaLambda);
         }
     }
 
+    private static (ISymbol? Caller, bool ViaLambda) ResolveEnclosingCaller(
+        SemanticModel semanticModel,
+        SyntaxNode node,
+        CancellationToken cancellationToken)
+    {
+        ISymbol? enclosing = semanticModel.GetEnclosingSymbol(node.SpanStart, cancellationToken);
+        bool viaLambda = false;
+        while (enclosing is IMethodSymbol { MethodKind: MethodKind.AnonymousFunction } anonymous)
+        {
+            viaLambda = true;
+            enclosing = anonymous.ContainingSymbol;
+        }
+
+        return (enclosing, viaLambda);
+    }
+
     internal sealed record CallSite(
-        IMethodSymbol? caller,
+        ISymbol? caller,
         IMethodSymbol callee,
         string call_kind,
-        SyntaxNode node);
+        SyntaxNode node,
+        bool via_lambda = false);
 }

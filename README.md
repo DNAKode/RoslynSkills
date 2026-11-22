@@ -137,16 +137,16 @@ Use roscli for C#/.NET repo edits and diagnostics.
 
 Current catalog snapshot:
 
-- `roscli list-commands --ids-only` -> `64` commands
-- maturity counts: `stable=50`, `advanced=11`, `experimental=3`
+- `roscli list-commands --ids-only` -> `65` commands
+- maturity counts: `stable=51`, `advanced=11`, `experimental=3`
 - `roscli llmstxt` defaults to stable-only startup guidance (`--full` for complete catalog)
 
 Command families:
 
-- `nav.*`: solution-wide symbol, references, implementations, overrides, invocations (including method groups and `new` sites), and call-hierarchy/call-path navigation
+- `nav.*`: solution-wide go-to-definition (source & metadata), symbol, references, implementations, overrides, invocations (including method groups, primary constructors, and explicit/target-typed `new` sites), and call-hierarchy/call-path (through lambdas and method groups)
 - `ctx.*`: file/member/search/changed-files context retrieval
 - `analyze.*`: analysis slices (control flow, dataflow, impact slice) and risk scans
-- `diag.*`: diagnostics snapshots and diffs
+- `diag.*`: file, multi-project workspace/directory, and solution diagnostics snapshots and diffs
 - `edit.*`: structured semantic edits, batch exact edits, claim-based multi-agent coordination
 - `repair.*`: diagnostics-driven repair planning/application
 - `session.*`: non-destructive single-file edit loop (`.cs`/`.csx`)

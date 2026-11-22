@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Text;
 using RoslynSkills.Contracts;
@@ -152,6 +152,9 @@ public sealed class FindReferencesCommand : IAgentCommand
         CancellationToken cancellationToken)
     {
         List<ReferenceMatch> matches = new();
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        bool truncated = false;
+
         foreach (SyntaxToken token in analysis.Root.DescendantTokens(descendIntoTrivia: false))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -161,7 +164,7 @@ public sealed class FindReferencesCommand : IAgentCommand
             }
 
             ISymbol? symbol = SymbolResolution.GetSymbolForToken(token, analysis.SemanticModel, cancellationToken);
-            if (!IsSameSymbol(symbol, targetSymbol))
+            if (!SolutionSearchScope.MatchesReferenceDefinition(symbol, targetSymbol, out _))
             {
                 continue;
             }
@@ -175,13 +178,18 @@ public sealed class FindReferencesCommand : IAgentCommand
             LinePositionSpan span = analysis.SourceText.Lines.GetLinePositionSpan(token.Span);
             int tokenLine = span.Start.Line + 1;
             int tokenColumn = span.Start.Character + 1;
-            string snippet = CommandTextFormatting.BuildSnippet(analysis.SourceText, tokenLine, contextLines);
+            if (!seen.Add($"{tokenLine}|{tokenColumn}"))
+            {
+                continue;
+            }
 
             if (matches.Count >= maxResults)
             {
-                return (matches, true);
+                truncated = true;
+                break;
             }
 
+            string snippet = CommandTextFormatting.BuildSnippet(analysis.SourceText, tokenLine, contextLines);
             matches.Add(new ReferenceMatch(
                 file_path: analysis.FilePath,
                 line: tokenLine,
@@ -191,12 +199,68 @@ public sealed class FindReferencesCommand : IAgentCommand
                 snippet: snippet));
         }
 
-        return (matches, false);
+        // Also capture target-typed `new(...)` object creations which have no type identifier token.
+        if (!truncated &&
+            (targetSymbol is INamedTypeSymbol || targetSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor }))
+        {
+            foreach (CallSiteAnalysis.CallSite site in CallSiteAnalysis.EnumerateCallSites(
+                         analysis.SemanticModel,
+                         analysis.Root,
+                         includeObjectCreations: true,
+                         cancellationToken))
+            {
+                if (!string.Equals(site.call_kind, "object_creation", StringComparison.Ordinal) ||
+                    !SolutionSearchScope.MatchesInvocationCallee(site.callee, targetSymbol))
+                {
+                    continue;
+                }
+
+                // Explicit `new Foo(...)` is already matched via the identifier token `Foo`; only add implicit `new(...)` or unmatched spans.
+                if (site.node is Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax explicitCreation)
+                {
+                    LinePositionSpan typeSpan = analysis.SourceText.Lines.GetLinePositionSpan(explicitCreation.Type.Span);
+                    if (seen.Contains($"{typeSpan.Start.Line + 1}|{typeSpan.Start.Character + 1}"))
+                    {
+                        continue;
+                    }
+                }
+
+                LinePositionSpan span = analysis.SourceText.Lines.GetLinePositionSpan(site.node.Span);
+                int siteLine = span.Start.Line + 1;
+                int siteColumn = span.Start.Character + 1;
+                if (!seen.Add($"{siteLine}|{siteColumn}"))
+                {
+                    continue;
+                }
+
+                if (matches.Count >= maxResults)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                matches.Add(new ReferenceMatch(
+                    file_path: analysis.FilePath,
+                    line: siteLine,
+                    column: siteColumn,
+                    syntax_kind: CommandLanguageServices.GetSyntaxKindName(site.node),
+                    is_declaration: false,
+                    snippet: CommandTextFormatting.BuildSnippet(analysis.SourceText, siteLine, contextLines)));
+            }
+        }
+
+        matches = matches
+            .OrderBy(match => match.line)
+            .ThenBy(match => match.column)
+            .ToList();
+        return (matches, truncated);
     }
 
     /// <summary>
     /// Whole-solution search: Roslyn's symbol finder visits every document of every project that can see the symbol,
     /// so callers in sibling projects are found, not just the anchor file.
+    /// For a named type, includes its constructor reference groups so explicit <c>new Type(...)</c>,
+    /// target-typed <c>new(...)</c>, and primary-constructor creations are all reported.
     /// </summary>
     private static async Task<(List<ReferenceMatch> Matches, bool Truncated)> FindSolutionReferencesAsync(
         Solution solution,
@@ -211,14 +275,32 @@ public sealed class FindReferencesCommand : IAgentCommand
             .FindReferencesAsync(targetSymbol, solution, cancellationToken)
             .ConfigureAwait(false);
 
-        // Cascading also reports overrides, implementations and base members; keep the anchored symbol only.
-        ReferencedSymbol[] groups = referenced
-            .Where(group => IsSameSymbol(group.Definition, targetSymbol))
-            .ToArray();
+        // Cascading also reports overrides, implementations and base members; keep the anchored symbol and
+        // (for a named type) its constructors so object creations are included.
+        List<(ReferencedSymbol Group, bool IsConstructorOfTargetType)> groups = new();
+        foreach (ReferencedSymbol group in referenced)
+        {
+            if (SolutionSearchScope.MatchesReferenceDefinition(group.Definition, targetSymbol, out bool isCtorOfTargetType))
+            {
+                groups.Add((group, isCtorOfTargetType));
+            }
+        }
 
         List<(string FilePath, int Line, int Column, string Kind, bool IsDeclaration, string Snippet)> found = new();
         HashSet<string> seen = new(StringComparer.Ordinal);
         Dictionary<SyntaxTree, SourceText> texts = new();
+        Dictionary<SyntaxTree, SyntaxNode> roots = new();
+
+        async Task<SyntaxNode> GetRootAsync(SyntaxTree tree)
+        {
+            if (!roots.TryGetValue(tree, out SyntaxNode? root))
+            {
+                root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+                roots[tree] = root;
+            }
+
+            return root;
+        }
 
         async Task AddAsync(Location location, bool isDeclaration)
         {
@@ -248,7 +330,7 @@ public sealed class FindReferencesCommand : IAgentCommand
                 return;
             }
 
-            SyntaxNode root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+            SyntaxNode root = await GetRootAsync(tree).ConfigureAwait(false);
             SyntaxToken token = root.FindToken(location.SourceSpan.Start);
             found.Add((
                 filePath,
@@ -259,10 +341,10 @@ public sealed class FindReferencesCommand : IAgentCommand
                 CommandTextFormatting.BuildSnippet(text, line, contextLines)));
         }
 
-        foreach (ReferencedSymbol group in groups)
+        foreach ((ReferencedSymbol group, bool isConstructorOfTargetType) in groups)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (includeDeclaration)
+            if (includeDeclaration && !isConstructorOfTargetType)
             {
                 foreach (Location definitionLocation in group.Definition.Locations)
                 {
@@ -272,9 +354,27 @@ public sealed class FindReferencesCommand : IAgentCommand
 
             foreach (ReferenceLocation reference in group.Locations)
             {
-                if (reference.IsCandidateLocation || reference.IsImplicit)
+                if (reference.IsCandidateLocation)
                 {
                     continue;
+                }
+
+                if (reference.IsImplicit)
+                {
+                    // Target-typed `new(...)` may be flagged implicit by SymbolFinder even though `new(...)` is written in source.
+                    if (!reference.Location.IsInSource || reference.Location.SourceTree is null)
+                    {
+                        continue;
+                    }
+
+                    SyntaxNode root = await GetRootAsync(reference.Location.SourceTree).ConfigureAwait(false);
+                    SyntaxToken token = root.FindToken(reference.Location.SourceSpan.Start);
+                    bool isObjectCreation = token.Parent?.AncestorsAndSelf().Any(
+                        node => node is Microsoft.CodeAnalysis.CSharp.Syntax.BaseObjectCreationExpressionSyntax) == true;
+                    if (!isObjectCreation)
+                    {
+                        continue;
+                    }
                 }
 
                 await AddAsync(reference.Location, isDeclaration: false).ConfigureAwait(false);
@@ -289,21 +389,6 @@ public sealed class FindReferencesCommand : IAgentCommand
             .Select(match => new ReferenceMatch(match.FilePath, match.Line, match.Column, match.Kind, match.IsDeclaration, match.Snippet))
             .ToList();
         return (ordered, found.Count > maxResults);
-    }
-
-    private static bool IsSameSymbol(ISymbol? candidate, ISymbol target)
-    {
-        if (candidate is null)
-        {
-            return false;
-        }
-
-        if (SymbolEqualityComparer.Default.Equals(candidate, target))
-        {
-            return true;
-        }
-
-        return SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, target.OriginalDefinition);
     }
 
     private sealed record ReferenceMatch(
