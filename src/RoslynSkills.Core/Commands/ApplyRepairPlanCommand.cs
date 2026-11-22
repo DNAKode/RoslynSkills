@@ -16,6 +16,7 @@ public sealed class ApplyRepairPlanCommand : IAgentCommand
         ["edit.apply_code_fix"] = new ApplyCodeFixCommand(),
         ["edit.create_file"] = new CreateFileCommand(),
         ["edit.transaction"] = new EditTransactionCommand(),
+        ["edit.batch_exact"] = new BatchExactEditCommand(),
         ["diag.get_after_edit"] = new GetAfterEditDiagnosticsCommand(),
         ["diag.get_solution_snapshot"] = new GetSolutionSnapshotCommand(),
         ["diag.diff"] = new DiagnosticsDiffCommand(),

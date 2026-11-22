@@ -50,13 +50,17 @@ public sealed class EditClaimCommand : IAgentCommand
             return Task.FromResult(new CommandExecutionResult(null, errors));
         }
 
-        string repoRoot = ResolveRepoRoot(GetOptionalString(input, "repo_root"));
+        string[] rawPaths = InputParsing.GetOptionalStringArray(input, "paths");
+        string? firstRootedPath = rawPaths.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && Path.IsPathRooted(path));
+        string repoRoot = RepositoryRootDiscovery.ResolveEditClaimRepositoryRoot(
+            GetOptionalString(input, "repo_root"),
+            firstRootedPath);
         string owner = GetOptionalString(input, "owner") ?? Environment.UserName;
         string? reason = GetOptionalString(input, "reason");
         string? claimId = GetOptionalString(input, "claim_id");
         bool force = InputParsing.GetOptionalBool(input, "force", defaultValue: false);
         int ttlMinutes = InputParsing.GetOptionalInt(input, "ttl_minutes", defaultValue: 90, minValue: 1, maxValue: 1440);
-        string[] paths = InputParsing.GetOptionalStringArray(input, "paths")
+        string[] paths = rawPaths
             .Select(path => NormalizeClaimPath(repoRoot, path))
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -227,27 +231,6 @@ public sealed class EditClaimCommand : IAgentCommand
 
         string? value = property.GetString();
         return string.IsNullOrWhiteSpace(value) ? null : value;
-    }
-
-    private static string ResolveRepoRoot(string? explicitRepoRoot)
-    {
-        string start = string.IsNullOrWhiteSpace(explicitRepoRoot)
-            ? Directory.GetCurrentDirectory()
-            : Path.GetFullPath(explicitRepoRoot);
-        DirectoryInfo? current = new(start);
-        while (current is not null)
-        {
-            if (Directory.Exists(Path.Combine(current.FullName, ".git")) ||
-                File.Exists(Path.Combine(current.FullName, "RoslynSkills.slnx")) ||
-                Directory.EnumerateFiles(current.FullName, "*.sln*").Any())
-            {
-                return current.FullName;
-            }
-
-            current = current.Parent;
-        }
-
-        return start;
     }
 
     private static string NormalizeClaimPath(string repoRoot, string path)

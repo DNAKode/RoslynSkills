@@ -37,9 +37,10 @@ public sealed class ChangedFilesCommand : IAgentCommand
         }
 
         string gitRoot;
-        if (Directory.Exists(Path.Combine(fullRequestedRoot, ".git")) || File.Exists(Path.Combine(fullRequestedRoot, ".git")))
+        string? discoveredGitRoot = RepositoryRootDiscovery.TryFindGitRepositoryRoot(fullRequestedRoot);
+        if (discoveredGitRoot is not null)
         {
-            gitRoot = fullRequestedRoot;
+            gitRoot = discoveredGitRoot;
         }
         else
         {

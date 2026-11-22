@@ -147,7 +147,7 @@ Command families:
 - `ctx.*`: file/member/search/changed-files context retrieval
 - `analyze.*`: analysis slices (control flow, dataflow, impact slice) and risk scans
 - `diag.*`: file, multi-project workspace/directory, and solution diagnostics snapshots and diffs
-- `edit.*`: structured semantic edits, batch exact edits, claim-based multi-agent coordination
+- `edit.*`: structured semantic edits (`edit.rename_symbol`, `edit.change_signature`), atomic multi-file `edit.transaction` (`replace_text`, `insert_text`, `replace_span`, `set_content`; `edit.batch_exact` is its thin alias), member-scoped edits, and claim-based multi-agent coordination (worktree-aware)
 - `repair.*`: diagnostics-driven repair planning/application
 - `session.*`: non-destructive single-file edit loop (`.cs`/`.csx`)
 - `workspace.*` / `daemon.*`: hot-workspace bind (`workspace.use`), preload, status, refresh, and daemon lifecycle

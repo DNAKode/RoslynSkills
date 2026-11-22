@@ -1,6 +1,7 @@
 using RoslynSkills.Core.Commands;
 using RoslynSkills.Contracts;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 
 namespace RoslynSkills.Core.Tests;
@@ -1590,6 +1591,225 @@ public sealed class BreadthCommandTests
         {
             File.Delete(helperPath);
             File.Delete(consumerPath);
+        }
+    }
+
+    [Fact]
+    public async Task EditTransactionCommand_ReplaceTextAcrossFiles_NormalizesLineEndingsAndPreservesBom()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-tx-replace-text-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        string lfPath = Path.Combine(tempDir, "Helper.cs");
+        string crlfBomPath = Path.Combine(tempDir, "Consumer.cs");
+        UTF8Encoding utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+        UTF8Encoding utf8WithBom = new(encoderShouldEmitUTF8Identifier: true);
+
+        try
+        {
+            await File.WriteAllBytesAsync(
+                lfPath,
+                utf8NoBom.GetBytes("public static class Helper\n{\n    public static int Value() => 1;\n}\n"));
+            byte[] bom = utf8WithBom.GetPreamble();
+            byte[] body = utf8WithBom.GetBytes("public static class Consumer\r\n{\r\n    public static int Read() => Helper.Value();\r\n}\r\n");
+            byte[] crlfBytes = new byte[bom.Length + body.Length];
+            Buffer.BlockCopy(bom, 0, crlfBytes, 0, bom.Length);
+            Buffer.BlockCopy(body, 0, crlfBytes, bom.Length, body.Length);
+            await File.WriteAllBytesAsync(crlfBomPath, crlfBytes);
+
+            EditTransactionCommand command = new();
+            JsonElement input = ToJsonElement(new
+            {
+                apply = true,
+                operations = new object[]
+                {
+                    new
+                    {
+                        operation = "replace_text",
+                        file_path = lfPath,
+                        old_text = "    public static int Value() => 1;\r\n}",
+                        new_text = "    public static int CurrentValue()\r\n    {\r\n        return 1;\r\n    }\r\n}",
+                    },
+                    new
+                    {
+                        operation = "replace_text",
+                        file_path = crlfBomPath,
+                        old_text = "    public static int Read() => Helper.Value();\n}",
+                        new_text = "    public static int Read()\n    {\n        return Helper.CurrentValue();\n    }\n}",
+                    },
+                },
+            });
+
+            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+
+            byte[] lfUpdatedBytes = await File.ReadAllBytesAsync(lfPath);
+            Assert.False(lfUpdatedBytes.Length >= 3 && lfUpdatedBytes[0] == 0xEF && lfUpdatedBytes[1] == 0xBB && lfUpdatedBytes[2] == 0xBF);
+            string lfUpdated = utf8NoBom.GetString(lfUpdatedBytes);
+            Assert.Contains("CurrentValue()\n    {\n        return 1;\n    }\n}", lfUpdated);
+            Assert.DoesNotContain("\r\n", lfUpdated);
+
+            byte[] crlfUpdatedBytes = await File.ReadAllBytesAsync(crlfBomPath);
+            Assert.True(crlfUpdatedBytes.Length >= 3 && crlfUpdatedBytes[0] == 0xEF && crlfUpdatedBytes[1] == 0xBB && crlfUpdatedBytes[2] == 0xBF);
+            string crlfUpdated = utf8WithBom.GetString(crlfUpdatedBytes, 3, crlfUpdatedBytes.Length - 3);
+            Assert.Contains("return Helper.CurrentValue();\r\n    }\r\n}", crlfUpdated);
+            Assert.DoesNotContain("\n", crlfUpdated.Replace("\r\n", string.Empty, StringComparison.Ordinal));
+
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"succeeded_operations\":2", json);
+            Assert.Contains("\"wrote_file_count\":2", json);
+            Assert.Contains("\"errors\":0", json);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EditTransactionCommand_ReplaceTextAmbiguousOrMissing_AbortsAtomicallyWithoutWrites()
+    {
+        string firstPath = WriteTempFile(
+            """
+            public static class First
+            {
+                public static int A() => 1;
+            }
+            """);
+        string secondPath = WriteTempFile(
+            """
+            public static class Second
+            {
+                public static int X() => 1;
+                public static int Y() => 1;
+            }
+            """);
+
+        try
+        {
+            EditTransactionCommand command = new();
+            JsonElement ambiguousInput = ToJsonElement(new
+            {
+                apply = true,
+                atomic = true,
+                operations = new object[]
+                {
+                    new
+                    {
+                        operation = "replace_text",
+                        file_path = firstPath,
+                        old_text = "=> 1;",
+                        new_text = "=> 42;",
+                    },
+                    new
+                    {
+                        operation = "replace_text",
+                        file_path = secondPath,
+                        old_text = "=> 1;",
+                        new_text = "=> 99;",
+                    },
+                },
+            });
+
+            CommandExecutionResult ambiguousResult = await command.ExecuteAsync(ambiguousInput, CancellationToken.None);
+            Assert.False(ambiguousResult.Ok);
+            Assert.Contains(ambiguousResult.Errors, e => e.Code == "old_text_ambiguous");
+            Assert.Contains("=> 1;", await File.ReadAllTextAsync(firstPath));
+            Assert.DoesNotContain("=> 42;", await File.ReadAllTextAsync(firstPath));
+
+            string ambiguousJson = JsonSerializer.Serialize(ambiguousResult.Data);
+            Assert.Contains("\"skipped_apply_due_to_errors\":true", ambiguousJson);
+            Assert.Contains("recovery_hint", ambiguousJson);
+
+            // Now with replace_all=true on the second file, both operations succeed atomically.
+            JsonElement replaceAllInput = ToJsonElement(new
+            {
+                apply = true,
+                atomic = true,
+                operations = new object[]
+                {
+                    new
+                    {
+                        operation = "replace_text",
+                        file_path = firstPath,
+                        old_text = "=> 1;",
+                        new_text = "=> 42;",
+                    },
+                    new
+                    {
+                        operation = "replace_text",
+                        file_path = secondPath,
+                        old_text = "=> 1;",
+                        new_text = "=> 99;",
+                        replace_all = true,
+                    },
+                },
+            });
+
+            CommandExecutionResult replaceAllResult = await command.ExecuteAsync(replaceAllInput, CancellationToken.None);
+            Assert.True(replaceAllResult.Ok);
+            Assert.Contains("=> 42;", await File.ReadAllTextAsync(firstPath));
+            string secondUpdated = await File.ReadAllTextAsync(secondPath);
+            Assert.DoesNotContain("=> 1;", secondUpdated);
+            Assert.Contains("X() => 99;", secondUpdated);
+            Assert.Contains("Y() => 99;", secondUpdated);
+        }
+        finally
+        {
+            File.Delete(firstPath);
+            File.Delete(secondPath);
+        }
+    }
+
+    [Fact]
+    public async Task BatchExactEditCommand_IsThinAliasOfEditTransactionCommand()
+    {
+        string filePath = WriteTempFile(
+            """
+            public static class Demo
+            {
+                public static int A() => 1;
+            }
+            """);
+
+        try
+        {
+            BatchExactEditCommand alias = new();
+            Assert.Contains("edit.transaction", alias.Descriptor.Summary, StringComparison.OrdinalIgnoreCase);
+
+            // set_content (previously edit.transaction-only) works via edit.batch_exact alias too.
+            JsonElement input = ToJsonElement(new
+            {
+                file_path = filePath,
+                apply = true,
+                operations = new object[]
+                {
+                    new
+                    {
+                        operation = "set_content",
+                        new_content = "public static class Demo\n{\n    public static int A() => 2;\n}\n",
+                    },
+                    new
+                    {
+                        operation = "replace_text",
+                        old_text = "=> 2;",
+                        new_text = "=> 3;",
+                    },
+                },
+            });
+
+            CommandExecutionResult result = await alias.ExecuteAsync(input, CancellationToken.None);
+            Assert.True(result.Ok);
+            Assert.Contains("=> 3;", await File.ReadAllTextAsync(filePath));
+            string json = JsonSerializer.Serialize(result.Data);
+            Assert.Contains("\"diagnostics_after_edit\":", json);
+            Assert.Contains("\"errors\":0", json);
+        }
+        finally
+        {
+            File.Delete(filePath);
         }
     }
 

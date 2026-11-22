@@ -507,7 +507,7 @@ internal static class WorkspaceProjectResolution
                 return true;
             }
 
-            if (Directory.Exists(Path.Combine(dirPath, ".git")) || File.Exists(Path.Combine(dirPath, ".git")))
+            if (RepositoryRootDiscovery.IsGitRepositoryRoot(dirPath))
             {
                 break;
             }

@@ -7,7 +7,7 @@ internal static class EditClaimAwareness
     public static object BuildForFile(string filePath, bool mutationRequested)
     {
         string fullPath = Path.GetFullPath(filePath);
-        string? repoRoot = FindRepoRoot(Path.GetDirectoryName(fullPath));
+        string? repoRoot = RepositoryRootDiscovery.TryFindEditClaimRepositoryRoot(fullPath);
         if (repoRoot is null)
         {
             return new
@@ -50,24 +50,6 @@ internal static class EditClaimAwareness
                 ? $"No active edit.claim covers '{relativePath}'. Claim the file before further C# mutation, or explain why this single-agent edit is safe."
                 : null,
         };
-    }
-
-    private static string? FindRepoRoot(string? startDirectory)
-    {
-        DirectoryInfo? current = string.IsNullOrWhiteSpace(startDirectory)
-            ? null
-            : new DirectoryInfo(Path.GetFullPath(startDirectory));
-        while (current is not null)
-        {
-            if (Directory.Exists(Path.Combine(current.FullName, ".git")))
-            {
-                return current.FullName;
-            }
-
-            current = current.Parent;
-        }
-
-        return null;
     }
 
     private static string NormalizeRelativePath(string repoRoot, string fullPath)

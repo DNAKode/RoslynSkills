@@ -112,9 +112,9 @@ dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~Focuse
 roscli edit.claim release <claim_id>
 ```
 
-For multiple subagents, use distinct stable `--owner` names and disjoint file claims. Assign known file ownership before spawning; if a subagent discovers a file later, it must claim before its first edit and report the claim id. Serialize shared-file work through one owner. If several changes target the same member, combine them into one fresh `edit.replace_in_member` old/new block or one `edit.batch_exact` `replace_span` operation with `expected_text`; do not run parallel edit commands against stale `ctx.member_source` reads. Prefer guarded mutations: `edit.replace_in_member`, `edit.batch_exact` with `expected_text`, or `session.commit --require-disk-unchanged true`.
+For multiple subagents, use distinct stable `--owner` names and disjoint file claims. Assign known file ownership before spawning; if a subagent discovers a file later, it must claim before its first edit and report the claim id. Serialize shared-file work through one owner. If several changes target the same member or multiple files, combine them into one fresh `edit.replace_in_member` old/new block or one `edit.transaction` (`edit.batch_exact` is its thin alias) using `replace_text`, `insert_text`, or `replace_span` with `expected_text`; do not run parallel edit commands against stale `ctx.member_source` reads. Prefer guarded mutations: `edit.replace_in_member`, `edit.transaction` / `edit.batch_exact` with `expected_text`, or `session.commit --require-disk-unchanged true`.
 
-Mutation command responses include `claim_status`. If a write summary says `unclaimed`, stop further C# mutation, run `edit.claim claim <file> --owner <owner> --reason <slice>`, then continue with guarded edits.
+Mutation command responses include `claim_status` (using shared Git worktree-aware repository-root discovery). If a write summary says `unclaimed`, stop further C# mutation, run `edit.claim claim <file> --owner <owner> --reason <slice>`, then continue with guarded edits.
 
 ### 6) Workspace-backed directory triage
 

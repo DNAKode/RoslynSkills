@@ -927,20 +927,8 @@ internal static class WorkspaceSemanticLoader
 
     private static string? FindNearestGitRoot(string startDirectory)
     {
-        DirectoryInfo? current = new(startDirectory);
-        while (current is not null)
-        {
-            string candidate = NormalizePath(current.FullName);
-            string dotGit = Path.Combine(candidate, ".git");
-            if (Directory.Exists(dotGit) || File.Exists(dotGit))
-            {
-                return candidate;
-            }
-
-            current = current.Parent;
-        }
-
-        return null;
+        string? root = RepositoryRootDiscovery.TryFindGitRepositoryRoot(startDirectory);
+        return root is null ? null : NormalizePath(root);
     }
     private static Document? FindDocument(Solution solution, string filePath)
     {

@@ -1271,8 +1271,7 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
                 return solutions[0];
             }
 
-            if (Directory.Exists(Path.Combine(current.FullName, ".git")) ||
-                File.Exists(Path.Combine(current.FullName, ".git")))
+            if (RepositoryRootDiscovery.IsGitRepositoryRoot(current.FullName))
             {
                 break;
             }
@@ -1294,8 +1293,7 @@ public sealed class GetWorkspaceSnapshotCommand : IAgentCommand
                 return projects[0];
             }
 
-            if (Directory.Exists(Path.Combine(current.FullName, ".git")) ||
-                File.Exists(Path.Combine(current.FullName, ".git")))
+            if (RepositoryRootDiscovery.IsGitRepositoryRoot(current.FullName))
             {
                 break;
             }

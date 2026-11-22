@@ -257,7 +257,7 @@ public sealed class HotWorkspaceEditTests
             AssertPureLfNoBom(consumerPath);
 
             // -----------------------------------------------------------------
-            // 3a. edit.batch_exact normalizes CRLF -> LF on LF files and LF -> CRLF on CRLF files
+            // 3a. edit.batch_exact (thin alias of edit.transaction) normalizes CRLF -> LF on LF files and LF -> CRLF on CRLF files
             // -----------------------------------------------------------------
             JsonElement batchResponse = await host.CallAsync("edit.batch_exact", new
             {
@@ -283,16 +283,15 @@ public sealed class HotWorkspaceEditTests
             });
             JsonElement batchData = DataOf(batchResponse);
             Assert.Equal(2, batchData.GetProperty("wrote_file_count").GetInt32());
-            foreach (JsonElement fileResult in batchData.GetProperty("file_results").EnumerateArray())
-            {
-                Assert.Equal(0, fileResult.GetProperty("diagnostics_after_batch").GetProperty("errors").GetInt32());
-            }
+            Assert.Equal("process_hot", batchData.GetProperty("workspace_context").GetProperty("workspace_cache_mode").GetString());
+            Assert.Equal(0, batchData.GetProperty("diagnostics_after_edit").GetProperty("errors").GetInt32());
 
             AssertPureLfNoBom(servicePath);
             AssertPureCrLfWithBom(appPath);
 
             // -----------------------------------------------------------------
-            // 3b. edit.transaction runs on hot workspace, normalizes line endings, and reports solution diagnostics
+            // 3b. edit.transaction runs on hot workspace with replace_text, set_content, and replace_span,
+            //     normalizes line endings, and reports unified solution diagnostics
             // -----------------------------------------------------------------
             string consumerCurrent = await File.ReadAllTextAsync(consumerPath);
             string consumerWithCrLfPayload = consumerCurrent
@@ -326,14 +325,54 @@ public sealed class HotWorkspaceEditTests
                         end_column = 30,
                         new_text = "    public void Dispose()\n    {\n    }",
                     },
+                    new
+                    {
+                        file_path = servicePath,
+                        operation = "replace_text",
+                        old_text = "        int first = items[0];\r\n        return first;",
+                        new_text = "        int head = items[0];\r\n        return head;",
+                    },
                 },
             });
             JsonElement txData = DataOf(txResponse);
-            Assert.Equal(2, txData.GetProperty("wrote_file_count").GetInt32());
+            Assert.Equal(3, txData.GetProperty("wrote_file_count").GetInt32());
             Assert.Equal("process_hot", txData.GetProperty("workspace_context").GetProperty("workspace_cache_mode").GetString());
             Assert.Equal(0, txData.GetProperty("diagnostics_after_edit").GetProperty("errors").GetInt32());
+            AssertPureLfNoBom(servicePath);
             AssertPureLfNoBom(consumerPath);
             AssertPureCrLfWithBom(appPath);
+            Assert.Contains("int head = items[0];", await File.ReadAllTextAsync(servicePath));
+
+            // 3c. edit.transaction atomic rollback on ambiguous replace_text writes nothing
+            JsonElement ambiguousTx = await host.CallAsync("edit.transaction", new
+            {
+                workspace_handle = handle,
+                apply = true,
+                atomic = true,
+                operations = new object[]
+                {
+                    new
+                    {
+                        file_path = servicePath,
+                        operation = "replace_text",
+                        old_text = "int head = items[0];",
+                        new_text = "int neverWritten = items[0];",
+                    },
+                    new
+                    {
+                        file_path = appPath,
+                        operation = "replace_text",
+                        old_text = "    ",
+                        new_text = "  ",
+                    },
+                },
+            });
+            Assert.False(ambiguousTx.GetProperty("ok").GetBoolean());
+            JsonElement ambiguousData = ambiguousTx.GetProperty("envelope").GetProperty("Data");
+            Assert.True(ambiguousData.GetProperty("skipped_apply_due_to_errors").GetBoolean());
+            Assert.Equal(0, ambiguousData.GetProperty("wrote_file_count").GetInt32());
+            Assert.Contains("old_text_ambiguous", ambiguousTx.GetRawText());
+            Assert.DoesNotContain("neverWritten", await File.ReadAllTextAsync(servicePath));
 
             // -----------------------------------------------------------------
             // 4. edit.create_file joins its project in the hot workspace and is seen by nav.find_symbol

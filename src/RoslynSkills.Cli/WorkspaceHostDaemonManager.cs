@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using RoslynSkills.Contracts;
+using RoslynSkills.Core.Commands;
 
 namespace RoslynSkills.Cli;
 
@@ -26,7 +27,7 @@ public sealed class WorkspaceHostDaemonManager
 
     public WorkspaceHostDaemonEndpoint GetDefaultEndpoint(string? repoRoot = null)
     {
-        string resolvedRepoRoot = Path.GetFullPath(repoRoot ?? Directory.GetCurrentDirectory());
+        string resolvedRepoRoot = RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(repoRoot);
         string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(resolvedRepoRoot)))
             .ToLowerInvariant()[..16];
         string stateDirectory = GetStateDirectory();

@@ -1,5 +1,6 @@
 using RoslynSkills.Contracts;
 using RoslynSkills.Core;
+using RoslynSkills.Core.Commands;
 using System.Reflection;
 using System.Globalization;
 using System.Diagnostics;
@@ -896,6 +897,7 @@ Workflow:
         if (TryGetString(input, "workspace_handle", out string existingHandle) &&
             !string.IsNullOrWhiteSpace(existingHandle))
         {
+            routedInput = ResolveRelativePathsForDaemon(input);
             resolvedHotWorkspace = true;
             return true;
         }
@@ -929,9 +931,83 @@ Workflow:
             augmentedInput["require_workspace"] = true;
         }
 
-        routedInput = JsonSerializer.SerializeToElement(augmentedInput);
+        routedInput = ResolveRelativePathsForDaemon(JsonSerializer.SerializeToElement(augmentedInput));
         return true;
     }
+
+    private static JsonElement ResolveRelativePathsForDaemon(JsonElement element)
+    {
+        object? transformed = TransformPathsForDaemon(element);
+        return JsonSerializer.SerializeToElement(transformed);
+    }
+
+    private static object? TransformPathsForDaemon(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            Dictionary<string, object?> result = new(StringComparer.Ordinal);
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (IsDaemonPathProperty(property.Name) &&
+                    property.Value.ValueKind == JsonValueKind.String)
+                {
+                    string? raw = property.Value.GetString();
+                    result[property.Name] = string.IsNullOrWhiteSpace(raw)
+                        ? raw
+                        : Path.GetFullPath(NormalizeCliPathValue(raw));
+                }
+                else if (string.Equals(property.Name, "roots", StringComparison.Ordinal) &&
+                         property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    List<object?> roots = new();
+                    foreach (JsonElement item in property.Value.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String)
+                        {
+                            string? raw = item.GetString();
+                            roots.Add(string.IsNullOrWhiteSpace(raw)
+                                ? raw
+                                : Path.GetFullPath(NormalizeCliPathValue(raw)));
+                        }
+                        else
+                        {
+                            roots.Add(item.Clone());
+                        }
+                    }
+
+                    result[property.Name] = roots;
+                }
+                else
+                {
+                    result[property.Name] = TransformPathsForDaemon(property.Value);
+                }
+            }
+
+            return result;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            List<object?> items = new();
+            foreach (JsonElement item in element.EnumerateArray())
+            {
+                items.Add(TransformPathsForDaemon(item));
+            }
+
+            return items;
+        }
+
+        return element.Clone();
+    }
+
+    private static bool IsDaemonPathProperty(string propertyName)
+        => string.Equals(propertyName, "file_path", StringComparison.Ordinal) ||
+           string.Equals(propertyName, "workspace_path", StringComparison.Ordinal) ||
+           string.Equals(propertyName, "directory_path", StringComparison.Ordinal) ||
+           string.Equals(propertyName, "source_file_path", StringComparison.Ordinal) ||
+           string.Equals(propertyName, "target_file_path", StringComparison.Ordinal) ||
+           string.Equals(propertyName, "root", StringComparison.Ordinal) ||
+           string.Equals(propertyName, "repo_root", StringComparison.Ordinal);
 
     private async Task<int> HandleValidateInputAsync(
         string[] args,
@@ -1160,14 +1236,14 @@ Workflow:
     private static bool HasErrorCode(IEnumerable<CommandError> errors, string code)
         => errors.Any(error => string.Equals(error.Code, code, StringComparison.OrdinalIgnoreCase));
 
-    private static string? InferToolCallDaemonRepoRoot(JsonElement input)
+    private static string InferToolCallDaemonRepoRoot(JsonElement input)
     {
         if (TryFindWorkspaceOrFilePath(input, out string targetPath))
         {
             return InferWorkspaceDaemonRepoRoot(explicitRepoRoot: null, targetPath);
         }
 
-        return null;
+        return RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: null);
     }
 
     private static bool TryFindWorkspaceOrFilePath(JsonElement element, out string targetPath)
@@ -1540,7 +1616,7 @@ Workflow:
 
                 method = WorkspaceHostProtocol.Method.WorkspacePreload;
                 workspaceAlias ??= "default";
-                string useWorkspacePath = NormalizeCliPathValue(positional[0]);
+                string useWorkspacePath = Path.GetFullPath(NormalizeCliPathValue(positional[0]));
                 repoRoot = InferWorkspaceDaemonRepoRoot(repoRoot, useWorkspacePath);
                 input["workspace_path"] = useWorkspacePath;
                 if (!TryGetBoolOption(options, "--require-solution", defaultValue: true, out bool useRequireSolution, out error, verb))
@@ -1565,7 +1641,7 @@ Workflow:
 
                 method = WorkspaceHostProtocol.Method.WorkspacePreload;
                 workspaceAlias ??= "default";
-                string preloadWorkspacePath = NormalizeCliPathValue(positional[0]);
+                string preloadWorkspacePath = Path.GetFullPath(NormalizeCliPathValue(positional[0]));
                 repoRoot = InferWorkspaceDaemonRepoRoot(repoRoot, preloadWorkspacePath);
                 input["workspace_path"] = preloadWorkspacePath;
                 if (!TryGetBoolOption(options, "--require-solution", defaultValue: true, out bool preloadRequireSolution, out error, verb))
@@ -1642,43 +1718,8 @@ Workflow:
         return true;
     }
 
-    private static string? InferWorkspaceDaemonRepoRoot(string? explicitRepoRoot, string workspacePath)
-    {
-        if (!string.IsNullOrWhiteSpace(explicitRepoRoot))
-        {
-            return explicitRepoRoot;
-        }
-
-        string fullPath = Path.GetFullPath(workspacePath);
-        string startDirectory = Directory.Exists(fullPath)
-            ? fullPath
-            : Path.GetDirectoryName(fullPath) ?? Directory.GetCurrentDirectory();
-
-        DirectoryInfo? current = new(startDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, ".roslynskills", "workspaces.json")))
-            {
-                return current.FullName;
-            }
-
-            current = current.Parent;
-        }
-
-        current = new(startDirectory);
-        while (current is not null)
-        {
-            string dotGit = Path.Combine(current.FullName, ".git");
-            if (Directory.Exists(dotGit) || File.Exists(dotGit))
-            {
-                return current.FullName;
-            }
-
-            current = current.Parent;
-        }
-
-        return startDirectory;
-    }
+    private static string InferWorkspaceDaemonRepoRoot(string? explicitRepoRoot, string workspacePath)
+        => RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot, workspacePath);
 
     private static void AddWorkspaceTargetToInput(
         Dictionary<string, object?> input,
@@ -3458,7 +3499,8 @@ Workflow:
                 : $"{file}, {position}, {action}{claimSuffix}";
         }
 
-        if (string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "edit.transaction", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
         {
             int total = TryGetInt(element, "total_operations", out int totalOperations) ? totalOperations : -1;
             int executed = TryGetInt(element, "executed_operations", out int executedOperations) ? executedOperations : -1;
@@ -3866,26 +3908,28 @@ Workflow:
             };
         }
 
-        if (string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(commandId, "edit.transaction", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
         {
+            bool isAlias = string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase);
             return new
             {
-                direct = "run edit.batch_exact --input-stdin",
-                run = "run edit.batch_exact --input '{\"file_path\":\"src/MyFile.cs\",\"operations\":[{\"kind\":\"replace_span\",\"span_start\":120,\"span_length\":18,\"new_text\":\"replacement\"},{\"kind\":\"insert_text\",\"anchor_text\":\"replacement\",\"insert_text\":\" suffix\",\"position\":\"after\"}],\"atomic\":true,\"apply\":true}'",
+                direct = $"run {commandId} --input-stdin",
+                run = $"run {commandId} --input '{{\"file_path\":\"src/MyFile.cs\",\"operations\":[{{\"operation\":\"replace_text\",\"old_text\":\"old\",\"new_text\":\"new\"}},{{\"operation\":\"insert_text\",\"anchor_text\":\"new\",\"insert_text\":\" suffix\",\"position\":\"after\"}}],\"atomic\":true,\"apply\":true}}'",
                 required_properties = new[] { "operations" },
-                optional_properties = new[] { "file_path", "apply", "atomic", "continue_on_error", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle" },
+                optional_properties = new[] { "file_path", "apply", "atomic", "continue_on_error", "include_diagnostics", "max_diagnostics", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
-                    "Use after edit.claim when you need multiple exact text/span edits and want one per-operation report.",
+                    isAlias
+                        ? "edit.batch_exact is a thin alias of edit.transaction; both run the same atomic hot-workspace edit transaction engine."
+                        : "Canonical multi-file atomic edit command on the hot workspace (edit.batch_exact is a thin alias of edit.transaction).",
                     "Defaults: apply=true, atomic=true, continue_on_error=false, include_diagnostics=true.",
-                    "Each operation may specify file_path, or use top-level file_path for all operations.",
-                    "Operation kinds: replace_span uses span_start plus span_length or span_end, new_text, and optional expected_text; replace_text uses old_text/new_text/replace_all; insert_text uses anchor_text/insert_text/position.",
-                    "Prefer replace_span with ctx.member_source Data.edit_target spans for large member replacements to avoid copying fragile multiline old_text.",
-                    "When building replace_span new_text from ctx.member_source, start from edit_target.exact_span_text.text and do not duplicate edit_target.trivia.preserved_line_prefix_text.",
-                    "Atomic apply means any operation failure prevents all file writes; response still reports the failed operation.",
-                    "If old_text or anchor_text is ambiguous, inspect operation_results[].recovery_hint before retrying; it points to ctx.member_source/replace_span when span anchoring is safer.",
-                    "When a preloaded hot workspace tracks changed files, file_results[].hot_workspace_refresh reports incremental updates.",
-                    "Prefer this over chaining several edit.replace_text commands in one shell block.",
+                    "Each operation may specify file_path, or inherit top-level file_path. Use 'operation', 'kind', or 'type' to select the operation kind.",
+                    "Operation kinds: replace_text (old_text/new_text/replace_all), insert_text (anchor_text/insert_text/position=before|after), replace_span (either 1-based start_line/start_column/end_line/end_column or 0-based span_start with span_length/span_end, plus new_text and optional expected_text), and set_content (new_content).",
+                    "Line endings are normalized to each file's existing style (LF/CRLF) and UTF-8 BOM/encoding is preserved.",
+                    "Prefer replace_span with ctx.member_source Data.edit_target spans and expected_text for large member replacements; start from edit_target.exact_span_text.text and do not duplicate preserved_line_prefix_text.",
+                    "Atomic apply means any operation failure prevents all file writes; response still reports the failed operation and recovery_hint.",
+                    "Evaluates unified cross-file solution diagnostics in diagnostics_after_edit and refreshes tracked hot workspaces via hot_workspace_refresh.",
                 },
             };
         }

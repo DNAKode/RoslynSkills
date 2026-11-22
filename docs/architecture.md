@@ -81,21 +81,23 @@ Key rules:
 
 | Command | Scope | Best for |
 |---|---|---|
-| `edit.rename_symbol` | Symbol-anchored rename | Single-symbol renames with workspace diagnostics |
-| `edit.transaction` | Multi-file span/set-content | Cross-file refactors |
-| `edit.batch_exact` | Atomic exact-text replace/insert | Multiple small mutations in one round-trip |
+| `edit.rename_symbol` | Symbol-anchored rename | Solution-wide symbol renames with XML doc crefs and workspace diagnostics |
+| `edit.change_signature` | Symbol-anchored signature edit | Solution-wide parameter/name updates and call-site rewrites |
+| `edit.transaction` | Multi-file atomic transaction (`replace_text`, `insert_text`, `replace_span` [1-based line/col or 0-based offset], `set_content`) | Cross-file exact/span/content edits on the hot workspace with unified solution diagnostics and line-ending/BOM preservation |
+| `edit.batch_exact` | Thin alias of `edit.transaction` | Delegates directly to `edit.transaction` (identical behavior and schema) |
 | `edit.replace_in_member` | Scoped to a unique member/body | Small assertion/property edits with claim-first |
-| `edit.replace_text` | Exact text replacement | Structured mutation bridge |
+| `edit.replace_text` | Exact text replacement | Single-file exact replacement |
 | `edit.insert_text` | Anchor-based before/after insertion | Small evidence/assertion additions |
 | `edit.claim` | File/member ownership reservation | Multi-agent coordination; claim before mutation |
-| `edit.create_file` | One-shot file bootstrap | Avoid text-file creation fallback |
+| `edit.create_file` | One-shot file bootstrap | Avoid text-file creation fallback; joins project on hot refresh |
 
 ## Multi-Agent Coordination
 
+- Shared repository-root discovery (`RepositoryRootDiscovery`) resolves both standard `.git` directories and Git worktree `.git` files (`gitdir:`) consistently across daemon routing, `edit.claim`, `claim_status`, `ctx.changed_files`, and workspace discovery.
 - `edit.claim claim <file-path>` reserves file ownership.
 - `edit.claim release <claim_id>` releases.
 - `edit.claim status` (or `list`) shows current claims.
-- Mutation commands emit `claim_status` (claimed/unclaimed) in CLI summaries.
+- Mutation commands (`edit.replace_in_member`, `edit.replace_text`, `edit.insert_text`) emit `claim_status` (claimed/unclaimed) in CLI summaries.
 - Disjoint claims required for subagents; shared-file edits serialized through one owner.
 
 ## Benchmark Harness
