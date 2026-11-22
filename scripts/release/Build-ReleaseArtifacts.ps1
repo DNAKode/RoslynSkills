@@ -105,7 +105,7 @@ Write-Host ("OUTPUT_ROOT={0}" -f $OutputRoot)
 Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("restore", $solutionPath, "--nologo")
 
 if (-not $SkipTests) {
-    Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("test", $solutionPath, "-c", $Configuration, "--nologo")
+    Invoke-Dotnet -WorkingDirectory $repoRoot -Arguments @("test", $solutionPath, "-c", $Configuration, "--nologo", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none")
 }
 
 & (Join-Path $repoRoot "scripts\\skills\\Validate-Skills.ps1")

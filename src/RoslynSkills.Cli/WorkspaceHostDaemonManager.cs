@@ -20,6 +20,7 @@ public sealed record WorkspaceHostDaemonEndpoint(
 public sealed class WorkspaceHostDaemonManager
 {
     private const string ManifestVersion = "1.0";
+    private const int MaxUnixSocketPathUtf8Bytes = 100;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -36,19 +37,47 @@ public sealed class WorkspaceHostDaemonManager
         string transport = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
             ? "named-pipe"
             : "unix-socket";
-        return transport == "named-pipe"
-            ? new WorkspaceHostDaemonEndpoint(
+        if (transport == "named-pipe")
+        {
+            return new WorkspaceHostDaemonEndpoint(
                 Transport: transport,
                 PipeName: $"roslynskills-{hash}",
                 SocketPath: null,
                 ManifestPath: Path.Combine(stateDirectory, $"{hash}.json"),
-                RepoRoot: resolvedRepoRoot)
-            : new WorkspaceHostDaemonEndpoint(
-                Transport: transport,
-                PipeName: null,
-                SocketPath: Path.Combine(stateDirectory, $"{hash}.sock"),
-                ManifestPath: Path.Combine(stateDirectory, $"{hash}.json"),
                 RepoRoot: resolvedRepoRoot);
+        }
+
+        string socketPath = ResolveUnixSocketPath(stateDirectory, hash);
+        string? socketDirectory = Path.GetDirectoryName(socketPath);
+        if (!string.IsNullOrWhiteSpace(socketDirectory))
+        {
+            Directory.CreateDirectory(socketDirectory);
+        }
+
+        return new WorkspaceHostDaemonEndpoint(
+            Transport: transport,
+            PipeName: null,
+            SocketPath: socketPath,
+            ManifestPath: Path.Combine(stateDirectory, $"{hash}.json"),
+            RepoRoot: resolvedRepoRoot);
+    }
+
+    public static string ResolveUnixSocketPath(string stateDirectory, string hash, string? tempDirectory = null)
+    {
+        string candidate = Path.Combine(stateDirectory, $"{hash}.sock");
+        if (Encoding.UTF8.GetByteCount(candidate) <= MaxUnixSocketPathUtf8Bytes)
+        {
+            return candidate;
+        }
+
+        string fallbackTempRoot = string.IsNullOrWhiteSpace(tempDirectory) ? Path.GetTempPath() : tempDirectory;
+        string tempCandidate = Path.Combine(fallbackTempRoot, "roscli-sock", $"{hash}.sock");
+        if (Encoding.UTF8.GetByteCount(tempCandidate) <= MaxUnixSocketPathUtf8Bytes)
+        {
+            return tempCandidate;
+        }
+
+        return $"/tmp/roscli-{hash}.sock";
     }
 
     public async Task<CommandEnvelope> StartAsync(
@@ -73,33 +102,17 @@ public sealed class WorkspaceHostDaemonManager
                 });
         }
 
-        string resolvedHostPath = ResolveHostPath(hostPath);
-        string authToken = GenerateAuthToken();
-        bool useShellExecute = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-        ProcessStartInfo startInfo = new("dotnet")
+        if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
         {
-            WorkingDirectory = endpoint.RepoRoot,
-            UseShellExecute = useShellExecute,
-            CreateNoWindow = !useShellExecute,
-            WindowStyle = useShellExecute ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
-        };
-        startInfo.ArgumentList.Add(resolvedHostPath);
-        startInfo.ArgumentList.Add("--transport");
-        startInfo.ArgumentList.Add(endpoint.Transport);
-        startInfo.ArgumentList.Add("--auth-token");
-        startInfo.ArgumentList.Add(authToken);
-        if (endpoint.Transport == "named-pipe")
-        {
-            startInfo.ArgumentList.Add("--pipe-name");
-            startInfo.ArgumentList.Add(endpoint.PipeName!);
-        }
-        else
-        {
-            startInfo.ArgumentList.Add("--socket-path");
-            startInfo.ArgumentList.Add(endpoint.SocketPath!);
+            // No live daemon answered on this socket path; remove any stale socket left by a killed/crashed daemon.
+            TryDeleteFileOrSocket(endpoint.SocketPath);
         }
 
-        Process process = Process.Start(startInfo)
+        string resolvedHostPath = ResolveHostPath(hostPath);
+        string authToken = GenerateAuthToken();
+        ProcessStartInfo startInfo = BuildDaemonStartInfo(endpoint, resolvedHostPath, authToken);
+
+        using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start RoslynSkills workspace host process.");
 
         WorkspaceHostDaemonManifest manifest = new(
@@ -117,10 +130,17 @@ public sealed class WorkspaceHostDaemonManager
         WorkspaceHostResponse? status = await WaitForStatusAsync(endpoint, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
         if (status?.Ok != true)
         {
+            TryKillProcessTree(process);
+            TryDeleteManifest(endpoint.ManifestPath);
+            if (!string.IsNullOrWhiteSpace(endpoint.SocketPath))
+            {
+                TryDeleteFileOrSocket(endpoint.SocketPath);
+            }
+
             return ErrorEnvelope(
                 "daemon.start",
                 WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
-                $"Started workspace host process {process.Id}, but it did not answer daemon/status on pipe '{endpoint.PipeName}'.");
+                $"Started workspace host process {process.Id}, but it did not answer daemon/status on endpoint '{FormatEndpoint(endpoint)}'.");
         }
 
         return SuccessEnvelope(
@@ -135,6 +155,110 @@ public sealed class WorkspaceHostDaemonManager
                 host_path = resolvedHostPath,
                 status = status.Data,
             });
+    }
+
+    private static ProcessStartInfo BuildDaemonStartInfo(
+        WorkspaceHostDaemonEndpoint endpoint,
+        string resolvedHostPath,
+        string authToken)
+    {
+        string dotnetExecutable = ResolveDotnetExecutable();
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            ProcessStartInfo windowsStartInfo = new(dotnetExecutable)
+            {
+                WorkingDirectory = endpoint.RepoRoot,
+                UseShellExecute = true,
+                CreateNoWindow = false,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+            AppendDaemonArguments(windowsStartInfo, resolvedHostPath, endpoint, authToken);
+            return windowsStartInfo;
+        }
+
+        // On Unix, starting dotnet directly with UseShellExecute=false causes the background daemon (and any
+        // MSBuild/restore children it spawns) to inherit roscli's stdout/stderr pipe descriptors, hanging any
+        // caller reading roscli output until EOF. Launching through `/bin/sh` with `exec` detaches stdin/stdout/stderr
+        // to /dev/null and ignores SIGHUP while keeping the exact daemon PID.
+        ProcessStartInfo unixStartInfo = new("/bin/sh")
+        {
+            WorkingDirectory = endpoint.RepoRoot,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        unixStartInfo.ArgumentList.Add("-c");
+        unixStartInfo.ArgumentList.Add("trap '' HUP; exec \"$@\" </dev/null >/dev/null 2>&1");
+        unixStartInfo.ArgumentList.Add("roscli-daemon");
+        unixStartInfo.ArgumentList.Add(dotnetExecutable);
+        AppendDaemonArguments(unixStartInfo, resolvedHostPath, endpoint, authToken);
+        return unixStartInfo;
+    }
+
+    private static void AppendDaemonArguments(
+        ProcessStartInfo startInfo,
+        string resolvedHostPath,
+        WorkspaceHostDaemonEndpoint endpoint,
+        string authToken)
+    {
+        startInfo.ArgumentList.Add(resolvedHostPath);
+        startInfo.ArgumentList.Add("--transport");
+        startInfo.ArgumentList.Add(endpoint.Transport);
+        startInfo.ArgumentList.Add("--auth-token");
+        startInfo.ArgumentList.Add(authToken);
+        if (endpoint.Transport == "named-pipe")
+        {
+            startInfo.ArgumentList.Add("--pipe-name");
+            startInfo.ArgumentList.Add(endpoint.PipeName!);
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("--socket-path");
+            startInfo.ArgumentList.Add(endpoint.SocketPath!);
+        }
+    }
+
+    private static string ResolveDotnetExecutable()
+    {
+        string? processPath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(processPath) &&
+            string.Equals(Path.GetFileNameWithoutExtension(processPath), "dotnet", StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(processPath))
+        {
+            return processPath;
+        }
+
+        return "dotnet";
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteFileOrSocket(string path)
+    {
+        try
+        {
+            if (Path.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     public async Task<CommandEnvelope> StatusAsync(

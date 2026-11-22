@@ -295,11 +295,7 @@ public sealed class HotWorkspaceSyncTests
         }
         finally
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
+            TryKillProcessTree(process);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
@@ -592,6 +588,7 @@ public sealed class HotWorkspaceSyncTests
         RunGit(root, "init");
         RunGit(root, "config user.email test@example.com");
         RunGit(root, "config user.name TestUser");
+        RunGit(root, "config commit.gpgsign false");
         RunGit(root, "add .");
         RunGit(root, "commit -m \"Initial fixture\"");
 
@@ -609,10 +606,38 @@ public sealed class HotWorkspaceSyncTests
             CreateNoWindow = true,
         };
         using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to start git {arguments}.");
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30_000), $"git {arguments} timed out.");
-        Assert.True(process.ExitCode == 0, $"git {arguments} failed ({process.ExitCode}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        try
+        {
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(30_000))
+            {
+                TryKillProcessTree(process);
+                Assert.Fail($"git {arguments} timed out after 30s.");
+            }
+
+            string stdout = stdoutTask.Wait(TimeSpan.FromSeconds(5)) ? stdoutTask.Result : string.Empty;
+            string stderr = stderrTask.Wait(TimeSpan.FromSeconds(5)) ? stderrTask.Result : string.Empty;
+            Assert.True(process.ExitCode == 0, $"git {arguments} failed ({process.ExitCode}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
     }
 
     private static Process StartHostProcess()
@@ -661,12 +686,17 @@ public sealed class HotWorkspaceSyncTests
             }
             catch (TimeoutException)
             {
-                if (!process.HasExited)
+                TryKillProcessTree(process);
+                string stderr;
+                try
                 {
-                    process.Kill(entireProcessTree: true);
+                    stderr = await process.StandardError.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch
+                {
+                    stderr = string.Empty;
                 }
 
-                string stderr = await process.StandardError.ReadToEndAsync();
                 throw new TimeoutException($"Timed out waiting for workspace host response. Stderr: {stderr}");
             }
 

@@ -13,28 +13,35 @@ public sealed class WorkspaceHostProcessTests
         string hostAssemblyPath = typeof(WorkspaceHostAssembly).Assembly.Location;
         using Process process = StartHostProcess(hostAssemblyPath);
 
-        await process.StandardInput.WriteLineAsync("{\"id\":\"h1\",\"method\":\"host/handshake\"}");
-        await process.StandardInput.WriteLineAsync("{\"id\":\"x1\",\"method\":\"shutdown\"}");
+        try
+        {
+            await process.StandardInput.WriteLineAsync("{\"id\":\"h1\",\"method\":\"host/handshake\"}");
+            await process.StandardInput.WriteLineAsync("{\"id\":\"x1\",\"method\":\"shutdown\"}");
 
-        string? handshakeLine = await ReadLineWithTimeoutAsync(process, "handshake");
-        string? shutdownLine = await ReadLineWithTimeoutAsync(process, "shutdown");
+            string? handshakeLine = await ReadLineWithTimeoutAsync(process, "handshake");
+            string? shutdownLine = await ReadLineWithTimeoutAsync(process, "shutdown");
 
-        Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after shutdown.");
-        Assert.Equal(0, process.ExitCode);
-        Assert.False(string.IsNullOrWhiteSpace(handshakeLine));
-        Assert.False(string.IsNullOrWhiteSpace(shutdownLine));
+            Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after shutdown.");
+            Assert.Equal(0, process.ExitCode);
+            Assert.False(string.IsNullOrWhiteSpace(handshakeLine));
+            Assert.False(string.IsNullOrWhiteSpace(shutdownLine));
 
-        using JsonDocument handshake = JsonDocument.Parse(handshakeLine!);
-        JsonElement handshakeRoot = handshake.RootElement;
-        Assert.True(handshakeRoot.GetProperty("ok").GetBoolean());
-        Assert.Equal(WorkspaceHostProtocol.ProtocolVersion, handshakeRoot.GetProperty("protocol_version").GetString());
-        Assert.Equal(WorkspaceHostProtocol.Method.Handshake, handshakeRoot.GetProperty("method").GetString());
-        Assert.Equal("stdio-jsonl", handshakeRoot.GetProperty("data").GetProperty("capabilities")[0].GetString());
+            using JsonDocument handshake = JsonDocument.Parse(handshakeLine!);
+            JsonElement handshakeRoot = handshake.RootElement;
+            Assert.True(handshakeRoot.GetProperty("ok").GetBoolean());
+            Assert.Equal(WorkspaceHostProtocol.ProtocolVersion, handshakeRoot.GetProperty("protocol_version").GetString());
+            Assert.Equal(WorkspaceHostProtocol.Method.Handshake, handshakeRoot.GetProperty("method").GetString());
+            Assert.Equal("stdio-jsonl", handshakeRoot.GetProperty("data").GetProperty("capabilities")[0].GetString());
 
-        using JsonDocument shutdown = JsonDocument.Parse(shutdownLine!);
-        JsonElement shutdownRoot = shutdown.RootElement;
-        Assert.True(shutdownRoot.GetProperty("ok").GetBoolean());
-        Assert.Equal(WorkspaceHostProtocol.Method.Shutdown, shutdownRoot.GetProperty("method").GetString());
+            using JsonDocument shutdown = JsonDocument.Parse(shutdownLine!);
+            JsonElement shutdownRoot = shutdown.RootElement;
+            Assert.True(shutdownRoot.GetProperty("ok").GetBoolean());
+            Assert.Equal(WorkspaceHostProtocol.Method.Shutdown, shutdownRoot.GetProperty("method").GetString());
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
     }
 
     [Fact]
@@ -43,10 +50,20 @@ public sealed class WorkspaceHostProcessTests
         string hostAssemblyPath = typeof(WorkspaceHostAssembly).Assembly.Location;
         using Process process = StartHostProcess(hostAssemblyPath, "--transport", "named-pipe");
 
-        Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after invalid named-pipe options.");
-        Assert.Equal(2, process.ExitCode);
-        string stderr = await process.StandardError.ReadToEndAsync();
-        Assert.Contains("--transport named-pipe requires --pipe-name", stderr);
+        try
+        {
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+            Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after invalid named-pipe options.");
+            Assert.Equal(2, process.ExitCode);
+            await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromSeconds(5));
+            string stderr = await stderrTask;
+            Assert.Contains("--transport named-pipe requires --pipe-name", stderr);
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
     }
 
     [Fact]
@@ -55,24 +72,31 @@ public sealed class WorkspaceHostProcessTests
         string hostAssemblyPath = typeof(WorkspaceHostAssembly).Assembly.Location;
         using Process process = StartHostProcess(hostAssemblyPath, "--auth-token", "test-token");
 
-        await process.StandardInput.WriteLineAsync("{\"id\":\"missing\",\"method\":\"daemon/status\"}");
-        await process.StandardInput.WriteLineAsync("{\"id\":\"ok\",\"method\":\"daemon/status\",\"auth_token\":\"test-token\"}");
-        await process.StandardInput.WriteLineAsync("{\"id\":\"shutdown\",\"method\":\"shutdown\",\"auth_token\":\"test-token\"}");
+        try
+        {
+            await process.StandardInput.WriteLineAsync("{\"id\":\"missing\",\"method\":\"daemon/status\"}");
+            await process.StandardInput.WriteLineAsync("{\"id\":\"ok\",\"method\":\"daemon/status\",\"auth_token\":\"test-token\"}");
+            await process.StandardInput.WriteLineAsync("{\"id\":\"shutdown\",\"method\":\"shutdown\",\"auth_token\":\"test-token\"}");
 
-        string? missingLine = await ReadLineWithTimeoutAsync(process, "missing auth");
-        string? okLine = await ReadLineWithTimeoutAsync(process, "authorized status");
-        _ = await ReadLineWithTimeoutAsync(process, "shutdown");
+            string? missingLine = await ReadLineWithTimeoutAsync(process, "missing auth");
+            string? okLine = await ReadLineWithTimeoutAsync(process, "authorized status");
+            _ = await ReadLineWithTimeoutAsync(process, "shutdown");
 
-        Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after authenticated shutdown.");
+            Assert.True(process.WaitForExit(10_000), "Workspace host did not exit after authenticated shutdown.");
 
-        using JsonDocument missing = JsonDocument.Parse(missingLine!);
-        JsonElement missingRoot = missing.RootElement;
-        Assert.False(missingRoot.GetProperty("ok").GetBoolean());
-        Assert.Equal(WorkspaceHostProtocol.ErrorCode.DaemonAuthFailed, missingRoot.GetProperty("errors")[0].GetProperty("Code").GetString());
+            using JsonDocument missing = JsonDocument.Parse(missingLine!);
+            JsonElement missingRoot = missing.RootElement;
+            Assert.False(missingRoot.GetProperty("ok").GetBoolean());
+            Assert.Equal(WorkspaceHostProtocol.ErrorCode.DaemonAuthFailed, missingRoot.GetProperty("errors")[0].GetProperty("Code").GetString());
 
-        using JsonDocument ok = JsonDocument.Parse(okLine!);
-        Assert.True(ok.RootElement.GetProperty("ok").GetBoolean());
-        Assert.Equal(WorkspaceHostProtocol.Method.DaemonStatus, ok.RootElement.GetProperty("method").GetString());
+            using JsonDocument ok = JsonDocument.Parse(okLine!);
+            Assert.True(ok.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Equal(WorkspaceHostProtocol.Method.DaemonStatus, ok.RootElement.GetProperty("method").GetString());
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
     }
 
     [Fact]
@@ -163,11 +187,7 @@ public sealed class WorkspaceHostProcessTests
         }
         finally
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
+            TryKillProcessTree(process);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
@@ -212,13 +232,35 @@ public sealed class WorkspaceHostProcessTests
         }
         catch (TimeoutException)
         {
+            TryKillProcessTree(process);
+            string stderr = await TryReadToEndAsync(process.StandardError, TimeSpan.FromSeconds(5));
+            throw new TimeoutException($"Timed out waiting for workspace host {responseName} response. Stderr: {stderr}");
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
             }
+        }
+        catch
+        {
+        }
+    }
 
-            string stderr = await process.StandardError.ReadToEndAsync();
-            throw new TimeoutException($"Timed out waiting for workspace host {responseName} response. Stderr: {stderr}");
+    private static async Task<string> TryReadToEndAsync(StreamReader reader, TimeSpan timeout)
+    {
+        try
+        {
+            return await reader.ReadToEndAsync().WaitAsync(timeout);
+        }
+        catch
+        {
+            return string.Empty;
         }
     }
 

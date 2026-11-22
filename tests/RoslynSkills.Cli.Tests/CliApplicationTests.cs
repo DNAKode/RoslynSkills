@@ -3895,6 +3895,7 @@ public sealed class CliApplicationTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
         };
 
         foreach (string argument in arguments)
@@ -3904,11 +3905,31 @@ public sealed class CliApplicationTests
 
         using Process process = new() { StartInfo = startInfo };
         process.Start();
-        string stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        try
+        {
+            using CancellationTokenSource timeoutCts = new(TimeSpan.FromSeconds(30));
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token);
+            await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromSeconds(5));
+            string stderr = stderrTask.Result;
 
-        Assert.Equal(0, process.ExitCode);
-        Assert.True(string.IsNullOrWhiteSpace(stderr) || stderr.Contains("hint:", StringComparison.OrdinalIgnoreCase), stderr);
+            Assert.Equal(0, process.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(stderr) || stderr.Contains("hint:", StringComparison.OrdinalIgnoreCase), stderr);
+        }
+        finally
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+        }
     }
 }
 

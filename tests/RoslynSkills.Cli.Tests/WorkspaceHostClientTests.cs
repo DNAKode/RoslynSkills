@@ -54,4 +54,24 @@ public sealed class WorkspaceHostClientTests
                 Method: WorkspaceHostProtocol.Method.Handshake),
             CancellationToken.None));
     }
+
+    [Fact]
+    public void ResolveUnixSocketPath_UsesStateDirectoryWhenShort_AndFallsBackUnderLimitWhenLong()
+    {
+        const string hash = "0123456789abcdef";
+
+        string shortPath = WorkspaceHostDaemonManager.ResolveUnixSocketPath("/home/user/.local/share/rs", hash, "/tmp");
+        Assert.Equal(Path.Combine("/home/user/.local/share/rs", $"{hash}.sock"), shortPath);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(shortPath) <= 100);
+
+        string longStateDir = "/home/runner/work/_temp/6b4234fb-a1b9-4d57-8d2c-a312250cdf5f/.local/share/RoslynSkills/workspace-hosts";
+        string fallbackToTemp = WorkspaceHostDaemonManager.ResolveUnixSocketPath(longStateDir, hash, "/tmp");
+        Assert.Equal(Path.Combine("/tmp", "roscli-sock", $"{hash}.sock"), fallbackToTemp);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(fallbackToTemp) <= 100);
+
+        string longTempDir = "/var/folders/very/long/temporary/directory/path/that/would/exceed/the/unix/domain/socket/limit";
+        string fallbackToRootTmp = WorkspaceHostDaemonManager.ResolveUnixSocketPath(longStateDir, hash, longTempDir);
+        Assert.Equal($"/tmp/roscli-{hash}.sock", fallbackToRootTmp);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(fallbackToRootTmp) <= 100);
+    }
 }

@@ -438,24 +438,34 @@ public sealed class HotWorkspaceEditTests
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            buildStartInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
             buildStartInfo.Environment.Remove("MSBUILD_EXE_PATH");
             buildStartInfo.Environment.Remove("MSBuildSDKsPath");
             buildStartInfo.Environment.Remove("MSBuildExtensionsPath");
             using Process buildProcess = Process.Start(buildStartInfo)!;
-            Task<string> buildStdOutTask = buildProcess.StandardOutput.ReadToEndAsync();
-            Task<string> buildStdErrTask = buildProcess.StandardError.ReadToEndAsync();
-            Assert.True(buildProcess.WaitForExit(120_000), "dotnet build timed out");
-            string buildStdOut = await buildStdOutTask;
-            string buildStdErr = await buildStdErrTask;
-            Assert.True(buildProcess.ExitCode == 0, $"Expected 3-project fixture build to pass.\nSTDOUT:\n{buildStdOut}\nSTDERR:\n{buildStdErr}");
+            try
+            {
+                Task<string> buildStdOutTask = buildProcess.StandardOutput.ReadToEndAsync();
+                Task<string> buildStdErrTask = buildProcess.StandardError.ReadToEndAsync();
+                if (!buildProcess.WaitForExit(120_000))
+                {
+                    TryKillProcessTree(buildProcess);
+                    Assert.Fail("dotnet build timed out after 120s.");
+                }
+
+                await Task.WhenAll(buildStdOutTask, buildStdErrTask).WaitAsync(TimeSpan.FromSeconds(10));
+                string buildStdOut = await buildStdOutTask;
+                string buildStdErr = await buildStdErrTask;
+                Assert.True(buildProcess.ExitCode == 0, $"Expected 3-project fixture build to pass.\nSTDOUT:\n{buildStdOut}\nSTDERR:\n{buildStdErr}");
+            }
+            finally
+            {
+                TryKillProcessTree(buildProcess);
+            }
         }
         finally
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
+            TryKillProcessTree(process);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
@@ -575,16 +585,36 @@ public sealed class HotWorkspaceEditTests
             }
             catch (TimeoutException)
             {
-                if (!_process.HasExited)
+                TryKillProcessTree(_process);
+                string stderr;
+                try
                 {
-                    _process.Kill(entireProcessTree: true);
+                    stderr = await _process.StandardError.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch
+                {
+                    stderr = string.Empty;
                 }
 
-                throw new TimeoutException($"Workspace host did not answer. Stderr: {await _process.StandardError.ReadToEndAsync()}");
+                throw new TimeoutException($"Workspace host did not answer. Stderr: {stderr}");
             }
 
             Assert.False(string.IsNullOrWhiteSpace(line), "Workspace host closed its output.");
             return JsonDocument.Parse(line!).RootElement.Clone();
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
         }
     }
 }

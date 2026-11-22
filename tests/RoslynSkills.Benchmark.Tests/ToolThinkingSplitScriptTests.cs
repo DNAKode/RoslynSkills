@@ -92,14 +92,14 @@ public sealed class ToolThinkingSplitScriptTests
             {
                 FileName = ResolvePowerShellExecutable(),
                 Arguments = $"-NoLogo -NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -ControlTranscript \"{controlTranscript}\" -TreatmentTranscript \"{treatmentTranscript}\" -OutputJson \"{outputJson}\" -OutputMarkdown \"{outputMarkdown}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
 
-            using Process process = Process.Start(psi)!;
-            process.WaitForExit();
-
-            Assert.Equal(0, process.ExitCode);
+            (int exitCode, string stdout, string stderr) = RunProcessWithTimeout(psi, timeoutMs: 60_000);
+            Assert.True(exitCode == 0, $"Analyze-ToolThinkingSplit.ps1 failed (exit={exitCode}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
             Assert.True(File.Exists(outputJson), $"Expected output json: {outputJson}.");
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputJson));
@@ -178,18 +178,50 @@ public sealed class ToolThinkingSplitScriptTests
 
         try
         {
-            using Process? process = Process.Start(psi);
-            if (process is null)
-            {
-                return false;
-            }
-
-            process.WaitForExit();
-            return process.ExitCode == 0;
+            (int exitCode, _, _) = RunProcessWithTimeout(psi, timeoutMs: 10_000);
+            return exitCode == 0;
         }
         catch
         {
             return false;
+        }
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunProcessWithTimeout(ProcessStartInfo psi, int timeoutMs)
+    {
+        using Process process = Process.Start(psi)
+            ?? throw new InvalidOperationException($"Failed to start process '{psi.FileName}'.");
+        try
+        {
+            Task<string> stdoutTask = psi.RedirectStandardOutput ? process.StandardOutput.ReadToEndAsync() : Task.FromResult(string.Empty);
+            Task<string> stderrTask = psi.RedirectStandardError ? process.StandardError.ReadToEndAsync() : Task.FromResult(string.Empty);
+            if (!process.WaitForExit(timeoutMs))
+            {
+                TryKillProcessTree(process);
+                throw new TimeoutException($"Process '{psi.FileName}' timed out after {timeoutMs}ms.");
+            }
+
+            string stdout = stdoutTask.Wait(TimeSpan.FromSeconds(5)) ? stdoutTask.Result : string.Empty;
+            string stderr = stderrTask.Wait(TimeSpan.FromSeconds(5)) ? stderrTask.Result : string.Empty;
+            return (process.ExitCode, stdout, stderr);
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
         }
     }
 }

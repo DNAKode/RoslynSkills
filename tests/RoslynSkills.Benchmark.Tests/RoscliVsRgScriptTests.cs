@@ -37,12 +37,8 @@ public sealed class RoscliVsRgScriptTests
         psi.ArgumentList.Add("$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile($env:ROSLYNSKILLS_SCRIPT_UNDER_TEST, [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }");
         psi.Environment["ROSLYNSKILLS_SCRIPT_UNDER_TEST"] = scriptPath;
 
-        using Process process = Process.Start(psi)!;
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-
-        Assert.True(process.ExitCode == 0, $"PowerShell parse failed.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+        (int exitCode, string stdout, string stderr) = RunProcessWithTimeout(psi, timeoutMs: 30_000);
+        Assert.True(exitCode == 0, $"PowerShell parse failed.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
     }
 
     [Fact]
@@ -89,12 +85,8 @@ public sealed class RoscliVsRgScriptTests
         psi.ArgumentList.Add("$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile($env:ROSLYNSKILLS_SCRIPT_UNDER_TEST, [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }");
         psi.Environment["ROSLYNSKILLS_SCRIPT_UNDER_TEST"] = scriptPath;
 
-        using Process process = Process.Start(psi)!;
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-
-        Assert.True(process.ExitCode == 0, $"PowerShell parse failed.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+        (int exitCode, string stdout, string stderr) = RunProcessWithTimeout(psi, timeoutMs: 30_000);
+        Assert.True(exitCode == 0, $"PowerShell parse failed.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
     }
 
     [Fact]
@@ -187,18 +179,50 @@ public sealed class RoscliVsRgScriptTests
 
         try
         {
-            using Process? process = Process.Start(psi);
-            if (process is null)
-            {
-                return false;
-            }
-
-            process.WaitForExit();
-            return process.ExitCode == 0;
+            (int exitCode, _, _) = RunProcessWithTimeout(psi, timeoutMs: 10_000);
+            return exitCode == 0;
         }
         catch
         {
             return false;
+        }
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunProcessWithTimeout(ProcessStartInfo psi, int timeoutMs)
+    {
+        using Process process = Process.Start(psi)
+            ?? throw new InvalidOperationException($"Failed to start process '{psi.FileName}'.");
+        try
+        {
+            Task<string> stdoutTask = psi.RedirectStandardOutput ? process.StandardOutput.ReadToEndAsync() : Task.FromResult(string.Empty);
+            Task<string> stderrTask = psi.RedirectStandardError ? process.StandardError.ReadToEndAsync() : Task.FromResult(string.Empty);
+            if (!process.WaitForExit(timeoutMs))
+            {
+                TryKillProcessTree(process);
+                throw new TimeoutException($"Process '{psi.FileName}' timed out after {timeoutMs}ms.");
+            }
+
+            string stdout = stdoutTask.Wait(TimeSpan.FromSeconds(5)) ? stdoutTask.Result : string.Empty;
+            string stderr = stderrTask.Wait(TimeSpan.FromSeconds(5)) ? stderrTask.Result : string.Empty;
+            return (process.ExitCode, stdout, stderr);
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
         }
     }
 }

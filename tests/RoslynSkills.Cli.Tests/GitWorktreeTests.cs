@@ -279,11 +279,23 @@ public sealed class GitWorktreeTests
             }
             finally
             {
-                // Always stop the daemon started for the temp worktree.
-                RunCliProcess(
-                    workingDirectory: worktreeRoot,
-                    arguments: new[] { "daemon.stop", "--repo-root", worktreeRoot },
-                    requireDaemon: false);
+                int? daemonPid = new WorkspaceHostDaemonManager().TryGetDaemonProcessId(worktreeRoot);
+                try
+                {
+                    // Always stop the daemon started for the temp worktree.
+                    RunCliProcess(
+                        workingDirectory: worktreeRoot,
+                        arguments: new[] { "daemon.stop", "--repo-root", worktreeRoot },
+                        requireDaemon: false,
+                        timeoutMilliseconds: 30_000);
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    TryKillProcessById(daemonPid);
+                }
             }
         }
         finally
@@ -297,6 +309,7 @@ public sealed class GitWorktreeTests
         RunGit(repoRoot, "init -b main");
         RunGit(repoRoot, "config user.name \"RoslynSkills Test\"");
         RunGit(repoRoot, "config user.email \"test@example.com\"");
+        RunGit(repoRoot, "config commit.gpgsign false");
 
         string appDir = Path.Combine(repoRoot, "src", "App");
         Directory.CreateDirectory(appDir);
@@ -345,7 +358,8 @@ public sealed class GitWorktreeTests
     private static (int ExitCode, string StdOut, string StdErr) RunCliProcess(
         string workingDirectory,
         IReadOnlyList<string> arguments,
-        bool requireDaemon)
+        bool requireDaemon,
+        int timeoutMilliseconds = 120_000)
     {
         string cliDllPath = typeof(CliApplication).Assembly.Location;
         ProcessStartInfo startInfo = new("dotnet")
@@ -367,15 +381,30 @@ public sealed class GitWorktreeTests
 
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start roscli child process.");
-        Task<string> stdOutTask = process.StandardOutput.ReadToEndAsync();
-        Task<string> stdErrTask = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(120_000))
+        try
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException($"roscli process timed out for args: {string.Join(' ', arguments)}");
-        }
+            Task<string> stdOutTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> stdErrTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(timeoutMilliseconds))
+            {
+                TryKillProcessTree(process);
+                throw new TimeoutException($"roscli process timed out after {timeoutMilliseconds}ms for args: {string.Join(' ', arguments)}");
+            }
 
-        return (process.ExitCode, stdOutTask.GetAwaiter().GetResult(), stdErrTask.GetAwaiter().GetResult());
+            if (!Task.WhenAll(stdOutTask, stdErrTask).Wait(TimeSpan.FromSeconds(10)))
+            {
+                TryKillProcessTree(process);
+                throw new TimeoutException(
+                    $"roscli process exited (code={process.ExitCode}) but stdout/stderr did not close within 10s for args: {string.Join(' ', arguments)}. " +
+                    "A background child process likely inherited stdout/stderr descriptors.");
+            }
+
+            return (process.ExitCode, stdOutTask.Result, stdErrTask.Result);
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
     }
 
     private static void RunGit(string workingDirectory, string arguments)
@@ -390,11 +419,60 @@ public sealed class GitWorktreeTests
         };
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start git {arguments}.");
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit(30_000) || process.ExitCode != 0)
+        try
         {
-            throw new InvalidOperationException($"git {arguments} failed (exit={process.ExitCode}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(30_000))
+            {
+                TryKillProcessTree(process);
+                throw new TimeoutException($"git {arguments} timed out after 30s.");
+            }
+
+            string stdout = stdoutTask.Wait(TimeSpan.FromSeconds(5)) ? stdoutTask.Result : string.Empty;
+            string stderr = stderrTask.Wait(TimeSpan.FromSeconds(5)) ? stderrTask.Result : string.Empty;
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"git {arguments} failed (exit={process.ExitCode}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+            }
+        }
+        finally
+        {
+            TryKillProcessTree(process);
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryKillProcessById(int? processId)
+    {
+        if (processId is null or <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using Process daemon = Process.GetProcessById(processId.Value);
+            if (!daemon.HasExited)
+            {
+                daemon.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
         }
     }
 

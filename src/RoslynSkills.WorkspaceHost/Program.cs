@@ -137,13 +137,24 @@ internal static class Program
 
     private static async Task<int> RunUnixSocketAsync(ICommandRegistry registry, string socketPath)
     {
+        string? socketDirectory = Path.GetDirectoryName(socketPath);
+        if (!string.IsNullOrWhiteSpace(socketDirectory))
+        {
+            Directory.CreateDirectory(socketDirectory);
+        }
+
+        if (Path.Exists(socketPath) && !IsUnixSocketListening(socketPath))
+        {
+            TryDeleteSocketPath(socketPath);
+        }
+
         using Socket listener = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         bool bound = false;
         try
         {
             listener.Bind(new UnixDomainSocketEndPoint(socketPath));
             bound = true;
-            listener.Listen(backlog: 1);
+            listener.Listen(backlog: 16);
 
             while (true)
             {
@@ -173,6 +184,24 @@ internal static class Program
             {
                 TryDeleteSocketPath(socketPath);
             }
+        }
+    }
+
+    private static bool IsUnixSocketListening(string socketPath)
+    {
+        try
+        {
+            using Socket probe = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            probe.Connect(new UnixDomainSocketEndPoint(socketPath));
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
         }
     }
 
@@ -311,7 +340,7 @@ internal static class Program
     {
         try
         {
-            if (File.Exists(socketPath))
+            if (Path.Exists(socketPath))
             {
                 File.Delete(socketPath);
             }

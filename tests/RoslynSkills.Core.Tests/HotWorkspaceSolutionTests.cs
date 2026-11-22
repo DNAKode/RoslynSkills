@@ -289,9 +289,15 @@ public sealed class HotWorkspaceSolutionTests
         }
         finally
         {
-            if (!process.HasExited)
+            try
             {
-                process.Kill(entireProcessTree: true);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
             }
 
             try { Directory.Delete(root, recursive: true); } catch { }
@@ -749,9 +755,15 @@ public sealed class HotWorkspaceSolutionTests
         }
         finally
         {
-            if (!process.HasExited)
+            try
             {
-                process.Kill(entireProcessTree: true);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
             }
 
             try { Directory.Delete(root, recursive: true); } catch { }
@@ -847,12 +859,28 @@ public sealed class HotWorkspaceSolutionTests
             }
             catch (TimeoutException)
             {
-                if (!_process.HasExited)
+                try
                 {
-                    _process.Kill(entireProcessTree: true);
+                    if (!_process.HasExited)
+                    {
+                        _process.Kill(entireProcessTree: true);
+                    }
+                }
+                catch
+                {
                 }
 
-                throw new TimeoutException($"Workspace host did not answer. Stderr: {await _process.StandardError.ReadToEndAsync()}");
+                string stderr;
+                try
+                {
+                    stderr = await _process.StandardError.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch
+                {
+                    stderr = string.Empty;
+                }
+
+                throw new TimeoutException($"Workspace host did not answer. Stderr: {stderr}");
             }
 
             Assert.False(string.IsNullOrWhiteSpace(line), "Workspace host closed its output.");
