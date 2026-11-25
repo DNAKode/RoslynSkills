@@ -927,6 +927,53 @@ internal sealed class WorkspaceChangeTracker : IDisposable
 
     public bool HasWatcher => _watcher is not null;
 
+    private readonly List<string> _relevantDirectories = new();
+
+    /// <summary>
+    /// Declares a directory whose subtree a consumer (the hot text index) reads, so moving or creating directories around
+    /// it makes the watcher feed uncertain. Project directories are always relevant.
+    /// </summary>
+    public void RegisterIndexedDirectory(string directory)
+    {
+        string normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        lock (_gate)
+        {
+            if (!_relevantDirectories.Contains(normalized, PathComparer))
+            {
+                _relevantDirectories.Add(normalized);
+            }
+        }
+    }
+
+    private bool IsRelevantDirectory(string path)
+    {
+        string candidate = Path.TrimEndingDirectorySeparator(path);
+        lock (_gate)
+        {
+            foreach (string relevant in _relevantDirectories)
+            {
+                if (IsAtOrBelowDirectory(candidate, relevant) || IsAtOrBelowDirectory(relevant, candidate))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAtOrBelowDirectory(string path, string directory)
+    {
+        if (PathComparer.Equals(path, directory))
+        {
+            return true;
+        }
+
+        return path.Length > directory.Length &&
+               path.StartsWith(directory, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) &&
+               (path[directory.Length] == Path.DirectorySeparatorChar || path[directory.Length] == Path.AltDirectorySeparatorChar);
+    }
+
     private readonly string? _barrierDirectory;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ManualResetEventSlim> _barrierWaiters = new(PathComparer);
     private int _barrierSequence;
@@ -1100,6 +1147,13 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         _baselineExcludedSourcePaths = baselineExcludedSourcePaths;
         _includeGenerated = includeGenerated;
         _barrierDirectory = watcher is null ? null : ChooseBarrierDirectory(_trackedProjectPaths);
+        foreach (string projectPath in _trackedProjectPaths)
+        {
+            if (Path.GetDirectoryName(projectPath) is { } projectDirectory)
+            {
+                _relevantDirectories.Add(Path.TrimEndingDirectorySeparator(projectDirectory));
+            }
+        }
     }
 
     public static WorkspaceChangeTracker Start(
@@ -1256,8 +1310,9 @@ internal sealed class WorkspaceChangeTracker : IDisposable
             if (Directory.Exists(fullPath))
             {
                 // A directory that appeared or was moved into the tree can bring files without per-file events;
-                // timestamp-only "Changed" events on a directory are noise.
-                if (!string.Equals(changeType, "Changed", StringComparison.Ordinal))
+                // timestamp-only "Changed" events on a directory are noise, and so are directories no project or
+                // indexed search scope can see (artifact stores, evidence folders, other tools' output).
+                if (!string.Equals(changeType, "Changed", StringComparison.Ordinal) && IsRelevantDirectory(fullPath))
                 {
                     Interlocked.Increment(ref _uncertaintyGeneration);
                 }
@@ -1283,7 +1338,10 @@ internal sealed class WorkspaceChangeTracker : IDisposable
                       string.Equals(changeType, "RenamedFrom", StringComparison.Ordinal)))
             {
                 // A deleted or renamed-away path without an extension may have been a directory (already gone).
-                Interlocked.Increment(ref _uncertaintyGeneration);
+                if (IsRelevantDirectory(fullPath))
+                {
+                    Interlocked.Increment(ref _uncertaintyGeneration);
+                }
             }
 
             if (WorkspaceChangeClassifier.ShouldIgnore(fullPath, _rootDirectory, _includeGenerated))

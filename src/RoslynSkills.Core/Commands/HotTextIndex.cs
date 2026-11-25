@@ -149,6 +149,7 @@ internal sealed class HotTextIndex
                     }
 
                     _coveredDirectories.Add(normalized);
+                    tracker.RegisterIndexedDirectory(normalized);
                 }
                 else
                 {
