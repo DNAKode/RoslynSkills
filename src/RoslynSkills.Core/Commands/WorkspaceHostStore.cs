@@ -18,6 +18,11 @@ internal interface IWorkspaceHostStore
 
     WorkspaceStatus BuildStatus(HostedWorkspace hosted);
 
+    /// <summary>
+    /// Status for a pre-call freshness check. Skips every disk stat/enumeration (mode <c>watcher_fast_path</c>) when
+    /// the change watcher proves nothing changed; otherwise performs the full reconciliation (<c>full_scan</c>).
+    /// </summary>
+    WorkspaceStatus BuildFreshnessStatus(HostedWorkspace hosted, bool forceFullScan, out string freshnessMode);
     Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshAsync(
         string handle,
         WorkspaceStatus status,
@@ -169,7 +174,8 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             ProjectSourceRules: projectSourceRules,
             BaselineExcludedSourcePaths: baselineExcludedSourcePaths,
             TrackedWriteTimes: trackedWriteTimes,
-            ChangeTracker: changeTracker);
+            ChangeTracker: changeTracker,
+            TextIndex: new HotTextIndex(workspace.RootDirectory));
 
         return hosted;
     }
@@ -206,8 +212,40 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         }
     }
 
-    public WorkspaceStatus BuildStatus(HostedWorkspace hosted)
+    public WorkspaceStatus BuildFreshnessStatus(HostedWorkspace hosted, bool forceFullScan, out string freshnessMode)
     {
+        if (!forceFullScan &&
+            !HotWorkspaceFreshnessSettings.AlwaysFullScan &&
+            hosted.ChangeTracker.TryWatcherBarrier(HotWorkspaceFreshnessSettings.BarrierTimeout) &&
+            hosted.ChangeTracker.IsWatcherTrusted(HotWorkspaceFreshnessSettings.SafetySweepInterval))
+        {
+            // The watcher is caught up and has been complete since the last clean full scan: its queued changes are
+            // the whole truth, so no tracked path is stat-ed and no project directory is walked.
+            freshnessMode = HotWorkspaceFreshnessSettings.WatcherFastPathMode;
+            return BuildStatusCore(hosted, trackerOnly: true);
+        }
+
+        freshnessMode = HotWorkspaceFreshnessSettings.FullScanMode;
+        return BuildStatus(hosted);
+    }
+
+    /// <summary>Status after an incremental refresh: tracker-only while the watcher is trusted, a full scan otherwise.</summary>
+    private WorkspaceStatus BuildPostRefreshStatus(HostedWorkspace hosted)
+        => !HotWorkspaceFreshnessSettings.AlwaysFullScan &&
+           hosted.ChangeTracker.IsWatcherTrusted(HotWorkspaceFreshnessSettings.SafetySweepInterval)
+            ? BuildStatusCore(hosted, trackerOnly: true)
+            : BuildStatus(hosted);
+
+    public WorkspaceStatus BuildStatus(HostedWorkspace hosted)
+        => BuildStatusCore(hosted, trackerOnly: false);
+
+    private WorkspaceStatus BuildStatusCore(HostedWorkspace hosted, bool trackerOnly)
+    {
+        if (!trackerOnly)
+        {
+            hosted.ChangeTracker.BeginFullReconcile();
+        }
+
         Dictionary<string, WorkspaceChange> changes = new(PathComparer);
         List<string>? staleWatcherPaths = null;
 
@@ -242,7 +280,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             hosted.ChangeTracker.ClearPaths(staleWatcherPaths);
         }
 
-        foreach (string path in hosted.TrackedPaths)
+        foreach (string path in trackerOnly ? Array.Empty<string>() : hosted.TrackedPaths)
         {
             DateTimeOffset? previous = hosted.TrackedWriteTimes.TryGetValue(path, out DateTimeOffset? value)
                 ? value
@@ -270,7 +308,9 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         }
 
         // Catch newly added structural config files (e.g., Directory.Build.props) even if watcher lagged.
-        foreach (string configPath in EnumerateExistingStructuralConfigPaths(hosted.Workspace.RootDirectory, hosted.TrackedProjectPaths))
+        foreach (string configPath in trackerOnly
+                     ? Array.Empty<string>()
+                     : EnumerateExistingStructuralConfigPaths(hosted.Workspace.RootDirectory, hosted.TrackedProjectPaths))
         {
             if (hosted.TrackedWriteTimes.ContainsKey(configPath) || changes.ContainsKey(configPath))
             {
@@ -298,7 +338,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 
         // Reconcile new source files under loaded project folders directly from disk so creations by external
         // tools, git checkout, or git stash pop are visible immediately without relying on watcher timing.
-        if (hosted.ProjectSourceRules.Count > 0)
+        if (!trackerOnly && hosted.ProjectSourceRules.Count > 0)
         {
             DateTimeOffset observedUtc = DateTimeOffset.UtcNow;
             foreach (string candidatePath in ProjectSourceRules.EnumerateCandidateSourceFiles(
@@ -330,6 +370,11 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             .OrderBy(change => change.Path, PathComparer)
             .ToArray();
         bool requiresReload = dirtyEntries.Any(change => change.RequiresReload);
+        if (!trackerOnly)
+        {
+            hosted.ChangeTracker.CompleteFullReconcile(clean: dirtyEntries.Length == 0);
+        }
+
         return new WorkspaceStatus(
             Loaded: true,
             Dirty: dirtyEntries.Length > 0,
@@ -458,6 +503,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
         }
 
         // Record write times before reading file contents so an edit arriving mid-refresh is still caught next call.
+        DateTimeOffset refreshStartedUtc = DateTimeOffset.UtcNow;
         Dictionary<string, DateTimeOffset?> preReadWriteTimes = new(PathComparer);
         foreach (string path in normalizedModifiedOrAdded)
         {
@@ -488,8 +534,8 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 
         if (updatedPaths.Count == 0 && appliedRemovedPaths.Count == 0)
         {
-            hosted.ChangeTracker.ClearPaths(normalizedModifiedOrAdded.Concat(normalizedRemoved));
-            WorkspaceStatus unchangedAfter = BuildStatus(hosted);
+            hosted.ChangeTracker.ClearPaths(normalizedModifiedOrAdded.Concat(normalizedRemoved), observedBeforeUtc: refreshStartedUtc);
+            WorkspaceStatus unchangedAfter = BuildPostRefreshStatus(hosted);
             return new WorkspaceRefreshResult(
                 Applied: false,
                 RefreshAction: "none",
@@ -552,7 +598,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
 
         if (addedPaths.Count > 0)
         {
-            hosted.ChangeTracker.TrackSourcePaths(addedPaths);
+            hosted.ChangeTracker.TrackSourcePaths(addedPaths, observedBeforeUtc: refreshStartedUtc);
         }
 
         if (appliedRemovedPaths.Count > 0)
@@ -560,7 +606,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             hosted.ChangeTracker.UntrackSourcePaths(appliedRemovedPaths);
         }
 
-        hosted.ChangeTracker.ClearPaths(updatedPaths);
+        hosted.ChangeTracker.ClearPaths(updatedPaths, observedBeforeUtc: refreshStartedUtc);
 
         string fingerprint = ComputeFingerprint(updatedWorkspace, trackedWriteTimes);
         HostedWorkspace refreshed = hosted with
@@ -597,7 +643,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             .OrderBy(path => path, PathComparer)
             .ToArray();
 
-        WorkspaceStatus statusAfter = BuildStatus(refreshed);
+        WorkspaceStatus statusAfter = BuildPostRefreshStatus(refreshed);
         return new WorkspaceRefreshResult(
             Applied: true,
             RefreshAction: WorkspaceHostProtocol.RefreshAction.IncrementalDocumentUpdate,
@@ -797,7 +843,8 @@ internal sealed record HostedWorkspace(
     IReadOnlyList<ProjectSourceRules> ProjectSourceRules,
     IReadOnlySet<string> BaselineExcludedSourcePaths,
     IReadOnlyDictionary<string, DateTimeOffset?> TrackedWriteTimes,
-    WorkspaceChangeTracker ChangeTracker) : IDisposable
+    WorkspaceChangeTracker ChangeTracker,
+    HotTextIndex TextIndex) : IDisposable
 {
     public void Dispose()
     {
@@ -851,6 +898,179 @@ internal sealed class WorkspaceChangeTracker : IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, WorkspaceChange> _changes = new(PathComparer);
 
+    // Zero-stat freshness support. The watcher is the primary change feed; these members let a caller prove that
+    // the feed has been complete since its last full disk reconciliation.
+    private readonly HashSet<string> _textDirtyPaths = new(PathComparer);
+    private long _uncertaintyGeneration;
+    private long _reconciledGeneration = -1;
+    private long _pendingReconcileGeneration = -1;
+    private bool _reconciledClean;
+    private long _lastCleanReconcileTicksUtc;
+    private const int MaxTrackedTextDirtyPaths = 20_000;
+
+    /// <summary>
+    /// Increments whenever the watcher may have lost or never reported a change (error/overflow, a directory
+    /// created/renamed/removed, too many queued paths). A consumer that remembers the generation it last
+    /// reconciled at knows it must rescan the disk once when the value moved.
+    /// </summary>
+    public long UncertaintyGeneration => Interlocked.Read(ref _uncertaintyGeneration);
+
+    public bool HasWatcher => _watcher is not null;
+
+    private readonly string? _barrierDirectory;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ManualResetEventSlim> _barrierWaiters = new(PathComparer);
+    private int _barrierSequence;
+
+    /// <summary>
+    /// Proves that the watcher has dispatched every change that happened before this call: creates a uniquely named
+    /// marker file in a build-output folder (<c>obj</c>/<c>bin</c> of a loaded project, ignored by the tracker and by
+    /// git) and waits for its creation event. A watcher delivers events in order, so once the marker's event arrived,
+    /// every earlier edit is already recorded. Returns false (caller must do a full scan) when no marker folder exists,
+    /// the marker cannot be written, or its event does not arrive in <paramref name="timeout"/> (overflow, backlog).
+    /// </summary>
+    public bool TryWatcherBarrier(TimeSpan timeout)
+    {
+        if (_watcher is null || _barrierDirectory is null)
+        {
+            return false;
+        }
+
+        string path = Path.Combine(
+            _barrierDirectory,
+            $".roslynskills-sync-{Environment.ProcessId}-{Interlocked.Increment(ref _barrierSequence)}.tmp");
+        using ManualResetEventSlim signal = new(false);
+        _barrierWaiters[path] = signal;
+        try
+        {
+            File.WriteAllBytes(path, Array.Empty<byte>());
+            return signal.Wait(timeout);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        finally
+        {
+            _barrierWaiters.TryRemove(path, out _);
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A leftover marker is an empty, ignored dotfile in a build folder.
+            }
+        }
+    }
+
+    private static string? ChooseBarrierDirectory(IEnumerable<string> projectPaths)
+    {
+        foreach (string folderName in new[] { "obj", "bin" })
+        {
+            foreach (string projectPath in projectPaths.OrderBy(path => path, PathComparer))
+            {
+                string? projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath));
+                if (projectDirectory is null)
+                {
+                    continue;
+                }
+
+                string candidate = Path.Combine(projectDirectory, folderName);
+                if (Directory.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Marks the start of a full disk reconciliation (stat sweep) of tracked state.</summary>
+    public void BeginFullReconcile()
+    {
+        lock (_gate)
+        {
+            _pendingReconcileGeneration = UncertaintyGeneration;
+        }
+    }
+
+    /// <summary>
+    /// Marks the end of a full reconciliation. Only a sweep that found the workspace clean lets
+    /// <see cref="TryConfirmQuiescent"/> answer true afterwards.
+    /// </summary>
+    public void CompleteFullReconcile(bool clean)
+    {
+        lock (_gate)
+        {
+            _reconciledClean = clean;
+            if (clean)
+            {
+                _reconciledGeneration = _pendingReconcileGeneration;
+                Interlocked.Exchange(ref _lastCleanReconcileTicksUtc, DateTime.UtcNow.Ticks);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when no stat sweep is needed to know that the workspace equals the disk: a healthy watcher, no events
+    /// queued, nothing uncertain since the last clean full reconciliation, and that reconciliation is younger than
+    /// <paramref name="safetyInterval"/> (a periodic backstop for events the OS never delivered).
+    /// </summary>
+    public bool TryConfirmQuiescent(TimeSpan safetyInterval)
+    {
+        if (!IsWatcherTrusted(safetyInterval))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            return _changes.Count == 0;
+        }
+    }
+
+    /// <summary>
+    /// True when the watcher has not lost or skipped anything since the last clean full reconciliation, so its queued
+    /// changes (possibly none) are the complete set of differences between the workspace and the disk. The reconciliation
+    /// must be younger than <paramref name="safetyInterval"/>, a periodic backstop for events the OS never delivered.
+    /// </summary>
+    public bool IsWatcherTrusted(TimeSpan safetyInterval)
+    {
+        if (_watcher is null)
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (!_reconciledClean || _reconciledGeneration != UncertaintyGeneration)
+            {
+                return false;
+            }
+
+            long lastClean = Interlocked.Read(ref _lastCleanReconcileTicksUtc);
+            return lastClean != 0 &&
+                   DateTime.UtcNow - new DateTime(lastClean, DateTimeKind.Utc) <= safetyInterval;
+        }
+    }
+
+    /// <summary>Takes the source-text paths (.cs/.csx) the watcher reported since the last call.</summary>
+    public string[] DrainTextDirtyPaths()
+    {
+        lock (_gate)
+        {
+            if (_textDirtyPaths.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            string[] drained = _textDirtyPaths.ToArray();
+            _textDirtyPaths.Clear();
+            return drained;
+        }
+    }
+
     private WorkspaceChangeTracker(
         FileSystemWatcher? watcher,
         string rootDirectory,
@@ -869,6 +1089,7 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         _projectSourceRules = projectSourceRules;
         _baselineExcludedSourcePaths = baselineExcludedSourcePaths;
         _includeGenerated = includeGenerated;
+        _barrierDirectory = watcher is null ? null : ChooseBarrierDirectory(_trackedProjectPaths);
     }
 
     public static WorkspaceChangeTracker Start(
@@ -898,6 +1119,7 @@ internal sealed class WorkspaceChangeTracker : IDisposable
             IncludeSubdirectories = true,
             InternalBufferSize = 65536,
             NotifyFilter = NotifyFilters.FileName |
+                           NotifyFilters.DirectoryName |
                            NotifyFilters.LastWrite |
                            NotifyFilters.Size |
                            NotifyFilters.CreationTime,
@@ -920,8 +1142,9 @@ internal sealed class WorkspaceChangeTracker : IDisposable
             tracker.Record(args.FullPath, "RenamedTo");
         };
         // A WatcherError (e.g. buffer overflow under heavy git/build churn) must not force a reload:
-        // BuildStatus reconciles tracked paths and loaded project directories directly from disk.
-        watcher.Error += (_, _) => { };
+        // BuildStatus reconciles tracked paths and loaded project directories directly from disk. The error does
+        // invalidate the zero-stat fast path until the next clean full reconciliation.
+        watcher.Error += (_, _) => Interlocked.Increment(ref tracker._uncertaintyGeneration);
         watcher.EnableRaisingEvents = true;
         return tracker;
     }
@@ -934,14 +1157,14 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         }
     }
 
-    public void TrackSourcePaths(IEnumerable<string> paths)
+    public void TrackSourcePaths(IEnumerable<string> paths, DateTimeOffset? observedBeforeUtc = null)
     {
         lock (_gate)
         {
             foreach (string path in paths.Select(Path.GetFullPath))
             {
                 _trackedSourcePaths.Add(path);
-                _changes.Remove(path);
+                RemoveChangeLocked(path, observedBeforeUtc);
             }
         }
     }
@@ -958,15 +1181,31 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         }
     }
 
-    public void ClearPaths(IEnumerable<string> paths)
+    /// <summary>
+    /// Forgets queued changes for <paramref name="paths"/>. With <paramref name="observedBeforeUtc"/>, only changes the
+    /// watcher observed before that instant go, so an edit that landed while a refresh was reading the file stays queued.
+    /// </summary>
+    public void ClearPaths(IEnumerable<string> paths, DateTimeOffset? observedBeforeUtc = null)
     {
         lock (_gate)
         {
             foreach (string path in paths.Select(Path.GetFullPath))
             {
-                _changes.Remove(path);
+                RemoveChangeLocked(path, observedBeforeUtc);
             }
         }
+    }
+
+    private void RemoveChangeLocked(string path, DateTimeOffset? observedBeforeUtc)
+    {
+        if (observedBeforeUtc is { } cutoff &&
+            _changes.TryGetValue(path, out WorkspaceChange? existing) &&
+            existing.ObservedUtc > cutoff)
+        {
+            return;
+        }
+
+        _changes.Remove(path);
     }
 
     public void Dispose()
@@ -984,8 +1223,60 @@ internal sealed class WorkspaceChangeTracker : IDisposable
         try
         {
             string fullPath = Path.GetFullPath(path);
-            if (Directory.Exists(fullPath) ||
-                WorkspaceChangeClassifier.ShouldIgnore(fullPath, _rootDirectory, _includeGenerated))
+            if (!_barrierWaiters.IsEmpty && _barrierWaiters.TryGetValue(fullPath, out ManualResetEventSlim? barrierSignal))
+            {
+                try
+                {
+                    barrierSignal.Set();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The waiter timed out and left already.
+                }
+
+                return;
+            }
+
+            if (WorkspaceChangeClassifier.ShouldIgnore(fullPath, _rootDirectory, includeGenerated: true))
+            {
+                // Build output and tool folders never matter, whether the event names a file or a directory.
+                return;
+            }
+
+            if (Directory.Exists(fullPath))
+            {
+                // A directory that appeared or was moved into the tree can bring files without per-file events;
+                // timestamp-only "Changed" events on a directory are noise.
+                if (!string.Equals(changeType, "Changed", StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref _uncertaintyGeneration);
+                }
+
+                return;
+            }
+
+            bool isTextPath = HotTextIndex.IsIndexedPath(fullPath);
+            if (isTextPath)
+            {
+                lock (_gate)
+                {
+                    _textDirtyPaths.Add(fullPath);
+                    if (_textDirtyPaths.Count > MaxTrackedTextDirtyPaths)
+                    {
+                        _textDirtyPaths.Clear();
+                        Interlocked.Increment(ref _uncertaintyGeneration);
+                    }
+                }
+            }
+            else if (string.IsNullOrEmpty(Path.GetExtension(fullPath)) &&
+                     (string.Equals(changeType, "Deleted", StringComparison.Ordinal) ||
+                      string.Equals(changeType, "RenamedFrom", StringComparison.Ordinal)))
+            {
+                // A deleted or renamed-away path without an extension may have been a directory (already gone).
+                Interlocked.Increment(ref _uncertaintyGeneration);
+            }
+
+            if (WorkspaceChangeClassifier.ShouldIgnore(fullPath, _rootDirectory, _includeGenerated))
             {
                 return;
             }

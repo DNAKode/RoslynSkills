@@ -1470,8 +1470,18 @@ Workflow:
         string routingMode = GetDaemonRoutingMode();
         bool daemonEnabled = !noDaemon && !string.Equals(routingMode, "off", StringComparison.OrdinalIgnoreCase);
         bool requireHotWorkspace = daemonEnabled &&
+                                   !command.Descriptor.HotWorkspaceOptional &&
                                    (string.Equals(routingMode, "required", StringComparison.OrdinalIgnoreCase) ||
                                     IsPublishedModeEnabled("ROSCLI_REQUIRE_HOT_WORKSPACE"));
+
+        if (daemonEnabled &&
+            command.Descriptor.RunsOnHotWorkspace &&
+            command.Descriptor.HotWorkspaceOptional &&
+            string.Equals(commandId, "ctx.search_text", StringComparison.Ordinal))
+        {
+            // Text search keeps its default scope (the bound workspace) whether it ends up on the host or in-process.
+            input = TryApplyDefaultWorkspaceScopeFallback(commandId, input);
+        }
 
         PreResolvedHotWorkspace? preResolved = null;
         JsonElement validationInput = input;
@@ -1690,8 +1700,9 @@ Workflow:
             return null;
         }
 
-        bool requireHotWorkspace = string.Equals(routingMode, "required", StringComparison.OrdinalIgnoreCase) ||
-                                   IsPublishedModeEnabled("ROSCLI_REQUIRE_HOT_WORKSPACE");
+        bool requireHotWorkspace = !command.Descriptor.HotWorkspaceOptional &&
+                                   (string.Equals(routingMode, "required", StringComparison.OrdinalIgnoreCase) ||
+                                    IsPublishedModeEnabled("ROSCLI_REQUIRE_HOT_WORKSPACE"));
 
         // A command declares in its descriptor that it can run on the host's loaded workspace (RunsOnHotWorkspace);
         // the routing never keeps its own list of command ids.
@@ -1802,7 +1813,7 @@ Workflow:
         WorkspaceHostResponse? response = sendResult.Response;
         if (response is null)
         {
-            if (!requireHotWorkspace && !resolvedHotWorkspace)
+            if (command.Descriptor.HotWorkspaceOptional || (!requireHotWorkspace && !resolvedHotWorkspace))
             {
                 return null;
             }
@@ -1917,7 +1928,10 @@ Workflow:
                 ValidateMs: validateTimer is null ? null : Math.Round(validateTimer.Elapsed.TotalMilliseconds, 3),
                 HostElapsedMs: response.ElapsedMs,
                 RoundtripMs: Math.Round(roundtripTimer.Elapsed.TotalMilliseconds, 3),
-                TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3)),
+                TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3),
+                HostFreshnessMs: response.FreshnessMs,
+                HostExecuteMs: response.ExecuteMs,
+                HostFreshnessMode: response.FreshnessMode),
             Workspace: response.Workspace);
     }
 

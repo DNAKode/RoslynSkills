@@ -79,7 +79,10 @@ public sealed record WorkspaceHostResponse(
     [property: JsonPropertyName("errors")] IReadOnlyList<CommandError>? Errors = null,
     [property: JsonPropertyName("preview")] string? Preview = null,
     [property: JsonPropertyName("summary")] string? Summary = null,
-    [property: JsonPropertyName("trace_id")] string? TraceId = null);
+    [property: JsonPropertyName("trace_id")] string? TraceId = null,
+    [property: JsonPropertyName("freshness_ms"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? FreshnessMs = null,
+    [property: JsonPropertyName("execute_ms"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? ExecuteMs = null,
+    [property: JsonPropertyName("freshness_mode"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FreshnessMode = null);
 
 public sealed record WorkspaceHostWorkspaceMetadata(
     [property: JsonPropertyName("alias")] string? Alias,

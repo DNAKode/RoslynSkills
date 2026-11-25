@@ -11,7 +11,8 @@ public sealed record CommandDescriptor(
     bool MutatesState,
     string Maturity = CommandMaturity.Stable,
     IReadOnlyList<string>? Traits = null,
-    bool RunsOnHotWorkspace = false);
+    bool RunsOnHotWorkspace = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool HotWorkspaceOptional = false);
 
 public static class CommandMaturity
 {
@@ -38,7 +39,10 @@ public sealed record CommandTransportTimings(
     [property: JsonPropertyName("execute_ms")] double? ExecuteMs = null,
     [property: JsonPropertyName("host_elapsed_ms")] double? HostElapsedMs = null,
     [property: JsonPropertyName("roundtrip_ms")] double? RoundtripMs = null,
-    [property: JsonPropertyName("total_ms")] double? TotalMs = null);
+    [property: JsonPropertyName("total_ms")] double? TotalMs = null,
+    [property: JsonPropertyName("host_freshness_ms"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? HostFreshnessMs = null,
+    [property: JsonPropertyName("host_execute_ms"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? HostExecuteMs = null,
+    [property: JsonPropertyName("host_freshness_mode"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HostFreshnessMode = null);
 
 public sealed record CommandTransportMetadata(
     [property: JsonPropertyName("mode")] string Mode,

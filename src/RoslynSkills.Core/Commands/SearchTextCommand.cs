@@ -15,7 +15,11 @@ public sealed class SearchTextCommand : IAgentCommand
         Summary: "Search literal/regex text patterns across one file or scoped roots with bounded structured matches.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        // Served from the hot workspace's in-memory text index when a daemon is bound; runs in-process otherwise,
+        // also under ROSCLI_DAEMON=required, because text search is valid outside any loaded workspace.
+        RunsOnHotWorkspace: true,
+        HotWorkspaceOptional: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
@@ -171,7 +175,18 @@ public sealed class SearchTextCommand : IAgentCommand
         bool truncated = false;
         bool fileLimitReached = false;
 
-        foreach ((SearchScope scope, string candidatePath) in EnumerateCandidateFiles(scopes))
+        HotTextIndex? textIndex = null;
+        IReadOnlyDictionary<string, IndexedTextFile>? textSnapshot = null;
+        if (!includeGenerated &&
+            UsesOnlyCSharpGlobs(includeGlobs) &&
+            TryGetHostedWorkspace(input, out HostedWorkspace? hosted) &&
+            hosted is not null)
+        {
+            textIndex = hosted.TextIndex;
+            textSnapshot = textIndex.Snapshot(hosted.ChangeTracker);
+        }
+
+        foreach ((SearchScope scope, string candidatePath, IndexedTextFile? indexedFile) in EnumerateCandidateFiles(scopes, textIndex, textSnapshot))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -200,15 +215,22 @@ public sealed class SearchTextCommand : IAgentCommand
             }
 
             string[] lines;
-            try
+            if (indexedFile is not null)
             {
-                lines = await File.ReadAllLinesAsync(fullPath, cancellationToken).ConfigureAwait(false);
+                lines = indexedFile.Lines;
             }
-            catch (Exception ex)
+            else
             {
-                return new CommandExecutionResult(
-                    null,
-                    new[] { new CommandError("io_error", $"Failed to read '{fullPath}': {ex.Message}") });
+                try
+                {
+                    lines = await File.ReadAllLinesAsync(fullPath, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    return new CommandExecutionResult(
+                        null,
+                        new[] { new CommandError("io_error", $"Failed to read '{fullPath}': {ex.Message}") });
+                }
             }
 
             filesScanned++;
@@ -351,6 +373,7 @@ public sealed class SearchTextCommand : IAgentCommand
             analysis_scope = new
             {
                 analysis_mode = "directory_scan",
+                text_source = textIndex is not null ? "hot_text_index" : "disk",
                 workspace_kind = scopes.All(scope => scope.is_file) ? "file" : "directory",
                 resolved_scope_count = scopes.Count,
                 scopes = scopes.Select(scope => new
@@ -693,15 +716,50 @@ public sealed class SearchTextCommand : IAgentCommand
         return scopes;
     }
 
-    private static IEnumerable<(SearchScope Scope, string CandidatePath)> EnumerateCandidateFiles(IReadOnlyList<SearchScope> scopes)
+    private static bool UsesOnlyCSharpGlobs(IReadOnlyList<string> includeGlobs)
+        => includeGlobs.Count > 0 &&
+           includeGlobs.All(glob =>
+               glob.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+               glob.EndsWith(".csx", StringComparison.OrdinalIgnoreCase));
+
+    private static bool TryGetHostedWorkspace(JsonElement input, out HostedWorkspace? hosted)
+    {
+        hosted = null;
+        string? handle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        return handle is not null &&
+               WorkspaceHostStoreProvider.Current.TryGet(handle, out hosted) &&
+               hosted is not null;
+    }
+
+    private static IEnumerable<(SearchScope Scope, string CandidatePath, IndexedTextFile? Indexed)> EnumerateCandidateFiles(
+        IReadOnlyList<SearchScope> scopes,
+        HotTextIndex? textIndex,
+        IReadOnlyDictionary<string, IndexedTextFile>? textSnapshot)
     {
         foreach (SearchScope scope in scopes)
         {
+            bool covered = textIndex is not null && textSnapshot is not null && textIndex.Covers(scope.path);
             if (scope.is_file)
             {
                 if (File.Exists(scope.path))
                 {
-                    yield return (scope, scope.path);
+                    IndexedTextFile? indexed = null;
+                    if (covered)
+                    {
+                        textSnapshot!.TryGetValue(scope.path, out indexed);
+                    }
+
+                    yield return (scope, scope.path, indexed);
+                }
+
+                continue;
+            }
+
+            if (covered)
+            {
+                foreach (IndexedTextFile file in HotTextIndex.EnumerateBeneath(textSnapshot!, scope.path))
+                {
+                    yield return (scope, file.Path, file);
                 }
 
                 continue;
@@ -714,7 +772,7 @@ public sealed class SearchTextCommand : IAgentCommand
 
             foreach (string file in Directory.EnumerateFiles(scope.path, "*", SearchOption.AllDirectories))
             {
-                yield return (scope, file);
+                yield return (scope, file, null);
             }
         }
     }

@@ -30,10 +30,13 @@ internal static class Program
         WriteIndented = false,
     };
 
+    private static HotCommandRouter? Router;
+
     public static async Task<int> Main(string[] args)
     {
         _ = args;
         ICommandRegistry registry = DefaultRegistryFactory.Create();
+        Router = HotCommandRouter.IsEnabled() ? new HotCommandRouter(registry) : null;
         ToolMap toolMap = BuildToolMap(registry.ListCommands());
 
         Stream input = Console.OpenStandardInput();
@@ -460,6 +463,24 @@ internal static class Program
         JsonElement input)
     {
         Stopwatch totalTimer = Stopwatch.StartNew();
+        if (Router is not null && command.Descriptor.RunsOnHotWorkspace)
+        {
+            // Hot-workspace commands take the shell CLI's route to the warm daemon (sub-50 ms steady state) instead of
+            // loading the solution inside this process.
+            try
+            {
+                CommandEnvelope? routed = await Router.TryRunAsync(commandId, input, CancellationToken.None).ConfigureAwait(false);
+                if (routed is not null)
+                {
+                    return routed;
+                }
+            }
+            catch (Exception ex) when (!command.Descriptor.MutatesState)
+            {
+                Console.Error.WriteLine($"roslynskills-mcp: hot routing failed for {commandId}, running in-process: {ex.Message}");
+            }
+        }
+
         try
         {
             Stopwatch validateTimer = Stopwatch.StartNew();

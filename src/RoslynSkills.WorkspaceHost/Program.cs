@@ -1143,13 +1143,17 @@ internal static class Program
             return;
         }
 
+        Stopwatch freshnessTimer = Stopwatch.StartNew();
         HotWorkspaceFreshnessResult? freshness = await EnsureHotWorkspaceFreshAsync(
             command,
             root,
             input,
             cancellationToken).ConfigureAwait(false);
+        freshnessTimer.Stop();
 
+        Stopwatch executeTimer = Stopwatch.StartNew();
         CommandExecutionResult result = await command.ExecuteAsync(input, cancellationToken).ConfigureAwait(false);
+        executeTimer.Stop();
 
         UpdateAliasBindings(root, method, result.Data, result.Ok);
         object? responseData = BuildResponseData(commandId, result.Data, result.Ok);
@@ -1170,7 +1174,10 @@ internal static class Program
             Workspace: workspaceMetadata,
             Data: responseData,
             Telemetry: result.Telemetry,
-            Errors: result.Errors)).ConfigureAwait(false);
+            Errors: result.Errors,
+            FreshnessMs: freshness is null ? null : Math.Round(freshnessTimer.Elapsed.TotalMilliseconds, 3),
+            ExecuteMs: Math.Round(executeTimer.Elapsed.TotalMilliseconds, 3),
+            FreshnessMode: freshness?.Mode)).ConfigureAwait(false);
     }
 
     /// <summary>

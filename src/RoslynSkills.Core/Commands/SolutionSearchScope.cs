@@ -144,7 +144,7 @@ internal static class SolutionSearchScope
             return true;
         }
 
-        return unit.Tree.GetText().ToString().Contains(name, StringComparison.Ordinal);
+        return IdentifierIndex.MightMention(unit.Tree, name);
     }
 
     /// <summary>The identifier that must appear in a file for it to use <paramref name="symbol"/>, or null when unknown.</summary>

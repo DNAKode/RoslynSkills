@@ -11,7 +11,41 @@ internal sealed record HotWorkspaceFreshnessResult(
     bool RequiresReload,
     IReadOnlyList<string> UpdatedPaths,
     IReadOnlyList<string> InvalidatedPaths,
-    CommandError? Error);
+    CommandError? Error,
+    string? Mode = null);
+
+/// <summary>Tuning for the zero-stat freshness fast path.</summary>
+internal static class HotWorkspaceFreshnessSettings
+{
+    public const string WatcherFastPathMode = "watcher_fast_path";
+    public const string FullScanMode = "full_scan";
+
+    private const int DefaultSafetySweepSeconds = 15;
+
+    /// <summary>How long a call waits for the watcher to prove it is caught up before it falls back to a full scan.</summary>
+    public static TimeSpan BarrierTimeout { get; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// <c>ROSLYNSKILLS_FRESHNESS=sweep</c> (or <c>full_scan</c>) restores the pre-call stat sweep on every call.
+    /// </summary>
+    public static bool AlwaysFullScan { get; } = IsSweepRequested(Environment.GetEnvironmentVariable("ROSLYNSKILLS_FRESHNESS"));
+
+    /// <summary>
+    /// Longest time the host trusts the file watcher without a full disk reconciliation, a backstop against change
+    /// events the OS never delivered. <c>ROSLYNSKILLS_FRESHNESS_SAFETY_SWEEP_SECONDS</c> overrides the default.
+    /// </summary>
+    public static TimeSpan SafetySweepInterval { get; } = ResolveSafetyInterval(
+        Environment.GetEnvironmentVariable("ROSLYNSKILLS_FRESHNESS_SAFETY_SWEEP_SECONDS"));
+
+    internal static bool IsSweepRequested(string? value)
+        => string.Equals(value?.Trim(), "sweep", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(value?.Trim(), FullScanMode, StringComparison.OrdinalIgnoreCase);
+
+    internal static TimeSpan ResolveSafetyInterval(string? value)
+        => double.TryParse(value?.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds) && seconds >= 0
+            ? TimeSpan.FromSeconds(seconds)
+            : TimeSpan.FromSeconds(DefaultSafetySweepSeconds);
+}
 
 /// <summary>
 /// Brings a hot workspace up to date with the files on disk before a command reads it, so a query always sees
@@ -44,7 +78,10 @@ internal static class HotWorkspaceFreshness
             return null;
         }
 
-        WorkspaceStatus statusBefore = store.BuildStatus(hosted);
+        WorkspaceStatus statusBefore = store.BuildFreshnessStatus(
+            hosted,
+            forceFullScan: string.Equals(policy, WorkspaceHostProtocol.RefreshPolicy.Strict, StringComparison.Ordinal),
+            out string freshnessMode);
         if (!statusBefore.Dirty)
         {
             return new HotWorkspaceFreshnessResult(
@@ -56,7 +93,8 @@ internal static class HotWorkspaceFreshness
                 RequiresReload: false,
                 Array.Empty<string>(),
                 Array.Empty<string>(),
-                Error: null);
+                Error: null,
+                Mode: freshnessMode);
         }
 
         WorkspaceRefreshResult result;
@@ -80,7 +118,8 @@ internal static class HotWorkspaceFreshness
             RequiresReload: statusAfter.RequiresReload,
             result.UpdatedPaths,
             statusAfter.InvalidatedPaths,
-            result.Error);
+            result.Error,
+            Mode: freshnessMode);
     }
 
     private static string NormalizePolicy(string? refreshPolicy)
