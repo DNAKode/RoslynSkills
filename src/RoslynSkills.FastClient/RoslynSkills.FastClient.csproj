@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Thin native client for the warm WorkspaceHost daemon. It does one thing: connect to the per-repository daemon pipe,
+    send the raw argument vector as a `cli/run` request and print the host's stdout, saving the ~0.2-0.7 s .NET startup
+    of the full roscli on every warm query. Anything it cannot serve (no daemon, lifecycle verbs, stdin input, any error)
+    runs the full roscli instead. Publish with: dotnet publish -c Release -r win-x64 -p:PublishAot=true
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>roscli-fast</AssemblyName>
+    <RootNamespace>RoslynSkills.FastClient</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <IsAotCompatible>true</IsAotCompatible>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <TieredPGO>false</TieredPGO>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- One definition of the repository-root and daemon-state hashing: the client must find the same daemon the CLI would. -->
+    <Compile Include="..\RoslynSkills.Core\Commands\RepositoryRootDiscovery.cs" Link="RepositoryRootDiscovery.cs" />
+  </ItemGroup>
+
+</Project>

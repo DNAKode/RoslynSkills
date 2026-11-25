@@ -188,29 +188,41 @@ public sealed class HotWorkspaceFastFreshnessTests
                 includeGenerated: false);
             HotTextIndex index = new(root);
 
-            IReadOnlyDictionary<string, IndexedTextFile> snapshot = index.Snapshot(tracker);
+            string[] scopes = { root };
+            IReadOnlyDictionary<string, IndexedTextFile> snapshot = index.Snapshot(tracker, scopes, out IReadOnlySet<string> unindexed);
+            Assert.Empty(unindexed);
             string[] relative = HotTextIndex.EnumerateBeneath(snapshot, root)
                 .Select(file => Path.GetRelativePath(root, file.Path).Replace('\\', '/'))
                 .ToArray();
             Assert.Equal(new[] { "m.csx", "z.cs", "a/a1.cs", "b/b1.cs", "a/inner/deep.cs" }, relative);
-            Assert.Equal(1, index.FullSyncCount);
+            Assert.Equal(0, index.FullSyncCount);
 
             // A second snapshot without changes does no work.
-            index.Snapshot(tracker);
-            Assert.Equal(1, index.FullSyncCount);
+            index.Snapshot(tracker, scopes, out _);
+            Assert.Equal(0, index.FullSyncCount);
             Assert.Equal(0, index.IncrementalRefreshCount);
 
             // A watcher-reported edit is applied incrementally.
             File.WriteAllText(Path.Combine(root, "z.cs"), "// z changed\n");
-            Assert.True(tracker.TryWatcherBarrier(TimeSpan.FromSeconds(5)) || !tracker.HasWatcher);
-            IReadOnlyDictionary<string, IndexedTextFile> changed = index.Snapshot(tracker);
+            Assert.True(tracker.TryWatcherBarrier(TimeSpan.FromSeconds(5)));
+            IReadOnlyDictionary<string, IndexedTextFile> changed = index.Snapshot(tracker, scopes, out _);
             Assert.Equal("// z changed", changed[Path.Combine(root, "z.cs")].Lines[0]);
-            Assert.Equal(1, index.FullSyncCount);
+            Assert.Equal(0, index.FullSyncCount);
             Assert.Equal(1, index.IncrementalRefreshCount);
 
             File.Delete(Path.Combine(root, "b", "b1.cs"));
-            Assert.True(tracker.TryWatcherBarrier(TimeSpan.FromSeconds(5)) || !tracker.HasWatcher);
-            Assert.DoesNotContain(Path.Combine(root, "b", "b1.cs"), index.Snapshot(tracker).Keys);
+            Assert.True(tracker.TryWatcherBarrier(TimeSpan.FromSeconds(5)));
+            Assert.DoesNotContain(Path.Combine(root, "b", "b1.cs"), index.Snapshot(tracker, scopes, out _).Keys);
+
+            // A directory move gives no per-file events; the watcher marks the tracker uncertain and the index rescans.
+            long generationBefore = tracker.UncertaintyGeneration;
+            Directory.Move(Path.Combine(root, "a"), Path.Combine(root, "moved"));
+            Assert.True(tracker.TryWatcherBarrier(TimeSpan.FromSeconds(5)));
+            Assert.True(tracker.UncertaintyGeneration > generationBefore);
+            IReadOnlyDictionary<string, IndexedTextFile> afterMove = index.Snapshot(tracker, scopes, out _);
+            Assert.Contains(Path.Combine(root, "moved", "a1.cs"), afterMove.Keys);
+            Assert.DoesNotContain(Path.Combine(root, "a", "a1.cs"), afterMove.Keys);
+            Assert.Equal(1, index.FullSyncCount);
         }
         finally
         {

@@ -19,10 +19,17 @@ internal interface IWorkspaceHostStore
     WorkspaceStatus BuildStatus(HostedWorkspace hosted);
 
     /// <summary>
+    /// Cheap status for callers that already know which paths to refresh (post-edit refresh): tracker-only while the
+    /// watcher is trusted, a full scan otherwise.
+    /// </summary>
+    WorkspaceStatus BuildQuickStatus(HostedWorkspace hosted);
+
+    /// <summary>
     /// Status for a pre-call freshness check. Skips every disk stat/enumeration (mode <c>watcher_fast_path</c>) when
     /// the change watcher proves nothing changed; otherwise performs the full reconciliation (<c>full_scan</c>).
     /// </summary>
     WorkspaceStatus BuildFreshnessStatus(HostedWorkspace hosted, bool forceFullScan, out string freshnessMode);
+
     Task<WorkspaceRefreshResult> ApplyIncrementalSourceRefreshAsync(
         string handle,
         WorkspaceStatus status,
@@ -230,6 +237,9 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
     }
 
     /// <summary>Status after an incremental refresh: tracker-only while the watcher is trusted, a full scan otherwise.</summary>
+    public WorkspaceStatus BuildQuickStatus(HostedWorkspace hosted)
+        => BuildPostRefreshStatus(hosted);
+
     private WorkspaceStatus BuildPostRefreshStatus(HostedWorkspace hosted)
         => !HotWorkspaceFreshnessSettings.AlwaysFullScan &&
            hosted.ChangeTracker.IsWatcherTrusted(HotWorkspaceFreshnessSettings.SafetySweepInterval)

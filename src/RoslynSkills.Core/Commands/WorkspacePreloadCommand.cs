@@ -82,6 +82,7 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
 
         IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
         HostedWorkspace hosted = workspaceStore.Add(loaded.Workspace, mode, includeGenerated, maxFiles);
+        HotWorkspaceWarmup.Start(loaded.Workspace.Solution);
         WorkspaceStatus status = workspaceStore.BuildStatus(hosted);
 
         object data = new

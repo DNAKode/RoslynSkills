@@ -19,6 +19,13 @@ public static class WorkspaceHostProtocol
         public const string WorkspaceList = "workspace/list";
         public const string DaemonStatus = "daemon/status";
         public const string Shutdown = "shutdown";
+
+        /// <summary>
+        /// Runs a shell-style <c>roscli</c> argument vector (<c>input.args</c>, <c>input.cwd</c>, <c>input.env</c>) inside
+        /// the warm host and returns its exact stdout. Answers <see cref="ErrorCode.CliFallback"/> when the invocation is
+        /// not eligible so a thin client can run the full CLI instead.
+        /// </summary>
+        public const string CliRun = "cli/run";
     }
 
     public static class RefreshPolicy
@@ -45,6 +52,7 @@ public static class WorkspaceHostProtocol
         public const string WorkspaceReloadRequired = "workspace_reload_required";
         public const string SolutionRequired = "solution_required";
         public const string DaemonAuthFailed = "daemon_auth_failed";
+        public const string CliFallback = "cli_fallback";
     }
 }
 

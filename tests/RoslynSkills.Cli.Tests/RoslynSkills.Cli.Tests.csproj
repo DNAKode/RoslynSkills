@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\RoslynSkills.Cli\RoslynSkills.Cli.csproj" />
     <ProjectReference Include="..\..\src\RoslynSkills.McpServer\RoslynSkills.McpServer.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\RoslynSkills.FastClient\RoslynSkills.FastClient.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\RoslynSkills.TransportServer\RoslynSkills.TransportServer.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

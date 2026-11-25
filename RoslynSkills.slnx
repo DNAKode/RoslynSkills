@@ -4,6 +4,7 @@
     <Project Path="src/RoslynSkills.Cli/RoslynSkills.Cli.csproj" />
     <Project Path="src/RoslynSkills.Contracts/RoslynSkills.Contracts.csproj" />
     <Project Path="src/RoslynSkills.Core/RoslynSkills.Core.csproj" />
+    <Project Path="src/RoslynSkills.FastClient/RoslynSkills.FastClient.csproj" />
     <Project Path="src/RoslynSkills.McpServer/RoslynSkills.McpServer.csproj" />
     <Project Path="src/RoslynSkills.TransportServer/RoslynSkills.TransportServer.csproj" />
     <Project Path="src/RoslynSkills.WorkspaceHost/RoslynSkills.WorkspaceHost.csproj" />

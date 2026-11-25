@@ -20,6 +20,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($OutputJson) { $OutputJson = [IO.Path]::GetFullPath($OutputJson) }
 Set-Location $RepoRoot
 $env:ROSCLI_DAEMON = 'required'
 

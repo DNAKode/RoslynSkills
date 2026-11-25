@@ -72,7 +72,7 @@ internal static class HotWorkspaceEditRefresh
         List<object> refreshes = new();
         foreach ((HostedWorkspace workspace, string[] matchingPaths) in matches)
         {
-            WorkspaceStatus statusBefore = store.BuildStatus(workspace);
+            WorkspaceStatus statusBefore = store.BuildQuickStatus(workspace);
             WorkspaceRefreshResult result = await store.ApplyIncrementalSourceRefreshForPathsAsync(
                     workspace.Handle,
                     statusBefore,

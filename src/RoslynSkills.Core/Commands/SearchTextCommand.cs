@@ -177,16 +177,21 @@ public sealed class SearchTextCommand : IAgentCommand
 
         HotTextIndex? textIndex = null;
         IReadOnlyDictionary<string, IndexedTextFile>? textSnapshot = null;
+        IReadOnlySet<string> unindexedScopes = new HashSet<string>(PathComparer);
         if (!includeGenerated &&
             UsesOnlyCSharpGlobs(includeGlobs) &&
             TryGetHostedWorkspace(input, out HostedWorkspace? hosted) &&
             hosted is not null)
         {
             textIndex = hosted.TextIndex;
-            textSnapshot = textIndex.Snapshot(hosted.ChangeTracker);
+            string[] directoryScopes = scopes
+                .Where(scope => !scope.is_file && Directory.Exists(scope.path) && textIndex.Covers(scope.path))
+                .Select(scope => scope.path)
+                .ToArray();
+            textSnapshot = textIndex.Snapshot(hosted.ChangeTracker, directoryScopes, out unindexedScopes);
         }
 
-        foreach ((SearchScope scope, string candidatePath, IndexedTextFile? indexedFile) in EnumerateCandidateFiles(scopes, textIndex, textSnapshot))
+        foreach ((SearchScope scope, string candidatePath, IndexedTextFile? indexedFile) in EnumerateCandidateFiles(scopes, textIndex, textSnapshot, unindexedScopes))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -373,7 +378,9 @@ public sealed class SearchTextCommand : IAgentCommand
             analysis_scope = new
             {
                 analysis_mode = "directory_scan",
-                text_source = textIndex is not null ? "hot_text_index" : "disk",
+                text_source = textIndex is null
+                    ? "disk"
+                    : unindexedScopes.Count == 0 ? "hot_text_index" : "mixed",
                 workspace_kind = scopes.All(scope => scope.is_file) ? "file" : "directory",
                 resolved_scope_count = scopes.Count,
                 scopes = scopes.Select(scope => new
@@ -734,11 +741,13 @@ public sealed class SearchTextCommand : IAgentCommand
     private static IEnumerable<(SearchScope Scope, string CandidatePath, IndexedTextFile? Indexed)> EnumerateCandidateFiles(
         IReadOnlyList<SearchScope> scopes,
         HotTextIndex? textIndex,
-        IReadOnlyDictionary<string, IndexedTextFile>? textSnapshot)
+        IReadOnlyDictionary<string, IndexedTextFile>? textSnapshot,
+        IReadOnlySet<string> unindexedScopes)
     {
         foreach (SearchScope scope in scopes)
         {
-            bool covered = textIndex is not null && textSnapshot is not null && textIndex.Covers(scope.path);
+            bool covered = textIndex is not null && textSnapshot is not null && textIndex.Covers(scope.path) &&
+                           (scope.is_file || !unindexedScopes.Contains(Path.TrimEndingDirectorySeparator(scope.path)));
             if (scope.is_file)
             {
                 if (File.Exists(scope.path))

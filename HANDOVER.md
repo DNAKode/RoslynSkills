@@ -29,6 +29,15 @@ RoslynSkills (`DNAKode/RoslynSkills`) is an engineering-first research program e
 - LSP comparator lane remains confounded by timeout/indexing instability.
 - Open-ended large-task comparisons confounded by trajectory variance; bounded-run protocol needed.
 
+### Warm-path latency (branch `feat/fast-index-and-mcp`)
+
+Measured on `CalcDb.slnx` (33 projects, 600 documents) with `scripts/Benchmark-HotWorkspaceQueries.ps1`; every response now carries `Transport.timings.host_freshness_ms`, `host_execute_ms` and `host_freshness_mode`.
+
+- **Zero-stat freshness**: a call with nothing pending skips the per-call stat sweep and project directory walk (`watcher_fast_path`; was 100-190 ms idle, 1.3 s on a busy disk). Falls back to `full_scan` for `refresh_policy: strict`, watcher errors/overflow, directory moves, barrier timeout, or every 15 s as a backstop. `ROSLYNSKILLS_FRESHNESS=sweep` restores the old behavior everywhere.
+- **Hot text index**: `ctx.search_text` over a bound workspace reads `HotTextIndex` (per searched directory, watcher-fed); `nav.find_invocations`/`analyze.impact_slice` prefilter documents with `IdentifierIndex`.
+- **MCP**: hot-workspace tools route through the shell CLI's daemon path (`HotCommandRouter`); `ROSLYNSKILLS_MCP_ROUTING=off` or `ROSCLI_DAEMON=off` keeps in-process execution.
+- **`roscli-fast`** (`src/RoslynSkills.FastClient`): thin client for the daemon's `cli/run` bridge. Publish with `dotnet publish src/RoslynSkills.FastClient -c Release -r win-x64 -p:PublishAot=true`; unserved invocations run the full CLI (`ROSCLI_FULL_PATH`, `roscli-full`, then PATH). `ROSCLI_FAST=off` disables it.
+
 ## Session-Start Quick Reference
 
 ```powershell

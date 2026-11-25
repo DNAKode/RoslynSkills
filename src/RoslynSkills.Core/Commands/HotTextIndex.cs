@@ -33,7 +33,12 @@ internal sealed class HotTextIndex
     private readonly Dictionary<string, IndexedTextFile> _files = new(PathComparer);
     private long _seenGeneration = -1;
     private DateTime _lastFullSyncUtc = DateTime.MinValue;
-    private bool _built;
+
+    // Directories whose whole subtree is indexed. A directory is indexed the first time a search names it, so the cost
+    // of walking a large repository is paid for the folders actually searched, once, and kept current by the watcher.
+    private readonly HashSet<string> _coveredDirectories = new(PathComparer);
+    private readonly HashSet<string> _oversizedDirectories = new(PathComparer);
+    private const int MaxEntriesPerDirectoryWalk = 60_000;
 
     public HotTextIndex(string rootDirectory)
     {
@@ -75,23 +80,34 @@ internal sealed class HotTextIndex
                fullPath[normalizedRoot.Length] == System.IO.Path.AltDirectorySeparatorChar;
     }
 
-    /// <summary>Brings the index up to date with the disk and returns a stable view of it.</summary>
-    public IReadOnlyDictionary<string, IndexedTextFile> Snapshot(WorkspaceChangeTracker tracker)
+    /// <summary>
+    /// Brings the index up to date with the disk, makes sure every directory in <paramref name="scopeDirectories"/> is
+    /// indexed, and returns a stable view. A scope that holds more than <see cref="MaxEntriesPerDirectoryWalk"/> entries
+    /// is reported in <paramref name="unindexed"/> and must be read from disk by the caller.
+    /// </summary>
+    public IReadOnlyDictionary<string, IndexedTextFile> Snapshot(
+        WorkspaceChangeTracker tracker,
+        IReadOnlyList<string> scopeDirectories,
+        out IReadOnlySet<string> unindexed)
     {
         lock (_gate)
         {
             string[] dirty = tracker.DrainTextDirtyPaths();
             long generation = tracker.UncertaintyGeneration;
-            bool fullSync = !_built ||
-                            !tracker.HasWatcher ||
-                            generation != _seenGeneration ||
-                            DateTime.UtcNow - _lastFullSyncUtc > HotWorkspaceFreshnessSettings.SafetySweepInterval;
+            bool fullSync = _coveredDirectories.Count > 0 &&
+                            (!tracker.HasWatcher ||
+                             generation != _seenGeneration ||
+                             DateTime.UtcNow - _lastFullSyncUtc > HotWorkspaceFreshnessSettings.SafetySweepInterval);
             if (fullSync)
             {
-                FullSyncLocked();
+                foreach (string covered in _coveredDirectories.ToArray())
+                {
+                    WalkDirectoryLocked(covered, replaceExisting: true);
+                }
+
+                _oversizedDirectories.Clear();
                 _seenGeneration = generation;
                 _lastFullSyncUtc = DateTime.UtcNow;
-                _built = true;
                 FullSyncCount++;
             }
             else if (dirty.Length > 0)
@@ -104,8 +120,60 @@ internal sealed class HotTextIndex
                 IncrementalRefreshCount++;
             }
 
+            HashSet<string> notIndexed = new(PathComparer);
+            foreach (string scope in scopeDirectories)
+            {
+                string normalized = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(scope));
+                if (IsUnderCoveredLocked(normalized))
+                {
+                    continue;
+                }
+
+                if (_oversizedDirectories.Contains(normalized))
+                {
+                    notIndexed.Add(normalized);
+                    continue;
+                }
+
+                if (_coveredDirectories.Count == 0)
+                {
+                    _seenGeneration = generation;
+                    _lastFullSyncUtc = DateTime.UtcNow;
+                }
+
+                if (WalkDirectoryLocked(normalized, replaceExisting: false))
+                {
+                    foreach (string descendant in _coveredDirectories.Where(dir => IsAtOrBelow(dir, normalized)).ToArray())
+                    {
+                        _coveredDirectories.Remove(descendant);
+                    }
+
+                    _coveredDirectories.Add(normalized);
+                }
+                else
+                {
+                    _oversizedDirectories.Add(normalized);
+                    notIndexed.Add(normalized);
+                }
+            }
+
+            unindexed = notIndexed;
             return new Dictionary<string, IndexedTextFile>(_files, PathComparer);
         }
+    }
+
+    private bool IsUnderCoveredLocked(string path)
+    {
+        string directory = System.IO.Path.TrimEndingDirectorySeparator(path);
+        foreach (string covered in _coveredDirectories)
+        {
+            if (IsAtOrBelow(directory, covered))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -195,30 +263,68 @@ internal sealed class HotTextIndex
                 directory[root.Length] == System.IO.Path.AltDirectorySeparatorChar);
     }
 
-    private void FullSyncLocked()
+    /// <summary>
+    /// Walks <paramref name="directory"/> and loads or refreshes every indexed source file beneath it. Returns false
+    /// (leaving the index untouched) when the subtree is too large to index; with
+    /// <paramref name="replaceExisting"/> files under it that no longer exist are dropped.
+    /// </summary>
+    private bool WalkDirectoryLocked(string directory, bool replaceExisting)
     {
-        HashSet<string> seen = new(PathComparer);
-        if (Directory.Exists(RootDirectory))
+        if (!Directory.Exists(directory))
         {
-            WalkLocked(new DirectoryInfo(RootDirectory), seen);
+            if (replaceExisting)
+            {
+                foreach (string stale in _files.Keys.Where(path => IsAtOrBelow(System.IO.Path.GetDirectoryName(path) ?? string.Empty, directory)).ToArray())
+                {
+                    _files.Remove(stale);
+                }
+            }
+
+            return true;
         }
 
-        foreach (string stale in _files.Keys.Where(path => !seen.Contains(path)).ToArray())
+        Dictionary<string, IndexedTextFile> loaded = new(PathComparer);
+        HashSet<string> seen = new(PathComparer);
+        int budget = MaxEntriesPerDirectoryWalk;
+        if (!WalkLocked(new DirectoryInfo(directory), seen, loaded, ref budget))
         {
-            _files.Remove(stale);
+            return false;
         }
+
+        foreach ((string path, IndexedTextFile file) in loaded)
+        {
+            _files[path] = file;
+        }
+
+        if (replaceExisting)
+        {
+            foreach (string stale in _files.Keys
+                         .Where(path => !seen.Contains(path) && IsAtOrBelow(System.IO.Path.GetDirectoryName(path) ?? string.Empty, directory))
+                         .ToArray())
+            {
+                _files.Remove(stale);
+            }
+        }
+
+        return true;
     }
 
-    private void WalkLocked(DirectoryInfo directory, HashSet<string> seen)
+    private bool WalkLocked(DirectoryInfo directory, HashSet<string> seen, Dictionary<string, IndexedTextFile> loaded, ref int budget)
     {
-        IEnumerable<FileSystemInfo> entries;
+        FileSystemInfo[] entries;
         try
         {
             entries = directory.EnumerateFileSystemInfos().ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return;
+            return true;
+        }
+
+        budget -= entries.Length;
+        if (budget < 0)
+        {
+            return false;
         }
 
         foreach (FileSystemInfo entry in entries)
@@ -226,9 +332,10 @@ internal sealed class HotTextIndex
             if (entry is DirectoryInfo subdirectory)
             {
                 if (!SkippedDirectoryNames.Contains(subdirectory.Name) &&
-                    (subdirectory.Attributes & FileAttributes.ReparsePoint) == 0)
+                    (subdirectory.Attributes & FileAttributes.ReparsePoint) == 0 &&
+                    !WalkLocked(subdirectory, seen, loaded, ref budget))
                 {
-                    WalkLocked(subdirectory, seen);
+                    return false;
                 }
 
                 continue;
@@ -247,17 +354,19 @@ internal sealed class HotTextIndex
                 continue;
             }
 
-            IndexedTextFile? loaded = TryLoad(file.FullName, file.LastWriteTimeUtc.Ticks, file.Length);
-            if (loaded is not null)
+            IndexedTextFile? text = TryLoad(file.FullName, file.LastWriteTimeUtc.Ticks, file.Length);
+            if (text is not null)
             {
-                _files[file.FullName] = loaded;
+                loaded[file.FullName] = text;
             }
         }
+
+        return true;
     }
 
     private void RefreshLocked(string path)
     {
-        if (!IsIndexedPath(path) || !Covers(path))
+        if (!IsIndexedPath(path) || !IsUnderCoveredLocked(System.IO.Path.GetDirectoryName(path) ?? string.Empty))
         {
             return;
         }

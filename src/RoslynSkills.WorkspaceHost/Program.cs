@@ -928,6 +928,10 @@ internal static class Program
                         }).ConfigureAwait(false);
                     return true;
 
+                case WorkspaceHostProtocol.Method.CliRun:
+                    await HandleCliRunAsync(registry, writer, root, requestId, method, stopwatch, cancellationToken).ConfigureAwait(false);
+                    return false;
+
                 case WorkspaceHostProtocol.Method.ToolList:
                     await HandleToolListAsync(registry, writer, requestId, method, stopwatch).ConfigureAwait(false);
                     return false;
@@ -1035,6 +1039,7 @@ internal static class Program
                 "daemon.status",
                 "tool.list",
                 "tool.call",
+                "cli.run",
                 "workspace.preload",
                 "workspace.status",
                 "workspace.refresh",
@@ -1085,6 +1090,68 @@ internal static class Program
         };
 
         return WriteSuccessResponseAsync(writer, requestId, method, stopwatch, data);
+    }
+
+    private static async Task HandleCliRunAsync(
+        ICommandRegistry registry,
+        TextWriter writer,
+        JsonElement root,
+        string requestId,
+        string method,
+        Stopwatch stopwatch,
+        CancellationToken cancellationToken)
+    {
+        List<string> args = new();
+        string cwd = string.Empty;
+        Dictionary<string, string> env = new(StringComparer.Ordinal);
+        if (TryGetProperty(root, "input", out JsonElement input) && input.ValueKind == JsonValueKind.Object)
+        {
+            if (TryGetProperty(input, "args", out JsonElement argsElement) && argsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement arg in argsElement.EnumerateArray())
+                {
+                    args.Add(arg.ValueKind == JsonValueKind.String ? arg.GetString() ?? string.Empty : arg.ToString());
+                }
+            }
+
+            cwd = GetStringProperty(input, "cwd") ?? string.Empty;
+            if (TryGetProperty(input, "env", out JsonElement envElement) && envElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty property in envElement.EnumerateObject())
+                {
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        env[property.Name] = property.Value.GetString() ?? string.Empty;
+                    }
+                }
+            }
+        }
+
+        CliBridgeResult result = await CliBridge.RunAsync(registry, args, cwd, env, cancellationToken).ConfigureAwait(false);
+        if (!result.Eligible)
+        {
+            await WriteErrorResponseAsync(
+                writer,
+                requestId,
+                method,
+                WorkspaceHostProtocol.ErrorCode.CliFallback,
+                result.Reason ?? "Invocation is not eligible for the host CLI bridge.",
+                "roscli",
+                stopwatch).ConfigureAwait(false);
+            return;
+        }
+
+        await WriteSuccessResponseAsync(
+            writer,
+            requestId,
+            method,
+            stopwatch,
+            new
+            {
+                exit_code = result.ExitCode,
+                stdout = result.Stdout,
+                stderr = result.Stderr,
+            }).ConfigureAwait(false);
     }
 
     private static async Task HandleToolCallAsync(
@@ -1648,6 +1715,7 @@ internal static class Program
             WorkspaceHostProtocol.Method.DaemonStatus,
             WorkspaceHostProtocol.Method.ToolList,
             WorkspaceHostProtocol.Method.ToolCall,
+            WorkspaceHostProtocol.Method.CliRun,
             WorkspaceHostProtocol.Method.WorkspacePreload,
             WorkspaceHostProtocol.Method.WorkspaceStatus,
             WorkspaceHostProtocol.Method.WorkspaceRefresh,
