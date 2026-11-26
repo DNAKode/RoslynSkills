@@ -11,7 +11,7 @@ public sealed class RenameSymbolCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "edit.rename_symbol",
-        Summary: "Rename a symbol anchored by line/column across the loaded solution using Roslyn Renamer.",
+        Summary: "Rename a symbol anchored by line/column or --symbol across the loaded solution using Roslyn Renamer.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: true,
@@ -20,6 +20,27 @@ public sealed class RenameSymbolCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
+            if (!InputParsing.TryGetRequiredString(input, "new_name", errors, out string symbolNewName))
+            {
+                return errors;
+            }
+
+            if (!SyntaxFacts.IsValidIdentifier(symbolNewName))
+            {
+                errors.Add(new CommandError(
+                    "invalid_input",
+                    $"Property 'new_name' value '{symbolNewName}' is not a valid C# identifier."));
+            }
+
+            InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+            InputParsing.ValidateOptionalBool(input, "apply", errors);
+            return errors;
+        }
+
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
         {
             return errors;
@@ -56,6 +77,40 @@ public sealed class RenameSymbolCommand : IAgentCommand
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
         List<CommandError> errors = new();
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+        bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
+        int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 500);
+
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            if (!InputParsing.TryGetRequiredString(input, "new_name", errors, out string symbolNewName))
+            {
+                return new CommandExecutionResult(null, errors);
+            }
+
+            if (!SyntaxFacts.IsValidIdentifier(symbolNewName))
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("invalid_input", $"Property 'new_name' value '{symbolNewName}' is not a valid C# identifier.") });
+            }
+
+            return await ExecuteBySymbolNameAsync(
+                    input,
+                    symbolQuery,
+                    symbolNewName,
+                    workspacePath,
+                    workspaceHandle,
+                    requireWorkspace,
+                    apply,
+                    maxDiagnostics,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
             !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
             !InputParsing.TryGetRequiredInt(input, "column", errors, out int column, minValue: 1, maxValue: 1_000_000) ||
@@ -83,13 +138,6 @@ public sealed class RenameSymbolCommand : IAgentCommand
                     new CommandError("file_not_found", $"Input file '{filePath}' does not exist."),
                 });
         }
-
-        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
-        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
-        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
-
-        bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
-        int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 500);
 
         CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
                 filePath,
@@ -161,6 +209,88 @@ public sealed class RenameSymbolCommand : IAgentCommand
                 column,
                 newName,
                 workspacePath,
+                workspaceHandle,
+                requireWorkspace,
+                apply,
+                maxDiagnostics,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<CommandExecutionResult> ExecuteBySymbolNameAsync(
+        JsonElement input,
+        string symbolQuery,
+        string newName,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        bool apply,
+        int maxDiagnostics,
+        CancellationToken cancellationToken)
+    {
+        (SymbolQueryResult? resolved, CommandExecutionResult? errorResult) = await SymbolQueryResolution.ResolveAsync(
+            input,
+            symbolQuery,
+            workspacePath,
+            targetPredicate: null,
+            invalidTargetMessageFormat: string.Empty,
+            allowSameTypeOverloads: false,
+            cancellationToken).ConfigureAwait(false);
+        if (errorResult is not null || resolved is null)
+        {
+            return errorResult!;
+        }
+
+        ISymbol resolvedSymbol = resolved.Symbols[0];
+        (string? declFilePath, int? declLine, int? declColumn) = SymbolQueryResolution.GetPrimaryDeclarationLocation(resolvedSymbol);
+        if (string.IsNullOrWhiteSpace(declFilePath) || !declLine.HasValue || !declColumn.HasValue)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("invalid_target", $"Symbol '{resolvedSymbol.ToDisplayString()}' does not have a source declaration to rename.") });
+        }
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(
+                declFilePath,
+                cancellationToken,
+                workspacePath ?? resolved.Workspace.ResolvedWorkspacePath,
+                workspaceHandle)
+            .ConfigureAwait(false);
+        CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
+        if (workspaceError is not null)
+        {
+            return workspaceError;
+        }
+
+        SyntaxToken anchorToken = analysis.FindAnchorToken(declLine.Value, declColumn.Value);
+        ISymbol targetSymbol = SymbolResolution.GetSymbolForToken(anchorToken, analysis.SemanticModel, cancellationToken) ?? resolvedSymbol;
+
+        if (analysis.Document is not null)
+        {
+            return await ExecuteSolutionRenameAsync(
+                    analysis,
+                    anchorToken,
+                    targetSymbol,
+                    declLine.Value,
+                    declColumn.Value,
+                    newName,
+                    workspacePath ?? resolved.Workspace.ResolvedWorkspacePath,
+                    workspaceHandle,
+                    requireWorkspace,
+                    apply,
+                    maxDiagnostics,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return await ExecuteAdHocFileRenameAsync(
+                analysis,
+                anchorToken,
+                targetSymbol,
+                declLine.Value,
+                declColumn.Value,
+                newName,
+                workspacePath ?? resolved.Workspace.ResolvedWorkspacePath,
                 workspaceHandle,
                 requireWorkspace,
                 apply,

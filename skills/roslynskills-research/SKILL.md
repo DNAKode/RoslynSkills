@@ -13,11 +13,11 @@ allowed-tools: "Bash Read Write Edit Grep Glob"
 
 Goal: combine text speed with Roslyn compiler truth (**text first, semantic second, scoped diag third**) via `roscli-fast.exe` + `WorkspaceHost`.
 
-## Channel & Tool Decision Rules (`0.1.6-preview.32`)
+## Channel & Tool Decision Rules (`0.1.6-preview.33`)
 
-- **Built-in `rg` + `read_file`:** Use for string literals, docs, error codes, non-C# files (`.slnx`, `.csproj`, `.json`), and reading a known 50–150 line slice (`~66–116 ms`, `0` tax). Do **not** rely on `rg` for overloaded/common symbols (`Execute` `47K` tokens, `Kind` `23K` tokens) or interface implementations/callers.
-- **`roscli-fast.exe` + `WorkspaceHost` (Preferred semantic lane):** Bind once (`roscli workspace.use MySolution.slnx --require-solution true`), set `ROSCLI_DAEMON=required`, and call `%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe` (`~50–75 ms` warm vs `~365–465 ms` `.NET` CLI spawn and `~70 s` `--no-daemon`). Redirected stdout emits compact JSON automatically (opt in to `--pretty-json` for indented output).
-- **`RoslynSkills.McpServer --mode slim`:** Exposes `10` focused complete-schema tools at `~4.9 KB` (`~1.2K` tokens/turn, >90% smaller than `--mode full`'s `53.85 KB` / `59` tools) over a direct persistent `WorkspaceHost` pipe with automatic workspace binding on first semantic call.
+- **Built-in `rg` + `read_file`:** Use for non-C# files (`.md`, `.slnx`, `.csproj`, `.json`), raw docs, and quick slices when no daemon is bound (`~66–116 ms`, `0` tax). Do **not** rely on `rg` for overloaded/common C# symbols (`Execute` `50K` tokens, `Kind` `23K` tokens) or interface implementations/callers.
+- **`roscli-fast.exe` + `WorkspaceHost` + Live Overlay Index (Preferred semantic & C# search lane):** Bind once (`roscli workspace.use MySolution.slnx --require-solution true [--wait-warmup true]`), set `ROSCLI_DAEMON=required`, and call `%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe` (`~54–71 ms` warm, `0.2–17 ms` host exec vs `~365–465 ms` `.NET` CLI spawn and `~70 s` `--no-daemon`). Use `ctx.symbol_context --symbol` for 1-call symbol mindspace, `ctx.search_text --syntax-filter code|declarations|invocations` for zero-disk overlay search (beats `rg` on selective tokens while dropping comment/string noise), `ctx.read_window` for zero-disk line windows + `file_sha256`, `--symbol`/`--symbols` on `nav.*`/`edit.*`, and SHA-256 atomic `edit.transaction` / `edit.batch_exact`.
+- **`RoslynSkills.McpServer --mode slim`:** Projects `12` descriptor-driven tools (including `roslyn_search` + `roslyn_context`) at `6,016 B` (`~1.5K` tokens/turn, `93.3%` smaller than `--mode full`'s `90.5 KB` / `61` complete-schema tools) over a persistent `WorkspaceHost` pipe (`4.8–15.6 ms` warm) with auto-bind on first semantic call.
 - **External C# LSP (`csharp-ls`, `Roslyn LSP`):** Do not treat as equivalent to `roscli-fast`: `csharp-ls` fails `.NET 11` `ProjectReference`s and emits false errors; `Roslyn LSP` answers incomplete `1` match during async load, `~515 ms` on refs, `0` interface callers (`854z`), and `0` items on `workspace/diagnostic`.
 
 ## What Roscli Is / Is Not
@@ -54,10 +54,12 @@ bash scripts/roscli quickstart
 
 Pit-of-success contract:
 
-- Bind hot workspace once: `roscli workspace.use <solution.sln|.slnx> --require-solution true` (set `ROSCLI_DAEMON=required`, prefer `roscli-fast` for warm `~50–75 ms` calls; stop only your own daemon with `roscli daemon.stop` at exit).
-- Discover: `list-commands --ids-only` (68 commands: `54` stable / `11` advanced / `3` experimental)
-- Disambiguate args: `describe-command <command-id>`
-- Target directly via `--symbol Type.Member` on all 6 `nav.*` commands (`go_to_definition`, `find_references`, `find_implementations`, `find_overrides`, `find_invocations`, `call_hierarchy`); `nav.call_hierarchy` defaults to `--max-depth 1` (captures interface callers via `edges[].implemented_member`)
+- Bind hot workspace once: `roscli workspace.use <solution.sln|.slnx> --require-solution true [--wait-warmup true]` (set `ROSCLI_DAEMON=required`, prefer `roscli-fast` for warm `~54–71 ms` calls; stop only your own daemon with `roscli daemon.stop` at exit).
+- Discover: `list-commands --ids-only` (70 commands: `56` stable / `11` advanced / `3` experimental)
+- Disambiguate args: `describe-command <command-id>` (now emits full descriptor-driven `input_schema`)
+- Start symbol reads with `ctx.symbol_context --symbol Type.Member` (1-call mindspace: zero-disk def + `file_sha256` + refs + interface callers + callees + impls + diag), `ctx.search_text --syntax-filter code|declarations|invocations`, and `ctx.read_window`
+- Target directly via `--symbol Type.Member` on `nav.*`, `edit.rename_symbol`, `edit.change_signature`, `nav.call_path` (`--source-symbol`/`--target-symbol`), and `analyze.impact_slice`; batch multi-symbol refs/invocations via `--symbols A,B`
+- Guard atomic multi-file writes with `edit.transaction` / `edit.batch_exact` + `expected_sha256` / `expected_file_hashes`
 - Filter `ctx.file_outline` with `--member-name-contains <term> --max-members 20` on large files (hot-routed via `roscli-fast` using the cached `SyntaxTree`)
 - Start stable-first: use `list-commands --stable-only --ids-only`; only step into `advanced`/`experimental` commands when needed
 - Verify workspace binding: use `--workspace-path ... --require-workspace true` on project code

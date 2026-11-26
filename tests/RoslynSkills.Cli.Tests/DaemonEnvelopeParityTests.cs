@@ -40,6 +40,13 @@ public sealed class DaemonEnvelopeParityTests
         "msbuild_registration_duration_ms",
         "store_workspace_count",
         "tracked_paths",
+        "incremental_updates",
+        "full_rebuilds",
+        "last_sync_utc",
+        "warmup",
+        "warmup_state",
+        "projects_warmed",
+        "warmup_timed_out",
     };
 
     [Fact]

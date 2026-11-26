@@ -10,6 +10,8 @@ public sealed class QueryBatchCommand : IAgentCommand
         new Dictionary<string, Func<IAgentCommand>>(StringComparer.OrdinalIgnoreCase)
         {
             ["ctx.search_text"] = static () => new SearchTextCommand(),
+            ["ctx.read_window"] = static () => new ReadWindowCommand(),
+            ["ctx.symbol_context"] = static () => new SymbolContextCommand(),
             ["ctx.file_outline"] = static () => new FileOutlineCommand(),
             ["ctx.member_source"] = static () => new MemberSourceCommand(),
             ["ctx.symbol_envelope"] = static () => new SymbolEnvelopeCommand(),

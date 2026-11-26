@@ -24,7 +24,7 @@ Text-first workflows are fast at first, then degrade on:
 - low-churn calls for agents (`--brief true`, `--symbol Type.Member`, `query.batch`, `nav.find_symbol_batch`)
 
 Canonical pit-of-success guide: [docs/PIT_OF_SUCCESS.md](docs/PIT_OF_SUCCESS.md)  
-Empirical harness & benchmark study (`0.1.6-preview.31`): [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md) (CLI + NativeAOT `roscli-fast.exe` + `WorkspaceHost` vs. LSP vs. MCP vs. `rg` on the 33-project `CalcDb.slnx` codebase)
+Empirical harness & benchmark study (`0.1.6-preview.31`–`0.1.6-preview.33`): [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md) (CLI + NativeAOT `roscli-fast.exe` + `WorkspaceHost` overlay index & mindspace vs. LSP vs. MCP vs. `rg` on the 33-project `CalcDb.slnx` codebase)
 
 ## Start in 5 Minutes
 
@@ -60,12 +60,14 @@ roscli daemon.run --repo-root .
 
 2. **Self-managed detached host (`roscli workspace.use` / `roscli daemon.start`):** reuses any live host for the workspace key (guarded by a per-key lock), otherwise launches detached (`CREATE_BREAKAWAY_FROM_JOB` on Windows when allowed; when breakaway is refused, logs a warning with the caller's job flags and process chain to both the response and `<hash>.log` and uses WMI `Win32_Process.Create`, unless `ROSCLI_DAEMON_LAUNCH=nodetach` or `--nodetach` keeps it inside the caller job with `daemon_lifetime: "caller_job"`). Detached hosts are bounded by an idle timeout (default 30 min; `ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_MINUTES` / `--idle-timeout-minutes`) and a per-user host cap (default 8; `ROSLYNSKILLS_MAX_DAEMON_HOSTS`). Inspect active hosts with `roscli daemon.list` and clean up missing-worktree or all hosts with `roscli daemon.prune [--all]`.
 
-First semantic flow (runs on the preloaded hot workspace, refreshed from disk before each call; use `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) for `~50–75 ms` warm wall times instead of `~365–465 ms` managed CLI startup):
+First semantic flow (runs on the preloaded hot workspace + live in-memory overlay index, refreshed from disk before each call; use `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) for `~54–71 ms` warm wall times instead of `~365–465 ms` managed CLI startup):
 
 ```powershell
-roscli-fast nav.find_references --symbol MyNamespace.MyType.Process --max-results 50
-roscli-fast nav.call_hierarchy --symbol MyNamespace.MyImpl.Handle --direction incoming --max-depth 1 --brief true
-roscli-fast edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true --require-workspace true
+roscli-fast ctx.symbol_context --symbol MyNamespace.MyImpl.Handle --brief true
+roscli-fast ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
+roscli-fast ctx.read_window src/MyProject/File.cs 1 100
+roscli-fast nav.find_references --symbols MyNamespace.TypeA.Foo,MyNamespace.TypeB.Bar --max-results 50
+roscli-fast edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
 roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
@@ -149,22 +151,23 @@ Use roscli for C#/.NET repo edits and diagnostics.
 
 ## Command Surface
 
-Current catalog snapshot:
+Current catalog snapshot (`0.1.6-preview.33`):
 
-- `roscli list-commands --ids-only` -> `68` commands
-- maturity counts: `stable=54`, `advanced=11`, `experimental=3`
+- `roscli list-commands --ids-only` -> `70` commands (`61` core registry + `9` CLI lifecycle/onboarding verbs)
+- maturity counts: `stable=56`, `advanced=11`, `experimental=3`
 - `roscli llmstxt` defaults to stable-only startup guidance (`--full` for complete catalog)
+- single descriptor-driven schema catalog (`CommandInputSchemaCatalog`) backs CLI `describe-command`, schema-aware CLI option coercion, and MCP `--mode full` / `--mode slim`
 
 Command families:
 
-- `nav.*`: solution-wide go-to-definition (source & metadata), symbol, references, implementations, overrides, invocations (including method groups, primary constructors, and explicit/target-typed `new` sites), and call-hierarchy/call-path (through lambdas, method groups, and implemented interface members via `edges[].implemented_member`). All 6 primary navigation commands (`go_to_definition`, `find_references`, `find_implementations`, `find_overrides`, `find_invocations`, `call_hierarchy`) accept `--symbol Type.Member` (with optional parameter-type overload disambiguation) in addition to file/line/column.
-- `ctx.*`: file/member/search/changed-files context retrieval
-- `analyze.*`: analysis slices (control flow, dataflow, impact slice) and risk scans
+- `nav.*`: solution-wide go-to-definition (source & metadata), symbol, references, implementations, overrides, invocations (including method groups, primary constructors, and explicit/target-typed `new` sites), and call-hierarchy/call-path (through lambdas, method groups, and implemented interface members via `edges[].implemented_member`). Accepts `--symbol Type.Member` across all 6 primary `nav.*` commands plus `--source-symbol` / `--target-symbol` on `nav.call_path`, and multi-symbol `--symbols` batching on `nav.find_references` and `nav.find_invocations`.
+- `ctx.*`: live in-memory overlay trigram/token search (`ctx.search_text` with AST `syntax_filter`: `code`/`comments`/`strings`/`identifiers`/`declarations`/`invocations` and batched `queries`), zero-disk line-window reads (`ctx.read_window` with SHA-256 and batched `windows`), compound one-call symbol mindspace (`ctx.symbol_context`: definition + refs + interface-aware callers + callees + implementations + diagnostics), plus `ctx.file_outline`, `ctx.member_source`, `ctx.symbol_envelope`, `ctx.changed_files`
+- `analyze.*`: analysis slices (control flow, dataflow, `--symbol`-capable `impact_slice`) and risk scans
 - `diag.*`: file, multi-project workspace/directory, and solution diagnostics snapshots and diffs
-- `edit.*`: structured semantic edits (`edit.rename_symbol`, `edit.change_signature`), atomic multi-file `edit.transaction` (`replace_text`, `insert_text`, `replace_span`, `set_content`; `edit.batch_exact` is its thin alias), member-scoped edits, and claim-based multi-agent coordination (worktree-aware)
+- `edit.*`: `--symbol`-capable semantic edits (`edit.rename_symbol`, `edit.change_signature`), atomic multi-file `edit.transaction` / `edit.batch_exact` with `expected_sha256` / `expected_file_hashes` optimistic preconditions and crash-safe temp-file/rename/rollback writes, Roslyn `edit.apply_code_fix`, member-scoped edits, and worktree-aware `edit.claim`
 - `repair.*`: diagnostics-driven repair planning/application
 - `session.*`: non-destructive single-file edit loop (`.cs`/`.csx`)
-- `workspace.*` / `daemon.*`: hot-workspace bind (`workspace.use`), preload, status, refresh, and daemon lifecycle
+- `workspace.*` / `daemon.*`: hot-workspace bind (`workspace.use --wait-warmup`), preload, status (`warmup_state`, `projects_warmed`, `overlay_index` stats), refresh, and daemon lifecycle
 - `agent-begin` / `csharp-start`: supervised first-command onboarding for fresh agent sessions
 
 ## XmlSkills (`xmlcli`)
@@ -266,7 +269,7 @@ dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-
 
 ## Optional: MCP Mode
 
-Example MCP server wiring (`--mode slim` exposes 10 high-leverage tools with complete schemas at ~4.9 KB `tools/list`, a >90% context reduction vs. `--mode full`, and connects directly to `WorkspaceHost` over a persistent pipe with auto-bind):
+Example MCP server wiring (`--mode slim` exposes 12 high-leverage descriptor-driven tools at `6,016 B` / `~1.5K` tokens `tools/list`, a `93.3%` context reduction vs. `--mode full`, and connects directly to `WorkspaceHost` over a persistent pipe with auto-bind):
 
 - command: `dotnet`
 - args: `"<unzipped>/mcp/RoslynSkills.McpServer.dll"`, `"--mode"`, `"slim"`
@@ -286,7 +289,7 @@ Example `claude-mcp.json`:
 }
 ```
 
-**CLI vs. MCP trade-off (`0.1.6-preview.32`):** With `--mode slim`, `RoslynSkills.McpServer` registers 10 focused tools (`roslyn_nav_symbol`, `roslyn_nav_references`, `roslyn_nav_invocations`, `roslyn_nav_call_hierarchy`, `roslyn_nav_implementations`, `roslyn_diag_snapshot`, `roslyn_edit_rename`, `roslyn_edit_transaction`, `roslyn_edit_code_fix`, `roslyn_run`) at `~4.9 KB` (`~1.2K` tokens/turn) over a direct persistent `WorkspaceHost` pipe (auto-binding on first workspace call). `--mode full` remains available for backward compatibility (`59` tools, `53.85 KB`). In CLI loops, **`roscli-fast.exe` + `WorkspaceHost` + `roslynskills-tight` skill** (`0` per-turn schema tax, compact JSON on redirected stdout, `~50–75 ms` warm) remains the default; see [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md).
+**CLI vs. MCP trade-off (`0.1.6-preview.33`):** With `--mode slim`, `RoslynSkills.McpServer` projects **12** focused tools (`roslyn_search`, `roslyn_context`, `roslyn_nav_symbol`, `roslyn_nav_references`, `roslyn_nav_invocations`, `roslyn_nav_call_hierarchy`, `roslyn_nav_implementations`, `roslyn_diag_snapshot`, `roslyn_edit_rename`, `roslyn_edit_transaction`, `roslyn_edit_code_fix`, `roslyn_run`) from the single `CommandInputSchemaCatalog` at **`6,016 B` (`~1.5K` tokens/turn)** over a direct persistent `WorkspaceHost` pipe (`4.8–15.6 ms` warm on `CalcDb.slnx`, auto-binding on first workspace call). `--mode full` exposes complete property schemas for all `61` registry commands (`90.5 KB`, `0` parameterized schema-less tools) for backward compatibility. In CLI loops, **`roscli-fast.exe` + `WorkspaceHost` + `roslynskills-tight` skill** (`0` per-turn schema tax, compact JSON on redirected stdout, `~54–71 ms` warm) remains the default; see [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md).
 
 ## Gemini CLI Compatibility (Early Support)
 

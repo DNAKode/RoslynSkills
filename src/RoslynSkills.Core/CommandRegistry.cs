@@ -1,3 +1,4 @@
+using System.Text.Json;
 using RoslynSkills.Contracts;
 
 namespace RoslynSkills.Core;
@@ -17,7 +18,7 @@ public sealed class CommandRegistry : ICommandRegistry
     {
         _commands = commands.ToDictionary(
             c => c.Descriptor.Id,
-            c => c,
+            EnrichWithInputSchema,
             StringComparer.OrdinalIgnoreCase);
     }
 
@@ -29,5 +30,35 @@ public sealed class CommandRegistry : ICommandRegistry
 
     public bool TryGet(string commandId, out IAgentCommand? command)
         => _commands.TryGetValue(commandId, out command);
-}
 
+    private static IAgentCommand EnrichWithInputSchema(IAgentCommand command)
+    {
+        if (command.Descriptor.InputSchema is not null)
+        {
+            return command;
+        }
+
+        CommandInputSchema? schema = CommandInputSchemaCatalog.GetSchema(command.Descriptor.Id);
+        return schema is null
+            ? command
+            : new SchemaEnrichedCommand(command, command.Descriptor with { InputSchema = schema });
+    }
+
+    private sealed class SchemaEnrichedCommand : IAgentCommand
+    {
+        private readonly IAgentCommand _inner;
+
+        public SchemaEnrichedCommand(IAgentCommand inner, CommandDescriptor descriptor)
+        {
+            _inner = inner;
+            Descriptor = descriptor;
+        }
+
+        public CommandDescriptor Descriptor { get; }
+
+        public IReadOnlyList<CommandError> Validate(JsonElement input) => _inner.Validate(input);
+
+        public Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
+            => _inner.ExecuteAsync(input, cancellationToken);
+    }
+}

@@ -152,15 +152,17 @@ public sealed class Pass4CliAndMcpTests
                     Assert.Contains("slim mode", instructions, StringComparison.OrdinalIgnoreCase);
                 }
 
-                // Check tools/list: exactly 10 tools, complete schemas, ~4-5 KB total.
+                // Check tools/list: 12 slim tools (Pass 5 adds roslyn_search + roslyn_context), complete schemas, <= 6 KB total.
                 (JsonDocument listResp, int listBytes) = await SendMcpWithSizeAsync(mcp, 2, "tools/list", new { });
                 using (listResp)
                 {
                     JsonElement tools = listResp.RootElement.GetProperty("result").GetProperty("tools");
-                    Assert.Equal(10, tools.GetArrayLength());
+                    Assert.Equal(12, tools.GetArrayLength());
 
                     HashSet<string> expectedNames = new(StringComparer.Ordinal)
                     {
+                        "roslyn_search",
+                        "roslyn_context",
                         "roslyn_nav_symbol",
                         "roslyn_nav_references",
                         "roslyn_nav_invocations",
@@ -183,7 +185,7 @@ public sealed class Pass4CliAndMcpTests
                     }
 
                     Assert.Equal(expectedNames, actualNames);
-                    Assert.True(listBytes <= 5120, $"Slim tools/list should be <= 5 KB, got {listBytes} bytes.");
+                    Assert.True(listBytes <= 6144, $"Slim tools/list should be <= 6 KB, got {listBytes} bytes.");
                 }
 
                 // 1. First semantic tool call auto-binds Demo.slnx on the WorkspaceHost daemon!

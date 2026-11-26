@@ -202,10 +202,17 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             Input: resolvedInput,
             KeepAlive: true);
 
+        bool waitsForWarmup = input.ValueKind == JsonValueKind.Object &&
+                              input.TryGetProperty("wait_warmup", out JsonElement waitWarmupProp) &&
+                              waitWarmupProp.ValueKind == JsonValueKind.True;
+        TimeSpan lifecycleTimeout = normalizedCommandId is "workspace.preload" or "workspace.refresh" || waitsForWarmup
+            ? WorkspacePreloadTimeout
+            : TimeSpan.FromSeconds(30);
+
         Stopwatch roundtripTimer = Stopwatch.StartNew();
         WorkspaceHostResponse? response = await session.SendPersistentAsync(
             request,
-            normalizedCommandId is "workspace.preload" or "workspace.refresh" ? WorkspacePreloadTimeout : TimeSpan.FromSeconds(30),
+            lifecycleTimeout,
             cancellationToken).ConfigureAwait(false);
         roundtripTimer.Stop();
 

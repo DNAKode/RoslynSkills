@@ -7,7 +7,7 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "workspace.status",
-        Summary: "Report hot workspace binding, fingerprint, dirty state, and loaded solution/project counts.",
+        Summary: "Report hot workspace binding, fingerprint, warmup readiness, overlay index stats, dirty state, and loaded solution/project counts.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -17,26 +17,39 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
     {
         List<CommandError> errors = new();
         InputParsing.TryGetRequiredString(input, "workspace_handle", errors, out _);
+        InputParsing.ValidateOptionalBool(input, "wait_warmup", errors);
+        InputParsing.ValidateOptionalInt(input, "wait_warmup_timeout_ms", errors, minValue: 100, maxValue: 600_000);
         return errors;
     }
 
-    public Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
+    public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
-        _ = cancellationToken;
         List<CommandError> errors = new();
         if (!InputParsing.TryGetRequiredString(input, "workspace_handle", errors, out string handle))
         {
-            return Task.FromResult(new CommandExecutionResult(null, errors));
+            return new CommandExecutionResult(null, errors);
         }
 
         IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
         if (!workspaceStore.TryGet(handle, out HostedWorkspace? hosted) || hosted is null)
         {
-            return Task.FromResult(new CommandExecutionResult(
+            return new CommandExecutionResult(
                 null,
-                new[] { new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found.") }));
+                new[] { new CommandError("workspace_not_found", $"Workspace handle '{handle}' was not found.") });
         }
 
+        bool waitWarmup = InputParsing.GetOptionalBool(input, "wait_warmup", defaultValue: false);
+        int waitWarmupTimeoutMs = InputParsing.GetOptionalInt(input, "wait_warmup_timeout_ms", defaultValue: 180_000, minValue: 100, maxValue: 600_000);
+        bool warmupTimedOut = false;
+        if (waitWarmup)
+        {
+            bool completed = await HotWorkspaceWarmup
+                .WaitForWarmupAsync(hosted.Workspace.Solution, TimeSpan.FromMilliseconds(waitWarmupTimeoutMs), cancellationToken)
+                .ConfigureAwait(false);
+            warmupTimedOut = !completed;
+        }
+
+        WarmupProgressSnapshot warmup = HotWorkspaceWarmup.GetSnapshot(hosted.Workspace.Solution);
         WorkspaceStatus status = workspaceStore.BuildStatus(hosted);
         object data = new
         {
@@ -50,6 +63,11 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
             requires_reload = status.RequiresReload,
             mode = hosted.Mode,
             include_generated = hosted.IncludeGenerated,
+            warmup_state = warmup.State,
+            projects_warmed = warmup.ProjectsWarmed,
+            warmup_timed_out = warmupTimedOut,
+            warmup = warmup.ToPayload(),
+            overlay_index = hosted.OverlayIndex.GetStatsPayload(),
             workspace_fingerprint = hosted.WorkspaceFingerprint,
             requested_workspace_path = hosted.Workspace.WorkspacePath,
             resolved_workspace_path = hosted.Workspace.ResolvedWorkspacePath,
@@ -71,6 +89,6 @@ public sealed class WorkspaceStatusCommand : IAgentCommand
             store_workspace_count = workspaceStore.Count,
         };
 
-        return Task.FromResult(new CommandExecutionResult(data, Array.Empty<CommandError>()));
+        return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 }

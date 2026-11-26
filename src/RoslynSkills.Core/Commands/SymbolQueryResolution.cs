@@ -40,6 +40,41 @@ internal static class SymbolQueryResolution
         return null;
     }
 
+    public static string[] GetOptionalSymbolQueries(JsonElement input)
+    {
+        if (input.ValueKind != JsonValueKind.Object ||
+            !input.TryGetProperty("symbols", out JsonElement symbolsProp))
+        {
+            return Array.Empty<string>();
+        }
+
+        if (symbolsProp.ValueKind == JsonValueKind.String)
+        {
+            string raw = (symbolsProp.GetString() ?? string.Empty).Trim();
+            return raw.Length == 0 ? Array.Empty<string>() : new[] { raw };
+        }
+
+        if (symbolsProp.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        List<string> results = new();
+        foreach (JsonElement item in symbolsProp.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                string trimmed = (item.GetString() ?? string.Empty).Trim();
+                if (trimmed.Length > 0)
+                {
+                    results.Add(trimmed);
+                }
+            }
+        }
+
+        return results.Distinct(StringComparer.Ordinal).Take(32).ToArray();
+    }
+
     public static async Task<(SymbolQueryResult? Result, CommandExecutionResult? ErrorResult)> ResolveAsync(
         JsonElement input,
         string symbolQuery,

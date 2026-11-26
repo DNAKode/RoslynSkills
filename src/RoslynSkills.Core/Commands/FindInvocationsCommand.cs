@@ -18,8 +18,9 @@ public sealed class FindInvocationsCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        string[] symbolBatch = SymbolQueryResolution.GetOptionalSymbolQueries(input);
         string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
-        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        if (symbolBatch.Length > 0 || !string.IsNullOrWhiteSpace(symbolQuery))
         {
             WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
             InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
@@ -63,6 +64,23 @@ public sealed class FindInvocationsCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        string[] symbolBatch = SymbolQueryResolution.GetOptionalSymbolQueries(input);
+        if (symbolBatch.Length > 0)
+        {
+            return await ExecuteBySymbolBatchAsync(
+                input,
+                symbolBatch,
+                workspacePath,
+                workspaceHandle,
+                requireWorkspace,
+                includeObjectCreations,
+                includeGenerated,
+                brief,
+                contextLines,
+                maxResults,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
         if (!string.IsNullOrWhiteSpace(symbolQuery))
@@ -254,6 +272,244 @@ public sealed class FindInvocationsCommand : IAgentCommand
             total_matches = matches.Count,
             truncated,
             matches = matchesPayload,
+        };
+
+        return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private async Task<CommandExecutionResult> ExecuteBySymbolBatchAsync(
+        JsonElement input,
+        string[] symbolQueries,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        bool includeObjectCreations,
+        bool includeGenerated,
+        bool brief,
+        int contextLines,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        (StaticAnalysisWorkspace? workspace, CommandError? loadError) = await StaticAnalysisWorkspace
+            .ResolveAsync(input, workspacePath, includeGenerated: false, maxFiles: 50_000, cancellationToken)
+            .ConfigureAwait(false);
+        if (loadError is not null || workspace?.Solution is null)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { loadError ?? new CommandError("workspace_required", "Multi-symbol lookup (--symbols) requires a loaded MSBuild solution or project workspace.") });
+        }
+
+        // Resolve all requested symbols upfront so we scan candidate syntax trees in a single compilation pass.
+        List<(string Query, IReadOnlyList<ISymbol>? Targets, CommandError? Error)> resolvedList = new(symbolQueries.Length);
+        List<ISymbol> allTargets = new();
+
+        foreach (string query in symbolQueries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            List<ISymbol> candidates = await SymbolQueryResolution.ResolveSymbolsByNameAsync(workspace.Solution, query, cancellationToken).ConfigureAwait(false);
+            if (candidates.Count == 0)
+            {
+                resolvedList.Add((query, null, new CommandError("symbol_not_found", $"No source symbol matching '{query}' was found.")));
+                continue;
+            }
+
+            List<ISymbol> filtered = candidates.Where(SolutionSearchScope.IsInvocationTarget).ToList();
+            if (filtered.Count == 0)
+            {
+                resolvedList.Add((query, null, new CommandError("invalid_target", $"Symbol '{candidates[0].ToDisplayString()}' is not a method, constructor, or constructible type.")));
+                continue;
+            }
+
+            if (filtered.Count > 1 && !SymbolQueryResolution.AreSameTypeMethodOverloads(filtered))
+            {
+                resolvedList.Add((query, null, new CommandError(
+                    "ambiguous_symbol",
+                    $"Symbol '{query}' matched {filtered.Count} declarations.",
+                    new { candidates = filtered.Take(10).Select(SymbolQueryResolution.FormatSymbolCandidate).ToArray() })));
+                continue;
+            }
+
+            resolvedList.Add((query, filtered, null));
+            allTargets.AddRange(filtered);
+        }
+
+        SearchScope scope = await SolutionSearchScope.ResolveForSolutionAsync(
+            workspace.Solution,
+            anchorProject: null,
+            target: null,
+            includeGenerated,
+            cancellationToken).ConfigureAwait(false);
+
+        int searchedTrees = 0;
+        Dictionary<int, (List<InvocationMatch> Matches, bool Truncated)> perQueryMatches = new();
+        for (int i = 0; i < resolvedList.Count; i++)
+        {
+            perQueryMatches[i] = (new List<InvocationMatch>(), false);
+        }
+
+        if (allTargets.Count > 0)
+        {
+            CallSiteLookup combinedLookup = CallSiteLookup.ForTargets(allTargets, CallSiteLookup.GetCompilations(scope.Units));
+            List<SearchUnit> candidateUnits = new();
+            foreach (SearchUnit unit in scope.Units)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (combinedLookup.MightMention(unit))
+                {
+                    candidateUnits.Add(unit);
+                }
+            }
+
+            if (candidateUnits.Count > 1)
+            {
+                List<SearchUnit>? coldUnits = null;
+                foreach (SearchUnit unit in candidateUnits)
+                {
+                    if (!CallSiteAnalysis.IsLookupCached(unit.Compilation, unit.Tree, combinedLookup))
+                    {
+                        coldUnits ??= new List<SearchUnit>();
+                        coldUnits.Add(unit);
+                    }
+                }
+
+                if (coldUnits is { Count: > 1 })
+                {
+                    ParallelOptions options = new()
+                    {
+                        MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 6),
+                        CancellationToken = cancellationToken,
+                    };
+                    Parallel.ForEach(coldUnits, options, unit =>
+                    {
+                        _ = CallSiteAnalysis.GetCallSitesForLookup(unit.Compilation, unit.Tree, combinedLookup, includeObjectCreations: true, cancellationToken);
+                    });
+                }
+            }
+
+            Dictionary<int, HashSet<string>> seenByQuery = new();
+            for (int i = 0; i < resolvedList.Count; i++)
+            {
+                seenByQuery[i] = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            foreach (SearchUnit unit in candidateUnits)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                searchedTrees++;
+                IReadOnlyList<CallSiteAnalysis.CallSite> sites = CallSiteAnalysis.GetCallSitesForLookup(
+                    unit.Compilation,
+                    unit.Tree,
+                    combinedLookup,
+                    includeObjectCreations,
+                    cancellationToken);
+                if (sites.Count == 0)
+                {
+                    continue;
+                }
+
+                SourceText? sourceText = null;
+                foreach (CallSiteAnalysis.CallSite callSite in sites)
+                {
+                    for (int i = 0; i < resolvedList.Count; i++)
+                    {
+                        IReadOnlyList<ISymbol>? targets = resolvedList[i].Targets;
+                        if (targets is null || !MatchesAnyTarget(callSite.callee, targets))
+                        {
+                            continue;
+                        }
+
+                        if (!seenByQuery[i].Add($"{unit.FilePath}|{callSite.node.SpanStart}|{callSite.call_kind}"))
+                        {
+                            continue;
+                        }
+
+                        (List<InvocationMatch> list, bool trunc) = perQueryMatches[i];
+                        if (list.Count >= maxResults)
+                        {
+                            perQueryMatches[i] = (list, true);
+                            continue;
+                        }
+
+                        sourceText ??= await unit.Tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
+                        AddMatch(
+                            list,
+                            callSite.node.Span,
+                            callSite.callee,
+                            unit.FilePath,
+                            sourceText,
+                            contextLines,
+                            maxResults,
+                            brief,
+                            callSite.call_kind);
+                    }
+                }
+            }
+        }
+
+        List<object> results = new(resolvedList.Count);
+        int aggregateMatches = 0;
+        int succeededCount = 0;
+        int failedCount = 0;
+
+        for (int i = 0; i < resolvedList.Count; i++)
+        {
+            (string query, IReadOnlyList<ISymbol>? targets, CommandError? error) = resolvedList[i];
+            if (error is not null || targets is null)
+            {
+                failedCount++;
+                results.Add(new
+                {
+                    symbol_query = query,
+                    ok = false,
+                    error,
+                });
+                continue;
+            }
+
+            (List<InvocationMatch> matches, bool truncated) = perQueryMatches[i];
+            ISymbol primary = targets[0];
+            succeededCount++;
+            aggregateMatches += matches.Count;
+            results.Add(new
+            {
+                symbol_query = query,
+                ok = true,
+                symbol = new
+                {
+                    symbol_display = primary.ToDisplayString(),
+                    symbol_kind = primary.Kind.ToString(),
+                    symbol_id = CommandTextFormatting.GetStableSymbolId(primary),
+                    overload_count = targets.Count,
+                },
+                total_matches = matches.Count,
+                truncated,
+                matches = FormatMatchesPayload(matches, brief),
+            });
+        }
+
+        object data = new
+        {
+            batched = true,
+            query = new
+            {
+                symbols = symbolQueries,
+                max_results = maxResults,
+                context_lines = contextLines,
+                include_object_creations = includeObjectCreations,
+                include_generated = includeGenerated,
+                workspace_path = workspacePath ?? workspace.ResolvedWorkspacePath,
+                workspace_handle = workspaceHandle,
+                require_workspace = requireWorkspace,
+                brief,
+            },
+            searched_syntax_trees = searchedTrees,
+            search = scope.ToPayload(),
+            symbol_count = symbolQueries.Length,
+            succeeded = succeededCount,
+            failed = failedCount,
+            total_matches = aggregateMatches,
+            results,
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
