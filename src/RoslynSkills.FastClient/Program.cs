@@ -152,6 +152,7 @@ internal static class Program
 
             json.WriteEndArray();
             json.WriteString("cwd", workingDirectory);
+            json.WriteBoolean("stdout_redirected", Console.IsOutputRedirected);
             json.WriteStartObject("env");
             foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
             {

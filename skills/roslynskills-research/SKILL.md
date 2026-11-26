@@ -13,11 +13,11 @@ allowed-tools: "Bash Read Write Edit Grep Glob"
 
 Goal: combine text speed with Roslyn compiler truth (**text first, semantic second, scoped diag third**) via `roscli-fast.exe` + `WorkspaceHost`.
 
-## Channel & Tool Decision Rules (`0.1.6-preview.31`)
+## Channel & Tool Decision Rules (`0.1.6-preview.32`)
 
 - **Built-in `rg` + `read_file`:** Use for string literals, docs, error codes, non-C# files (`.slnx`, `.csproj`, `.json`), and reading a known 50–150 line slice (`~66–116 ms`, `0` tax). Do **not** rely on `rg` for overloaded/common symbols (`Execute` `47K` tokens, `Kind` `23K` tokens) or interface implementations/callers.
-- **`roscli-fast.exe` + `WorkspaceHost` (Preferred semantic lane):** Bind once (`roscli workspace.use MySolution.slnx --require-solution true`), set `ROSCLI_DAEMON=required`, and call `%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe` (`~50–75 ms` warm vs `~365–465 ms` `.NET` CLI spawn and `~70 s` `--no-daemon`).
-- **`RoslynSkills.McpServer`:** Daemon-routed steady state is `~15–30 ms`, but `tools/list` injects `53.85 KB` (`~13.5K` tokens/turn across `59` tools, ~`38` missing property schemas). Prefer CLI + skill over full MCP unless only MCP is available.
+- **`roscli-fast.exe` + `WorkspaceHost` (Preferred semantic lane):** Bind once (`roscli workspace.use MySolution.slnx --require-solution true`), set `ROSCLI_DAEMON=required`, and call `%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe` (`~50–75 ms` warm vs `~365–465 ms` `.NET` CLI spawn and `~70 s` `--no-daemon`). Redirected stdout emits compact JSON automatically (opt in to `--pretty-json` for indented output).
+- **`RoslynSkills.McpServer --mode slim`:** Exposes `10` focused complete-schema tools at `~4.9 KB` (`~1.2K` tokens/turn, >90% smaller than `--mode full`'s `53.85 KB` / `59` tools) over a direct persistent `WorkspaceHost` pipe with automatic workspace binding on first semantic call.
 - **External C# LSP (`csharp-ls`, `Roslyn LSP`):** Do not treat as equivalent to `roscli-fast`: `csharp-ls` fails `.NET 11` `ProjectReference`s and emits false errors; `Roslyn LSP` answers incomplete `1` match during async load, `~515 ms` on refs, `0` interface callers (`854z`), and `0` items on `workspace/diagnostic`.
 
 ## What Roscli Is / Is Not
@@ -57,8 +57,8 @@ Pit-of-success contract:
 - Bind hot workspace once: `roscli workspace.use <solution.sln|.slnx> --require-solution true` (set `ROSCLI_DAEMON=required`, prefer `roscli-fast` for warm `~50–75 ms` calls; stop only your own daemon with `roscli daemon.stop` at exit).
 - Discover: `list-commands --ids-only` (68 commands: `54` stable / `11` advanced / `3` experimental)
 - Disambiguate args: `describe-command <command-id>`
-- Target directly via `--symbol Type.Member` on all 6 `nav.*` commands (`go_to_definition`, `find_references`, `find_implementations`, `find_overrides`, `find_invocations`, `call_hierarchy`); start `nav.call_hierarchy` with `--max-depth 1 --brief true` (captures interface callers via `edges[].implemented_member`)
-- Avoid `ctx.file_outline` on giant files (`>2,000` lines); it falls back out of `roscli-fast` (`~1.2 s` on 8K-line files)
+- Target directly via `--symbol Type.Member` on all 6 `nav.*` commands (`go_to_definition`, `find_references`, `find_implementations`, `find_overrides`, `find_invocations`, `call_hierarchy`); `nav.call_hierarchy` defaults to `--max-depth 1` (captures interface callers via `edges[].implemented_member`)
+- Filter `ctx.file_outline` with `--member-name-contains <term> --max-members 20` on large files (hot-routed via `roscli-fast` using the cached `SyntaxTree`)
 - Start stable-first: use `list-commands --stable-only --ids-only`; only step into `advanced`/`experimental` commands when needed
 - Verify workspace binding: use `--workspace-path ... --require-workspace true` on project code
 - Prefer `.sln`/`.slnx` for repo-wide or hot-workspace context; use `.csproj` only when intentionally project-scoped
@@ -117,7 +117,7 @@ roscli-fast analyze.override_coverage src --coverage-threshold 0.6 --brief true
 roscli-fast analyze.async_risk_scan src --brief true --max-findings 120 --severity-filter warning --severity-filter info
 ```
 
-Bundle multiple read-only probes in one call when useful (`query.batch` supports `ctx.search_text`, `nav.find_symbol*`, `nav.go_to_definition`, `nav.find_references`, `nav.find_invocations`, `nav.call_hierarchy`, `analyze.*`, `diag.get_file_diagnostics`; invoke `nav.find_implementations` and `diag.get_workspace_snapshot` directly):
+Bundle multiple read-only probes in one call when useful (`query.batch` supports `ctx.*`, `nav.*` including `nav.find_implementations` and `nav.find_overrides`, `analyze.*`, `diag.get_file_diagnostics`, and `diag.get_workspace_snapshot`):
 
 ```powershell
 roscli run query.batch --input "{`"queries`":[{`"command_id`":`"ctx.search_text`",`"input`":{`"patterns`":[`"RemoteUserAction`",`"ReplicationUpdate`"],`"roots`":[`"src`"],`"mode`":`"literal`"}},{`"command_id`":`"nav.find_invocations`",`"input`":{`"file_path`":`"src/MyFile.cs`",`"line`":42,`"column`":17,`"brief`":true,`"workspace_path`":`"MySolution.slnx`",`"require_workspace`":true}}],`"continue_on_error`":true}"

@@ -71,7 +71,8 @@ public sealed record WorkspaceHostRequest(
     [property: JsonPropertyName("auth_token")] string? AuthToken = null,
     [property: JsonPropertyName("refresh_policy")] string? RefreshPolicy = null,
     [property: JsonPropertyName("command_id")] string? CommandId = null,
-    [property: JsonPropertyName("input")] JsonElement? Input = null);
+    [property: JsonPropertyName("input")] JsonElement? Input = null,
+    [property: JsonPropertyName("keep_alive"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool KeepAlive = false);
 
 public sealed record WorkspaceHostResponse(
     [property: JsonPropertyName("id")] string Id,

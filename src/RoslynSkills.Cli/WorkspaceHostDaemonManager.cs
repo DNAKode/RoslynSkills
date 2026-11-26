@@ -56,6 +56,12 @@ public sealed record WorkspaceHostFailure(
         };
 }
 
+public sealed record WorkspaceHostConnectionInfo(
+    WorkspaceHostDaemonEndpoint Endpoint,
+    string? AuthToken,
+    int? DaemonPid,
+    DateTime ManifestLastWriteUtc);
+
 public sealed record WorkspaceHostSendResult(
     WorkspaceHostResponse? Response,
     WorkspaceHostFailure? Failure)
@@ -1737,6 +1743,34 @@ public sealed class WorkspaceHostDaemonManager
     {
         WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
         return await SendWithDiagnosticsAsync(endpoint, request, timeoutDuration, cancellationToken).ConfigureAwait(false);
+    }
+
+    public WorkspaceHostConnectionInfo? TryGetConnectionInfo(string? repoRoot)
+    {
+        WorkspaceHostDaemonEndpoint endpoint = GetDefaultEndpoint(repoRoot);
+        WorkspaceHostDaemonManifest? manifest = TryReadManifest(endpoint.ManifestPath);
+        if (manifest is null)
+        {
+            return null;
+        }
+
+        DateTime lastWriteUtc = DateTime.MinValue;
+        try
+        {
+            lastWriteUtc = File.GetLastWriteTimeUtc(endpoint.ManifestPath);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        return new WorkspaceHostConnectionInfo(
+            Endpoint: endpoint,
+            AuthToken: manifest.AuthToken,
+            DaemonPid: manifest.ProcessId,
+            ManifestLastWriteUtc: lastWriteUtc);
     }
 
     public int? TryGetDaemonProcessId(string? repoRoot)

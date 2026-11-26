@@ -12,10 +12,14 @@ public sealed class QueryBatchCommand : IAgentCommand
             ["ctx.search_text"] = static () => new SearchTextCommand(),
             ["ctx.file_outline"] = static () => new FileOutlineCommand(),
             ["ctx.member_source"] = static () => new MemberSourceCommand(),
+            ["ctx.symbol_envelope"] = static () => new SymbolEnvelopeCommand(),
+            ["ctx.changed_files"] = static () => new ChangedFilesCommand(),
             ["nav.find_symbol"] = static () => new FindSymbolCommand(),
             ["nav.find_symbol_batch"] = static () => new FindSymbolBatchCommand(),
             ["nav.go_to_definition"] = static () => new GoToDefinitionCommand(),
             ["nav.find_references"] = static () => new FindReferencesCommand(),
+            ["nav.find_implementations"] = static () => new FindImplementationsCommand(),
+            ["nav.find_overrides"] = static () => new FindOverridesCommand(),
             ["nav.find_invocations"] = static () => new FindInvocationsCommand(),
             ["nav.call_hierarchy"] = static () => new CallHierarchyCommand(),
             ["nav.call_path"] = static () => new CallPathCommand(),
@@ -27,6 +31,7 @@ public sealed class QueryBatchCommand : IAgentCommand
             ["analyze.override_coverage"] = static () => new OverrideCoverageCommand(),
             ["analyze.async_risk_scan"] = static () => new AsyncRiskScanCommand(),
             ["diag.get_file_diagnostics"] = static () => new GetFileDiagnosticsCommand(),
+            ["diag.get_workspace_snapshot"] = static () => new GetWorkspaceSnapshotCommand(),
         };
 
     public CommandDescriptor Descriptor { get; } = new(

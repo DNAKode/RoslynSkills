@@ -13,30 +13,70 @@ namespace RoslynSkills.Cli;
 public sealed class CliApplication
 {
     private const string EnvelopeVersion = "1.0";
-    private readonly ICommandRegistry _registry;
-    private readonly JsonSerializerOptions _jsonOptions = new()
+    private static readonly JsonSerializerOptions PrettyJsonOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = true,
     };
+    private static readonly JsonSerializerOptions CompactJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = false,
+    };
+    private static readonly AsyncLocal<bool> UseCompactJson = new();
+    private readonly ICommandRegistry _registry;
 
     public CliApplication(ICommandRegistry registry)
     {
         _registry = registry;
     }
 
-    public async Task<int> RunAsync(
+    public Task<int> RunAsync(
         string[] args,
         TextWriter stdout,
         TextWriter stderr,
         CancellationToken cancellationToken,
         TextReader? stdin = null)
+        => RunAsync(args, stdout, stderr, cancellationToken, stdin, defaultCompactJson: null);
+
+    public async Task<int> RunAsync(
+        string[] args,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken,
+        TextReader? stdin,
+        bool? defaultCompactJson)
     {
         stdin ??= Console.In;
 
-        bool noDaemon = StripFlag(args, "--no-daemon", out string[] effectiveArgs);
+        bool noDaemon = StripFlag(args, "--no-daemon", out string[] afterNoDaemon);
+        bool? explicitCompact = StripJsonFormatFlags(afterNoDaemon, out string[] effectiveArgs);
         bool daemonOff = noDaemon || string.Equals(GetDaemonRoutingMode(), "off", StringComparison.OrdinalIgnoreCase);
         args = effectiveArgs;
+
+        bool compactJson = explicitCompact
+            ?? defaultCompactJson
+            ?? (ReferenceEquals(stdout, Console.Out) && Console.IsOutputRedirected);
+        bool previousCompact = UseCompactJson.Value;
+        UseCompactJson.Value = compactJson;
+        try
+        {
+            return await RunCoreAsync(args, stdout, stderr, cancellationToken, stdin, daemonOff).ConfigureAwait(false);
+        }
+        finally
+        {
+            UseCompactJson.Value = previousCompact;
+        }
+    }
+
+    private async Task<int> RunCoreAsync(
+        string[] args,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken,
+        TextReader stdin,
+        bool daemonOff)
+    {
 
         if (args.Length == 0 || IsHelp(args[0]))
         {
@@ -1247,6 +1287,33 @@ Workflow:
         };
     }
 
+    private static bool? StripJsonFormatFlags(string[] args, out string[] strippedArgs)
+    {
+        List<string>? stripped = null;
+        bool? compact = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--compact-json", StringComparison.OrdinalIgnoreCase))
+            {
+                stripped ??= args.Take(i).ToList();
+                compact = true;
+                continue;
+            }
+
+            if (string.Equals(args[i], "--pretty-json", StringComparison.OrdinalIgnoreCase))
+            {
+                stripped ??= args.Take(i).ToList();
+                compact = false;
+                continue;
+            }
+
+            stripped?.Add(args[i]);
+        }
+
+        strippedArgs = stripped?.ToArray() ?? args;
+        return compact;
+    }
+
     private static bool StripFlag(string[] args, string flag, out string[] strippedArgs)
     {
         List<string>? stripped = null;
@@ -1330,7 +1397,7 @@ Workflow:
         return true;
     }
 
-    private static JsonElement ResolveRelativePathsForDaemon(JsonElement element)
+    public static JsonElement ResolveRelativePathsForDaemon(JsonElement element)
     {
         object? transformed = TransformPathsForDaemon(element);
         return JsonSerializer.SerializeToElement(transformed);
@@ -1351,7 +1418,8 @@ Workflow:
                         ? raw
                         : Path.GetFullPath(NormalizeCliPathValue(raw));
                 }
-                else if (string.Equals(property.Name, "roots", StringComparison.Ordinal) &&
+                else if ((string.Equals(property.Name, "roots", StringComparison.Ordinal) ||
+                          string.Equals(property.Name, "file_paths", StringComparison.Ordinal)) &&
                          property.Value.ValueKind == JsonValueKind.Array)
                 {
                     List<object?> roots = new();
@@ -1981,6 +2049,9 @@ Workflow:
 
     private static bool HasErrorCode(IEnumerable<CommandError> errors, string code)
         => errors.Any(error => string.Equals(error.Code, code, StringComparison.OrdinalIgnoreCase));
+
+    public static string InferDaemonRepoRoot(JsonElement input)
+        => InferToolCallDaemonRepoRoot(input);
 
     private static string InferToolCallDaemonRepoRoot(JsonElement input)
     {
@@ -4271,7 +4342,8 @@ Workflow:
             Summary = summary,
             Transport = envelope.Transport ?? new CommandTransportMetadata(Mode: "in_process"),
         };
-        string json = JsonSerializer.Serialize(envelopeWithHints, _jsonOptions);
+        JsonSerializerOptions options = UseCompactJson.Value ? CompactJsonOptions : PrettyJsonOptions;
+        string json = JsonSerializer.Serialize(envelopeWithHints, options);
         await writer.WriteLineAsync(json).ConfigureAwait(false);
     }
 
@@ -5293,13 +5365,13 @@ Workflow:
             return new
             {
                 direct = "nav.call_hierarchy <file-path> <line> <column> [--option value ...] OR nav.call_hierarchy --symbol <Type.Member> [--option value ...]",
-                run = "run nav.call_hierarchy --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"direction\":\"both\",\"max_depth\":2,\"brief\":true}'",
+                run = "run nav.call_hierarchy --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"direction\":\"both\",\"max_depth\":1,\"brief\":true}'",
                 required_properties = new[] { "file_path", "line", "column" },
                 optional_properties = new[] { "symbol", "symbol_name", "direction", "max_depth", "max_nodes", "max_edges", "context_lines", "brief", "include_object_creations", "include_external", "include_generated", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
                     "nav.call_hierarchy is the canonical Roslyn-style call graph command; accepts either file/line/column or --symbol <Type.Member>.",
-                    "direction accepts incoming, outgoing, or both.",
+                    "direction accepts incoming, outgoing, or both. max_depth defaults to 1 (opt-in 2..8 for multi-hop traversal).",
                     "Call hierarchy is recursive by depth and returns nodes+edges, unlike flat call-site queries.",
                     "Advanced/heuristic command: may omit dynamic/reflection/DI dispatch paths.",
                 },
@@ -5440,7 +5512,7 @@ Workflow:
                 direct = "ctx.file_outline <file-path> [--option value ...]",
                 run = "run ctx.file_outline --input '{\"file_path\":\"tests/MyTests.cs\",\"member_name_contains\":\"EvidenceLedger\",\"include_members\":true,\"max_members\":40}'",
                 required_properties = new[] { "file_path" },
-                optional_properties = new[] { "include_usings", "include_members", "max_types", "max_members", "type_name_contains", "member_name_contains" },
+                optional_properties = new[] { "include_usings", "include_members", "max_types", "max_members", "type_name_contains", "member_name_contains", "workspace_handle" },
                 notes = new[]
                 {
                     "For huge test files, pass member_name_contains to return only matching member outlines and their containing type.",
@@ -5992,7 +6064,7 @@ Workflow:
         string json = output.ToString();
         try
         {
-            CommandEnvelope? envelope = JsonSerializer.Deserialize<CommandEnvelope>(json, _jsonOptions);
+            CommandEnvelope? envelope = JsonSerializer.Deserialize<CommandEnvelope>(json, PrettyJsonOptions);
             if (envelope is not null)
             {
                 return envelope;
@@ -6024,7 +6096,7 @@ Workflow:
     {
         bool ok = steps.Count == 3 && steps.All(step =>
         {
-            JsonElement element = JsonSerializer.SerializeToElement(step, _jsonOptions);
+            JsonElement element = JsonSerializer.SerializeToElement(step, PrettyJsonOptions);
             return TryGetBool(element, "ok", out bool stepOk) && stepOk;
         });
 
@@ -6520,7 +6592,7 @@ Workflow:
                 nav.find_symbol src/MyFile.cs Run --first-declaration true --brief true
                 nav.find_symbol_batch --queries @symbol-queries.json --brief true --first-declaration true
                 nav.find_invocations <file-path> <line> <column> --brief true --require-workspace true
-                nav.call_hierarchy <file-path> <line> <column> --direction both --max-depth 2 --brief true
+                nav.call_hierarchy <file-path> <line> <column> --direction both --max-depth 1 --brief true
                 nav.call_path <source-file> <source-line> <source-column> <target-file> <target-line> <target-column> --max-depth 8 --brief true
                 analyze.unused_private_symbols src --brief true --max-symbols 100
                 analyze.control_flow_graph <file-path> <line> <column> --brief true --max-blocks 120 --max-edges 260
@@ -6549,6 +6621,7 @@ Workflow:
               - Use describe-command <command-id> when an agent is unsure about command arguments.
               - Use --input with raw JSON, @path-to-json-file, or '-' for stdin.
               - Use --input-stdin to read full JSON from stdin without temp files.
+              - JSON output is compact when stdout is redirected/piped (or with --compact-json) and indented on interactive TTY (or with --pretty-json).
               - Most commands output JSON envelopes. llmstxt outputs markdown text.
             """);
     }

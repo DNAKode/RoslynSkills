@@ -173,7 +173,7 @@ $mcpCmd = @"
 setlocal
 set "SCRIPT_DIR=%~dp0"
 set "MCP_DLL=%SCRIPT_DIR%..\mcp\RoslynSkills.McpServer.dll"
-dotnet "%MCP_DLL%"
+dotnet "%MCP_DLL%" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 endlocal & exit /b %EXIT_CODE%
 "@
@@ -182,7 +182,7 @@ $mcpSh = @'
 #!/usr/bin/env bash
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dotnet "$script_dir/../mcp/RoslynSkills.McpServer.dll"
+dotnet "$script_dir/../mcp/RoslynSkills.McpServer.dll" "$@"
 '@
 
 $transportCmd = @"

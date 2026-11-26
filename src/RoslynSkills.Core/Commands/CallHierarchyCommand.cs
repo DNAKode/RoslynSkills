@@ -88,7 +88,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 new[] { new CommandError("invalid_input", "Property 'direction' must be 'incoming', 'outgoing', or 'both'.") });
         }
 
-        int maxDepth = InputParsing.GetOptionalInt(input, "max_depth", defaultValue: 2, minValue: 1, maxValue: 8);
+        int maxDepth = InputParsing.GetOptionalInt(input, "max_depth", defaultValue: 1, minValue: 1, maxValue: 8);
         int maxNodes = InputParsing.GetOptionalInt(input, "max_nodes", defaultValue: 150, minValue: 1, maxValue: 2_000);
         int maxEdges = InputParsing.GetOptionalInt(input, "max_edges", defaultValue: 400, minValue: 1, maxValue: 10_000);
         int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 1, minValue: 0, maxValue: 10);

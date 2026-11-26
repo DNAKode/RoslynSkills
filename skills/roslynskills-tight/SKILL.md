@@ -23,17 +23,17 @@ This skill is optimized for low-churn, "just enough Roslyn" workflows.
 
 - **Hybrid routing ("text first, semantic second, scoped diag third"):**
   - Use `rg` / `read_file` for string literals, error codes, docs, non-C# files, and known 50–150 line file slices (`~66–116 ms`, zero tax).
-  - Use `roscli` / `roscli-fast` (`0.1.6-preview.31`) for semantic work: overloaded/ambiguous symbols (`Execute`, `OpenRecordset`), `--symbol Type.Member` navigation, interface-dispatched `nav.call_hierarchy`, multi-file edits/renames (`edit.*`), and scoped `diag.get_workspace_snapshot --directory-path`.
-- **Fast daemon workflow (`0.1.6-preview.31`):**
+  - Use `roscli` / `roscli-fast` (`0.1.6-preview.32`) for semantic work: overloaded/ambiguous symbols (`Execute`, `OpenRecordset`), `--symbol Type.Member` navigation, interface-dispatched `nav.call_hierarchy` (defaults to `--max-depth 1`), hot-routed `ctx.file_outline`, `query.batch`, multi-file edits/renames (`edit.*`), and scoped `diag.get_workspace_snapshot --directory-path`.
+- **Fast daemon workflow (`0.1.6-preview.32`):**
   - Bind the solution once: `roscli workspace.use <MySolution.slnx> --require-solution true`, then set `ROSCLI_DAEMON=required`.
-  - Prefer `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) over managed `roscli` for `~50–75 ms` warm queries (vs `~365–465 ms` CLR spawn). Stop only your own daemon (`roscli daemon.stop`) when finished.
+  - Prefer `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) over managed `roscli` for `~50–75 ms` warm queries (vs `~365–465 ms` CLR spawn); redirected stdout emits compact JSON automatically (use `--pretty-json` for indented output). Stop only your own daemon (`roscli daemon.stop`) when finished.
 - **Channel choice (CLI vs MCP vs LSP):**
-  - Default to `roscli-fast` / `roscli` + this skill (`0` per-turn schema tax). Avoid loading the full 59-tool MCP (`~13.5K` tokens/turn `tools/list`) unless an environment only allows MCP.
+  - Default to `roscli-fast` / `roscli` + this skill (`0` per-turn schema tax). When using MCP, launch `RoslynSkills.McpServer --mode slim` (`10` complete-schema tools, `~4.9 KB` `tools/list`, direct persistent `WorkspaceHost` pipe with auto-bind) rather than `--mode full` (`59` tools, `53.85 KB`).
   - Prefer `roscli-fast` over C# LSP (`csharp-ls` / `Roslyn LSP`) on multi-project `.slnx` repos: `roscli` fails closed (`--require-workspace true`), resolves `--symbol` directly, captures interface callers (`edges[].implemented_member`), and compiles folder diagnostics in `~104–240 ms`.
 - Default to `stable` commands; use `advanced`/`experimental` commands intentionally (`nav.call_hierarchy`, `diag.get_workspace_snapshot`).
 - Keep Roslyn calls sequential per workspace (avoid parallel `dotnet` locks).
-- Prefer `--brief true`, small `--max-results` / `--max-diagnostics`, and **`--max-depth 1` first** on `nav.call_hierarchy` (`depth=2` on high-fan-in methods can exceed 100 KB / 30K tokens).
-- Avoid `ctx.file_outline` on huge files (`>2,000` lines); it currently falls back out of `roscli-fast.exe`. Prefer `--symbol Type.Member` or `rg` + `read_file` / `ctx.member_source --member-name`.
+- Prefer `--brief true`, small `--max-results` / `--max-diagnostics`; `nav.call_hierarchy` defaults to `--max-depth 1` (opt in to `--max-depth 2..8` only when needed).
+- Filter `ctx.file_outline` with `--member-name-contains <term> --max-members 20` on large files (hot-routed via `roscli-fast.exe` using the cached `SyntaxTree`).
 - For project code, require a workspace: add `--workspace-path <.sln|.slnx|.csproj|dir> --require-workspace true`.
 - Prefer `.sln`/`.slnx` for repo-wide or hot-workspace context; use `.csproj` only when intentionally project-scoped.
 - Treat `workspace_context.mode=ad_hoc` as "not safe enough" for refactors.
@@ -70,7 +70,7 @@ roscli quickstart
 
 ## Minimal Workflows
 
-### 1) Direct `--symbol` navigation & interface call hierarchy (`0.1.6-preview.31`)
+### 1) Direct `--symbol` navigation & interface call hierarchy (`0.1.6-preview.32`)
 
 All 6 `nav.*` commands accept `--symbol Type.Member` (including positional record properties and optional parameter-type overloads) when a hot workspace is bound:
 
@@ -79,11 +79,11 @@ roscli workspace.use MySolution.slnx --require-solution true
 roscli-fast nav.find_references --symbol MyNamespace.DeferredCatalogCommit.Kind --max-results 100
 roscli-fast nav.find_invocations --symbol MyNamespace.SchemaWriter.CreateTable --brief true --max-results 100
 roscli-fast nav.find_implementations --symbol MyNamespace.ISqlDatabase --max-results 50
-roscli-fast nav.call_hierarchy --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --direction incoming --max-depth 1 --brief true
+roscli-fast nav.call_hierarchy --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --direction incoming --brief true
 roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
-Note: `nav.call_hierarchy` resolves incoming callers across implemented interface members (`edges[].implemented_member`); always start with `--max-depth 1`.
+Note: `nav.call_hierarchy` resolves incoming callers across implemented interface members (`edges[].implemented_member`) and defaults to `--max-depth 1` (opt in to `--max-depth 2..8` when needed).
 
 ### 2) Ambiguous target & rename (2 calls, then stop)
 
@@ -123,7 +123,7 @@ bash scripts/roscli analyze.impact_slice src/MyFile.cs 42 17 --brief true --incl
 bash scripts/roscli analyze.async_risk_scan src --brief true --max-findings 120 --severity-filter warning --severity-filter info
 ```
 
-If you need several read-only checks in one round-trip, use `query.batch` (supports `ctx.search_text`, `nav.*` symbol/refs/invocations/call_hierarchy, `analyze.*`, `diag.get_file_diagnostics`; run `nav.find_implementations` and `diag.get_workspace_snapshot` directly):
+If you need several read-only checks in one round-trip, use `query.batch` (supports `ctx.*`, `nav.*` including `nav.find_implementations` and `nav.find_overrides`, `analyze.*`, `diag.get_file_diagnostics`, and `diag.get_workspace_snapshot`):
 
 ```bash
 bash scripts/roscli run query.batch --input '{"queries":[{"command_id":"ctx.search_text","input":{"patterns":["RemoteUserAction","ReplicationUpdate"],"roots":["src"],"mode":"literal","max_results":120}},{"command_id":"nav.find_invocations","input":{"file_path":"src/MyFile.cs","line":42,"column":17,"brief":true,"workspace_path":"MySolution.slnx","require_workspace":true}}],"continue_on_error":true}'

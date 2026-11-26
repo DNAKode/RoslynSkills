@@ -14,11 +14,16 @@ public sealed class FileOutlineCommand : IAgentCommand
         Summary: "Return a structural outline of namespaces, types, and members in a C# or VB file.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
-        MutatesState: false);
+        MutatesState: false,
+        // Reads the cached SyntaxTree from the bound hot workspace when present; falls back to disk parsing otherwise,
+        // including under ROSCLI_DAEMON=required, because outlining a standalone file needs no loaded solution.
+        RunsOnHotWorkspace: true,
+        HotWorkspaceOptional: true);
 
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
         {
             return errors;
@@ -54,11 +59,30 @@ public sealed class FileOutlineCommand : IAgentCommand
         string? typeNameContains = GetOptionalTrimmedString(input, "type_name_contains");
         string? memberNameContains = GetOptionalTrimmedString(input, "member_name_contains");
 
-        string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-        string language = CommandLanguageServices.DetectLanguageFromFilePath(filePath);
-        SyntaxTree syntaxTree = CommandLanguageServices.ParseSyntaxTree(source, filePath, language, cancellationToken);
+        SyntaxTree syntaxTree;
+        SourceText sourceText;
+        string language;
+        string syntaxSource;
+        if (TryGetHotWorkspaceSyntaxTree(input, filePath, cancellationToken, out SyntaxTree? cachedTree, out SourceText? cachedSourceText, out string? cachedLanguage) &&
+            cachedTree is not null &&
+            cachedSourceText is not null &&
+            cachedLanguage is not null)
+        {
+            syntaxTree = cachedTree;
+            sourceText = cachedSourceText;
+            language = cachedLanguage;
+            syntaxSource = "hot_workspace";
+        }
+        else
+        {
+            string source = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+            language = CommandLanguageServices.DetectLanguageFromFilePath(filePath);
+            syntaxTree = CommandLanguageServices.ParseSyntaxTree(source, filePath, language, cancellationToken);
+            sourceText = syntaxTree.GetText(cancellationToken);
+            syntaxSource = "disk";
+        }
+
         SyntaxNode rootNode = await syntaxTree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-        SourceText sourceText = syntaxTree.GetText(cancellationToken);
 
         if (string.Equals(language, LanguageNames.VisualBasic, StringComparison.Ordinal))
         {
@@ -66,6 +90,7 @@ public sealed class FileOutlineCommand : IAgentCommand
                 filePath,
                 rootNode,
                 sourceText,
+                syntaxSource,
                 includeUsings,
                 includeMembers,
                 maxTypes,
@@ -79,6 +104,7 @@ public sealed class FileOutlineCommand : IAgentCommand
             filePath,
             rootNode,
             sourceText,
+            syntaxSource,
             includeUsings,
             includeMembers,
             maxTypes,
@@ -88,10 +114,46 @@ public sealed class FileOutlineCommand : IAgentCommand
             cancellationToken);
     }
 
+    private static bool TryGetHotWorkspaceSyntaxTree(
+        JsonElement input,
+        string filePath,
+        CancellationToken cancellationToken,
+        out SyntaxTree? syntaxTree,
+        out SourceText? sourceText,
+        out string? language)
+    {
+        syntaxTree = null;
+        sourceText = null;
+        language = null;
+
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        if (string.IsNullOrWhiteSpace(workspaceHandle) ||
+            !WorkspaceHostStoreProvider.Current.TryGet(workspaceHandle, out HostedWorkspace? hosted) ||
+            hosted is null)
+        {
+            return false;
+        }
+
+        if (!hosted.Workspace.TryGetTreeByPath(filePath, out SyntaxTree? cachedTree) || cachedTree is null)
+        {
+            return false;
+        }
+
+        syntaxTree = cachedTree;
+        sourceText = hosted.Workspace.SourceTextsByTree.TryGetValue(cachedTree, out SourceText? cachedText)
+            ? cachedText
+            : cachedTree.GetText(cancellationToken);
+        language = string.IsNullOrWhiteSpace(cachedTree.Options.Language)
+            ? CommandLanguageServices.DetectLanguageFromFilePath(filePath)
+            : cachedTree.Options.Language;
+        return true;
+    }
+
     private static CommandExecutionResult ExecuteCSharp(
         string filePath,
         SyntaxNode rootNode,
         SourceText sourceText,
+        string syntaxSource,
         bool includeUsings,
         bool includeMembers,
         int maxTypes,
@@ -118,7 +180,12 @@ public sealed class FileOutlineCommand : IAgentCommand
 
         List<TypeOutline> typeOutlines = new();
         int remainingMembers = maxMembers;
-        foreach (CSharpSyntax.BaseTypeDeclarationSyntax typeDeclaration in root.DescendantNodes(descendIntoTrivia: false)
+        foreach (CSharpSyntax.BaseTypeDeclarationSyntax typeDeclaration in root
+                     .DescendantNodes(
+                         descendIntoChildren: static node => node is CSharpSyntax.CompilationUnitSyntax
+                             or CSharpSyntax.BaseNamespaceDeclarationSyntax
+                             or CSharpSyntax.TypeDeclarationSyntax,
+                         descendIntoTrivia: false)
                      .OfType<CSharpSyntax.BaseTypeDeclarationSyntax>())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -211,6 +278,7 @@ public sealed class FileOutlineCommand : IAgentCommand
                 max_members = maxMembers,
                 type_name_contains = typeNameContains,
                 member_name_contains = memberNameContains,
+                syntax_source = syntaxSource,
             },
             result_guidance = BuildResultGuidance(
                 filePath,
@@ -230,6 +298,7 @@ public sealed class FileOutlineCommand : IAgentCommand
         string filePath,
         SyntaxNode rootNode,
         SourceText sourceText,
+        string syntaxSource,
         bool includeUsings,
         bool includeMembers,
         int maxTypes,
@@ -256,7 +325,12 @@ public sealed class FileOutlineCommand : IAgentCommand
 
         List<TypeOutline> typeOutlines = new();
         int remainingMembers = maxMembers;
-        foreach (SyntaxNode typeNode in root.DescendantNodes(descendIntoTrivia: false)
+        foreach (SyntaxNode typeNode in root
+                     .DescendantNodes(
+                         descendIntoChildren: static node => node is VbSyntax.CompilationUnitSyntax
+                             or VbSyntax.NamespaceBlockSyntax
+                             or VbSyntax.TypeBlockSyntax,
+                         descendIntoTrivia: false)
                      .Where(IsVbTypeNode))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -327,6 +401,7 @@ public sealed class FileOutlineCommand : IAgentCommand
                 max_members = maxMembers,
                 type_name_contains = typeNameContains,
                 member_name_contains = memberNameContains,
+                syntax_source = syntaxSource,
             },
             result_guidance = BuildResultGuidance(
                 filePath,
