@@ -180,7 +180,12 @@ public sealed class FileOutlineCommand : IAgentCommand
 
         List<TypeOutline> typeOutlines = new();
         int remainingMembers = maxMembers;
-        foreach (CSharpSyntax.BaseTypeDeclarationSyntax typeDeclaration in root.DescendantNodes(descendIntoTrivia: false)
+        foreach (CSharpSyntax.BaseTypeDeclarationSyntax typeDeclaration in root
+                     .DescendantNodes(
+                         descendIntoChildren: static node => node is CSharpSyntax.CompilationUnitSyntax
+                             or CSharpSyntax.BaseNamespaceDeclarationSyntax
+                             or CSharpSyntax.TypeDeclarationSyntax,
+                         descendIntoTrivia: false)
                      .OfType<CSharpSyntax.BaseTypeDeclarationSyntax>())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -320,7 +325,12 @@ public sealed class FileOutlineCommand : IAgentCommand
 
         List<TypeOutline> typeOutlines = new();
         int remainingMembers = maxMembers;
-        foreach (SyntaxNode typeNode in root.DescendantNodes(descendIntoTrivia: false)
+        foreach (SyntaxNode typeNode in root
+                     .DescendantNodes(
+                         descendIntoChildren: static node => node is VbSyntax.CompilationUnitSyntax
+                             or VbSyntax.NamespaceBlockSyntax
+                             or VbSyntax.TypeBlockSyntax,
+                         descendIntoTrivia: false)
                      .Where(IsVbTypeNode))
         {
             cancellationToken.ThrowIfCancellationRequested();
