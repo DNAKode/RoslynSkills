@@ -12,7 +12,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
     public CallHierarchyCommand()
         : this(
             commandId: "nav.call_hierarchy",
-            summary: "Build incoming/outgoing call hierarchy for an anchored method with bounded depth.")
+            summary: "Build incoming/outgoing call hierarchy for an anchored method or --symbol with bounded depth.")
     {
     }
 
@@ -32,6 +32,23 @@ public sealed class CallHierarchyCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
+            InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+            InputParsing.ValidateOptionalBool(input, "brief", errors);
+            InputParsing.ValidateOptionalBool(input, "include_object_creations", errors);
+            InputParsing.ValidateOptionalBool(input, "include_external", errors);
+            InputParsing.ValidateOptionalBool(input, "include_generated", errors);
+            if (!TryParseDirection(input, out _))
+            {
+                errors.Add(new CommandError("invalid_input", "Property 'direction' must be 'incoming', 'outgoing', or 'both'."));
+            }
+
+            return errors;
+        }
+
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
         {
             return errors;
@@ -64,21 +81,6 @@ public sealed class CallHierarchyCommand : IAgentCommand
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
-        List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
-            !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredInt(input, "column", errors, out int column, minValue: 1, maxValue: 1_000_000))
-        {
-            return new CommandExecutionResult(null, errors);
-        }
-
-        if (!File.Exists(filePath))
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
-        }
-
         if (!TryParseDirection(input, out CallHierarchyDirection direction))
         {
             return new CommandExecutionResult(
@@ -95,9 +97,46 @@ public sealed class CallHierarchyCommand : IAgentCommand
         bool includeExternal = InputParsing.GetOptionalBool(input, "include_external", defaultValue: false);
         bool includeGenerated = InputParsing.GetOptionalBool(input, "include_generated", defaultValue: false);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            return await ExecuteBySymbolNameAsync(
+                input,
+                symbolQuery,
+                direction,
+                maxDepth,
+                maxNodes,
+                maxEdges,
+                contextLines,
+                brief,
+                includeObjectCreations,
+                includeExternal,
+                includeGenerated,
+                workspacePath,
+                workspaceHandle,
+                requireWorkspace,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        List<CommandError> errors = new();
+        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
+            !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
+            !InputParsing.TryGetRequiredInt(input, "column", errors, out int column, minValue: 1, maxValue: 1_000_000))
+        {
+            return new CommandExecutionResult(null, errors);
+        }
+
+        if (!File.Exists(filePath))
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
+        }
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, workspaceHandle).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {
@@ -140,8 +179,129 @@ public sealed class CallHierarchyCommand : IAgentCommand
             brief,
             cancellationToken).ConfigureAwait(false);
 
+        return BuildHierarchyResult(
+            normalizedAnchor,
+            scope,
+            analysis.FilePath,
+            line,
+            column,
+            symbolQuery: null,
+            direction,
+            maxDepth,
+            maxNodes,
+            maxEdges,
+            contextLines,
+            brief,
+            includeObjectCreations,
+            includeExternal,
+            includeGenerated,
+            workspacePath,
+            workspaceHandle: null,
+            requireWorkspace,
+            WorkspaceContextPayload.Build(analysis.WorkspaceContext),
+            graph,
+            cancellationToken);
+    }
+
+    private static async Task<CommandExecutionResult> ExecuteBySymbolNameAsync(
+        JsonElement input,
+        string symbolQuery,
+        CallHierarchyDirection direction,
+        int maxDepth,
+        int maxNodes,
+        int maxEdges,
+        int contextLines,
+        bool brief,
+        bool includeObjectCreations,
+        bool includeExternal,
+        bool includeGenerated,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        CancellationToken cancellationToken)
+    {
+        (SymbolQueryResult? resolved, CommandExecutionResult? errorResult) = await SymbolQueryResolution.ResolveAsync(
+            input,
+            symbolQuery,
+            workspacePath,
+            targetPredicate: s => s is IMethodSymbol or IFieldSymbol or IPropertySymbol or IEventSymbol,
+            invalidTargetMessageFormat: "Symbol '{0}' ({1}) is not a method or member. Specify a method or member declaration and retry.",
+            allowSameTypeOverloads: false,
+            cancellationToken).ConfigureAwait(false);
+        if (errorResult is not null || resolved is null)
+        {
+            return errorResult!;
+        }
+
+        StaticAnalysisWorkspace workspace = resolved.Workspace;
+        ISymbol normalizedAnchor = NormalizeGraphSymbol(SolutionSearchScope.NormalizePositionalRecordProperty(resolved.Symbols[0]));
+        SearchScope scope = await SolutionSearchScope.ResolveForSolutionAsync(
+            workspace.Solution!,
+            anchorProject: null,
+            target: null,
+            includeGenerated,
+            cancellationToken).ConfigureAwait(false);
+        CallGraph graph = await BuildCallGraphAsync(
+            scope,
+            includeObjectCreations,
+            includeExternal,
+            contextLines,
+            brief,
+            cancellationToken).ConfigureAwait(false);
+
+        (string? declarationFilePath, int? declarationLine, int? declarationColumn) = SymbolQueryResolution.GetPrimaryDeclarationLocation(normalizedAnchor);
+        return BuildHierarchyResult(
+            normalizedAnchor,
+            scope,
+            declarationFilePath ?? workspace.ResolvedWorkspacePath,
+            declarationLine,
+            declarationColumn,
+            symbolQuery,
+            direction,
+            maxDepth,
+            maxNodes,
+            maxEdges,
+            contextLines,
+            brief,
+            includeObjectCreations,
+            includeExternal,
+            includeGenerated,
+            workspacePath ?? workspace.ResolvedWorkspacePath,
+            workspaceHandle,
+            requireWorkspace,
+            workspaceContext: null,
+            graph,
+            cancellationToken);
+    }
+
+    private static CommandExecutionResult BuildHierarchyResult(
+        ISymbol normalizedAnchor,
+        SearchScope scope,
+        string anchorFilePath,
+        int? anchorLine,
+        int? anchorColumn,
+        string? symbolQuery,
+        CallHierarchyDirection direction,
+        int maxDepth,
+        int maxNodes,
+        int maxEdges,
+        int contextLines,
+        bool brief,
+        bool includeObjectCreations,
+        bool includeExternal,
+        bool includeGenerated,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        object? workspaceContext,
+        CallGraph graph,
+        CancellationToken cancellationToken)
+    {
         string anchorId = graph.GetOrAddNode(normalizedAnchor).symbol_id;
-        graph.TryUpdateNodeSourceLocation(anchorId, analysis.FilePath, line, column);
+        if (anchorLine.HasValue && anchorColumn.HasValue)
+        {
+            graph.TryUpdateNodeSourceLocation(anchorId, anchorFilePath, anchorLine.Value, anchorColumn.Value);
+        }
 
         HashSet<string> selectedNodes = new(StringComparer.Ordinal) { anchorId };
         Dictionary<string, int> nodeDepths = new(StringComparer.Ordinal) { [anchorId] = 0 };
@@ -250,13 +410,29 @@ public sealed class CallHierarchyCommand : IAgentCommand
             })
             .ToArray();
 
-        object data = new
-        {
-            file_path = analysis.FilePath,
-            query = new
+        object queryPayload = symbolQuery is not null
+            ? new
             {
-                line,
-                column,
+                symbol = symbolQuery,
+                line = anchorLine,
+                column = anchorColumn,
+                direction = DirectionToString(direction),
+                max_depth = maxDepth,
+                max_nodes = maxNodes,
+                max_edges = maxEdges,
+                context_lines = contextLines,
+                brief,
+                include_object_creations = includeObjectCreations,
+                include_external = includeExternal,
+                include_generated = includeGenerated,
+                workspace_path = workspacePath,
+                workspace_handle = workspaceHandle,
+                require_workspace = requireWorkspace,
+            }
+            : new
+            {
+                line = anchorLine,
+                column = anchorColumn,
                 direction = DirectionToString(direction),
                 max_depth = maxDepth,
                 max_nodes = maxNodes,
@@ -268,8 +444,13 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 include_generated = includeGenerated,
                 workspace_path = workspacePath,
                 require_workspace = requireWorkspace,
-                workspace_context = WorkspaceContextPayload.Build(analysis.WorkspaceContext),
-            },
+                workspace_context = workspaceContext,
+            };
+
+        object data = new
+        {
+            file_path = anchorFilePath,
+            query = queryPayload,
             symbol = new
             {
                 symbol_display = normalizedAnchor.ToDisplayString(),

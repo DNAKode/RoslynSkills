@@ -3952,6 +3952,130 @@ public sealed class CliApplicationTests
         }
     }
 
+    [Theory]
+    [InlineData("nav.find_references")]
+    [InlineData("nav.find_invocations")]
+    [InlineData("nav.find_implementations")]
+    [InlineData("nav.find_overrides")]
+    [InlineData("nav.go_to_definition")]
+    [InlineData("nav.call_hierarchy")]
+    public async Task NavCommands_DescribeCommandAndUsage_ExposeSymbolOption(string commandId)
+    {
+        CliApplication app = new(DefaultRegistryFactory.Create());
+
+        StringWriter describeOut = new();
+        StringWriter describeErr = new();
+        int describeExit = await app.RunAsync(
+            new[] { "describe-command", commandId },
+            describeOut,
+            describeErr,
+            CancellationToken.None);
+        Assert.Equal(0, describeExit);
+        Assert.Contains("--symbol", describeOut.ToString(), StringComparison.Ordinal);
+        Assert.Contains("\"symbol\"", describeOut.ToString(), StringComparison.Ordinal);
+
+        StringWriter usageOut = new();
+        StringWriter usageErr = new();
+        int usageExit = await app.RunAsync(
+            new[] { commandId, "Demo.cs", "--no-daemon" },
+            usageOut,
+            usageErr,
+            CancellationToken.None);
+        Assert.NotEqual(0, usageExit);
+        Assert.Contains("invalid_args", usageOut.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--symbol <Type.Member>", usageOut.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DirectShorthand_NavFindInvocationsAndSiblings_AcceptSymbolOption()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"roslynskills-cli-nav-symbol-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            string csproj = Path.Combine(tempDir, "App.csproj");
+            string slnx = Path.Combine(tempDir, "App.slnx");
+            string sourcePath = Path.Combine(tempDir, "Demo.cs");
+            await File.WriteAllTextAsync(csproj, """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
+                  </PropertyGroup>
+                </Project>
+                """);
+            await File.WriteAllTextAsync(slnx, """
+                <Solution>
+                  <Project Path="App.csproj" />
+                </Solution>
+                """);
+            await File.WriteAllTextAsync(sourcePath, """
+                namespace Demo;
+
+                public interface IRunner { void Run(); }
+                public abstract class BaseRunner : IRunner { public virtual void Run() { } }
+                public sealed class FastRunner : BaseRunner { public override void Run() { } }
+                public sealed record Item(string Kind);
+                public sealed class Caller
+                {
+                    public void Go(FastRunner runner, Item item)
+                    {
+                        runner.Run();
+                        _ = item is { Kind: "a" };
+                    }
+                }
+                """);
+
+            CliApplication app = new(DefaultRegistryFactory.Create());
+
+            async Task<JsonDocument> RunOkAsync(params string[] cliArgs)
+            {
+                StringWriter stdout = new();
+                StringWriter stderr = new();
+                int exitCode = await app.RunAsync(cliArgs, stdout, stderr, CancellationToken.None);
+                string text = stdout.ToString();
+                Assert.True(exitCode == 0, $"{string.Join(" ", cliArgs)} failed:\nSTDOUT:\n{text}\nSTDERR:\n{stderr}");
+                JsonDocument doc = JsonDocument.Parse(text);
+                Assert.True(doc.RootElement.GetProperty("Ok").GetBoolean(), text);
+                return doc;
+            }
+
+            using (JsonDocument inv = await RunOkAsync("nav.find_invocations", "--symbol", "FastRunner.Run", "--workspace-path", slnx, "--no-daemon"))
+            {
+                Assert.Equal(1, inv.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32());
+            }
+
+            using (JsonDocument refs = await RunOkAsync("nav.find_references", "--symbol", "Item.Kind", "--workspace-path", slnx, "--no-daemon"))
+            {
+                Assert.Equal(2, refs.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32());
+            }
+
+            using (JsonDocument impls = await RunOkAsync("nav.find_implementations", "--symbol", "IRunner", "--workspace-path", slnx, "--no-daemon"))
+            {
+                Assert.True(impls.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32() >= 2);
+            }
+
+            using (JsonDocument ovr = await RunOkAsync("nav.find_overrides", "--symbol", "BaseRunner.Run", "--workspace-path", slnx, "--no-daemon"))
+            {
+                Assert.Equal(1, ovr.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32());
+            }
+
+            using (JsonDocument def = await RunOkAsync("nav.go_to_definition", "--symbol", "Item.Kind", "--workspace-path", slnx, "--no-daemon"))
+            {
+                Assert.Equal(1, def.RootElement.GetProperty("Data").GetProperty("total_definitions").GetInt32());
+            }
+
+            using (JsonDocument hier = await RunOkAsync("nav.call_hierarchy", "--symbol", "FastRunner.Run", "--direction", "incoming", "--max-depth", "1", "--workspace-path", slnx, "--no-daemon"))
+            {
+                Assert.Contains("Caller.Go", hier.RootElement.GetProperty("Data").GetProperty("nodes").GetRawText());
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
     private static async Task RunProcessAsync(string fileName, string workingDirectory, params string[] arguments)
     {
         ProcessStartInfo startInfo = new(fileName)

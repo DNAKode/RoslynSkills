@@ -10,7 +10,7 @@ public sealed class FindReferencesCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "nav.find_references",
-        Summary: "Find same-symbol references anchored by line/column with semantic matching; spans the whole loaded solution when the file belongs to one.",
+        Summary: "Find same-symbol references anchored by line/column or --symbol with semantic matching; spans the whole loaded solution when available.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -19,7 +19,7 @@ public sealed class FindReferencesCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
-        string? symbolQuery = GetOptionalSymbolQuery(input);
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
         if (!string.IsNullOrWhiteSpace(symbolQuery))
         {
             WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
@@ -64,7 +64,7 @@ public sealed class FindReferencesCommand : IAgentCommand
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        string? symbolQuery = GetOptionalSymbolQuery(input);
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
         if (!string.IsNullOrWhiteSpace(symbolQuery))
         {
             return await ExecuteBySymbolNameAsync(
@@ -118,6 +118,8 @@ public sealed class FindReferencesCommand : IAgentCommand
                 new[] { new CommandError("symbol_not_found", $"Unable to resolve a semantic symbol at {line}:{column}.{hint}") });
         }
 
+        targetSymbol = SolutionSearchScope.NormalizePositionalRecordProperty(targetSymbol);
+
         string? targetSymbolId = CommandTextFormatting.GetStableSymbolId(targetSymbol);
         List<ReferenceMatch> matches;
         bool truncated;
@@ -170,30 +172,6 @@ public sealed class FindReferencesCommand : IAgentCommand
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 
-    private static string? GetOptionalSymbolQuery(JsonElement input)
-    {
-        if (input.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        if (input.TryGetProperty("symbol", out JsonElement symbolProp) &&
-            symbolProp.ValueKind == JsonValueKind.String &&
-            !string.IsNullOrWhiteSpace(symbolProp.GetString()))
-        {
-            return symbolProp.GetString()!.Trim();
-        }
-
-        if (input.TryGetProperty("symbol_name", out JsonElement symbolNameProp) &&
-            symbolNameProp.ValueKind == JsonValueKind.String &&
-            !string.IsNullOrWhiteSpace(symbolNameProp.GetString()))
-        {
-            return symbolNameProp.GetString()!.Trim();
-        }
-
-        return null;
-    }
-
     private async Task<CommandExecutionResult> ExecuteBySymbolNameAsync(
         JsonElement input,
         string symbolQuery,
@@ -206,56 +184,24 @@ public sealed class FindReferencesCommand : IAgentCommand
         int maxResults,
         CancellationToken cancellationToken)
     {
-        List<CommandError> errors = new();
-        if (!WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _))
+        (SymbolQueryResult? resolved, CommandExecutionResult? errorResult) = await SymbolQueryResolution.ResolveAsync(
+            input,
+            symbolQuery,
+            workspacePath,
+            targetPredicate: null,
+            invalidTargetMessageFormat: string.Empty,
+            allowSameTypeOverloads: false,
+            cancellationToken).ConfigureAwait(false);
+        if (errorResult is not null || resolved is null)
         {
-            return new CommandExecutionResult(null, errors);
+            return errorResult!;
         }
 
-        (StaticAnalysisWorkspace? workspace, CommandError? loadError) = await StaticAnalysisWorkspace
-            .ResolveAsync(input, workspacePath, includeGenerated: false, maxFiles: 50_000, cancellationToken)
-            .ConfigureAwait(false);
-        if (loadError is not null || workspace is null)
-        {
-            return new CommandExecutionResult(null, new[] { loadError ?? new CommandError("workspace_load_failed", "Failed to resolve workspace for symbol lookup.") });
-        }
-
-        if (workspace.Solution is null)
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("workspace_required", "Symbol lookup (--symbol) requires a loaded MSBuild solution or project workspace. Run 'roscli workspace.use <solution>' first.") });
-        }
-
-        List<ISymbol> candidates = await ResolveSymbolsByNameAsync(workspace.Solution, symbolQuery, cancellationToken).ConfigureAwait(false);
-        if (candidates.Count == 0)
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("symbol_not_found", $"No source symbol matching '{symbolQuery}' was found in workspace '{workspace.ResolvedWorkspacePath}'.") });
-        }
-
-        if (candidates.Count > 1)
-        {
-            object[] candidateSummaries = candidates
-                .Take(20)
-                .Select(FormatSymbolCandidate)
-                .ToArray();
-            return new CommandExecutionResult(
-                null,
-                new[]
-                {
-                    new CommandError(
-                        "ambiguous_symbol",
-                        $"Symbol '{symbolQuery}' matched {candidates.Count} declarations. Qualify the name further or pass <file>:<line>:<column>.",
-                        new { candidates = candidateSummaries }),
-                });
-        }
-
-        ISymbol targetSymbol = candidates[0];
+        StaticAnalysisWorkspace workspace = resolved.Workspace;
+        ISymbol targetSymbol = SolutionSearchScope.NormalizePositionalRecordProperty(resolved.Symbols[0]);
         string? targetSymbolId = CommandTextFormatting.GetStableSymbolId(targetSymbol);
         (List<ReferenceMatch> matches, bool truncated) = await FindSolutionReferencesAsync(
-            workspace.Solution,
+            workspace.Solution!,
             targetSymbol,
             includeDeclaration,
             includeGenerated,
@@ -263,10 +209,7 @@ public sealed class FindReferencesCommand : IAgentCommand
             maxResults,
             cancellationToken).ConfigureAwait(false);
 
-        Location? firstSourceLocation = targetSymbol.Locations.FirstOrDefault(loc => loc.IsInSource && loc.SourceTree is not null);
-        string? declarationFilePath = firstSourceLocation?.SourceTree?.FilePath;
-        int? declarationLine = firstSourceLocation is not null ? firstSourceLocation.GetLineSpan().StartLinePosition.Line + 1 : null;
-        int? declarationColumn = firstSourceLocation is not null ? firstSourceLocation.GetLineSpan().StartLinePosition.Character + 1 : null;
+        (string? declarationFilePath, int? declarationLine, int? declarationColumn) = SymbolQueryResolution.GetPrimaryDeclarationLocation(targetSymbol);
 
         object data = new
         {
@@ -290,121 +233,13 @@ public sealed class FindReferencesCommand : IAgentCommand
                 symbol_id = targetSymbolId,
             },
             search_scope = SolutionSearchScope.SolutionKind,
-            searched_projects = workspace.Solution.Projects.Count(),
+            searched_projects = workspace.Solution!.Projects.Count(),
             total_matches = matches.Count,
             truncated,
             matches,
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
-    }
-
-    private static async Task<List<ISymbol>> ResolveSymbolsByNameAsync(
-        Solution solution,
-        string symbolQuery,
-        CancellationToken cancellationToken)
-    {
-        string normalizedQuery = symbolQuery.Trim();
-        if (normalizedQuery.StartsWith("global::", StringComparison.Ordinal))
-        {
-            normalizedQuery = normalizedQuery["global::".Length..];
-        }
-
-        int parenIndex = normalizedQuery.IndexOf('(');
-        if (parenIndex > 0)
-        {
-            normalizedQuery = normalizedQuery[..parenIndex].Trim();
-        }
-
-        string[] segments = normalizedQuery.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segments.Length == 0)
-        {
-            return new List<ISymbol>();
-        }
-
-        string leafSegment = segments[^1];
-        int genericIndex = leafSegment.IndexOf('<');
-        string lookupName = genericIndex > 0 ? leafSegment[..genericIndex] : leafSegment;
-        int backtickIndex = lookupName.IndexOf('`');
-        if (backtickIndex > 0)
-        {
-            lookupName = lookupName[..backtickIndex];
-        }
-
-        Dictionary<string, ISymbol> byKey = new(StringComparer.Ordinal);
-        foreach (Project project in solution.Projects)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            IEnumerable<ISymbol> declared = await SymbolFinder
-                .FindDeclarationsAsync(project, lookupName, ignoreCase: false, SymbolFilter.TypeAndMember, cancellationToken)
-                .ConfigureAwait(false);
-            foreach (ISymbol candidate in declared)
-            {
-                if (!candidate.Locations.Any(loc => loc.IsInSource))
-                {
-                    continue;
-                }
-
-                if (MatchesQualifiedSymbolName(candidate, normalizedQuery, StringComparison.Ordinal))
-                {
-                    string key = CommandTextFormatting.GetStableSymbolId(candidate)
-                        ?? candidate.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                    byKey.TryAdd(key, candidate);
-                }
-            }
-        }
-
-        return byKey.Values.ToList();
-    }
-
-    private static bool MatchesQualifiedSymbolName(ISymbol symbol, string query, StringComparison comparison)
-    {
-        string qualified = BuildDottedSymbolName(symbol);
-        if (string.Equals(qualified, query, comparison))
-        {
-            return true;
-        }
-
-        return qualified.EndsWith("." + query, comparison);
-    }
-
-    private static string BuildDottedSymbolName(ISymbol symbol)
-    {
-        Stack<string> parts = new();
-        ISymbol? current = symbol;
-        while (current is not null)
-        {
-            if (current is INamespaceSymbol ns)
-            {
-                if (!ns.IsGlobalNamespace && !string.IsNullOrEmpty(ns.Name))
-                {
-                    parts.Push(ns.Name);
-                }
-            }
-            else if (!string.IsNullOrEmpty(current.Name))
-            {
-                parts.Push(current.Name);
-            }
-
-            current = current.ContainingSymbol;
-        }
-
-        return string.Join(".", parts);
-    }
-
-    private static object FormatSymbolCandidate(ISymbol symbol)
-    {
-        Location? loc = symbol.Locations.FirstOrDefault(l => l.IsInSource && l.SourceTree is not null);
-        FileLinePositionSpan? span = loc?.GetLineSpan();
-        return new
-        {
-            symbol_display = symbol.ToDisplayString(),
-            symbol_kind = symbol.Kind.ToString(),
-            qualified_name = BuildDottedSymbolName(symbol),
-            file_path = loc?.SourceTree?.FilePath,
-            line = span.HasValue ? span.Value.StartLinePosition.Line + 1 : (int?)null,
-            column = span.HasValue ? span.Value.StartLinePosition.Character + 1 : (int?)null,
-        };
     }
 
     private static (List<ReferenceMatch> Matches, bool Truncated) FindSameFileReferences(
@@ -539,14 +374,38 @@ public sealed class FindReferencesCommand : IAgentCommand
             .FindReferencesAsync(targetSymbol, solution, cancellationToken)
             .ConfigureAwait(false);
 
-        // Cascading also reports overrides, implementations and base members; keep the anchored symbol and
+        // Cascading also reports overrides, implementations and base members; keep the anchored symbol,
+        // its positional-record counterpart (synthesized property <-> primary constructor parameter), and
         // (for a named type) its constructors so object creations are included.
         List<(ReferencedSymbol Group, bool IsConstructorOfTargetType)> groups = new();
+        ISymbol? positionalCounterpart = SolutionSearchScope.TryGetPositionalRecordCounterpart(targetSymbol);
+        bool sawCounterpart = false;
         foreach (ReferencedSymbol group in referenced)
         {
             if (SolutionSearchScope.MatchesReferenceDefinition(group.Definition, targetSymbol, out bool isCtorOfTargetType))
             {
                 groups.Add((group, isCtorOfTargetType));
+                if (positionalCounterpart is not null &&
+                    SolutionSearchScope.IsSameSymbol(group.Definition, positionalCounterpart))
+                {
+                    sawCounterpart = true;
+                }
+            }
+        }
+
+        // Roslyn's FindReferencesAsync does not always cascade between a positional record's synthesized property
+        // and its primary constructor parameter (e.g. `{ Kind: ... }` vs `new Record(Kind: ...)`). Search both.
+        if (positionalCounterpart is not null && !sawCounterpart)
+        {
+            IEnumerable<ReferencedSymbol> counterpartRefs = await SymbolFinder
+                .FindReferencesAsync(positionalCounterpart, solution, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (ReferencedSymbol group in counterpartRefs)
+            {
+                if (SolutionSearchScope.MatchesReferenceDefinition(group.Definition, targetSymbol, out bool isCtorOfTargetType))
+                {
+                    groups.Add((group, isCtorOfTargetType));
+                }
             }
         }
 

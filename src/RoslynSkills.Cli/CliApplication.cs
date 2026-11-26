@@ -3152,8 +3152,7 @@ Workflow:
             case "nav.find_overrides":
             case "nav.find_invocations":
             case "nav.call_hierarchy":
-                if (string.Equals(commandId, "nav.find_references", StringComparison.Ordinal) &&
-                    positionalArgs.Length == 0 &&
+                if (positionalArgs.Length == 0 &&
                     (options.ContainsKey("symbol") || options.ContainsKey("symbol_name")))
                 {
                     break;
@@ -3165,13 +3164,10 @@ Workflow:
                     !int.TryParse(navArgs[1], out int invocationLine) ||
                     !int.TryParse(navArgs[2], out int invocationColumn))
                 {
-                    string extraUsage = string.Equals(commandId, "nav.find_references", StringComparison.Ordinal)
-                        ? " OR nav.find_references --symbol <Type.Member> [--option value ...]"
-                        : string.Empty;
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> <line> <column> [--option value ...] OR {commandId} <file-path>:<line>:<column> [--option value ...]{extraUsage}"));
+                        message: BuildUsageMessage(commandId, $"{commandId} <file-path> <line> <column> [--option value ...] OR {commandId} <file-path>:<line>:<column> [--option value ...] OR {commandId} --symbol <Type.Member> [--option value ...]"));
                     return false;
                 }
 
@@ -5214,14 +5210,14 @@ Workflow:
         {
             return new
             {
-                direct = "nav.go_to_definition <file-path> <line> <column> [--option value ...]",
+                direct = "nav.go_to_definition <file-path> <line> <column> [--option value ...] OR nav.go_to_definition --symbol <Type.Member> [--option value ...]",
                 run = "run nav.go_to_definition --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "brief", "context_lines", "workspace_path", "workspace_handle", "require_workspace" },
+                optional_properties = new[] { "symbol", "symbol_name", "brief", "context_lines", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
-                    "Resolves the symbol under line/column to its source declaration(s) or metadata assembly/type identity.",
-                    "Handles partial declarations, extension methods, generic definitions, and implicit parameterless constructors.",
+                    "Resolves the symbol under line/column (or --symbol Type.Member / Type.Member(ArgType)) to its source declaration(s) or metadata assembly/type identity.",
+                    "Handles partial declarations, extension methods, generic definitions, positional record properties, and implicit parameterless constructors.",
                 },
             };
         }
@@ -5230,13 +5226,15 @@ Workflow:
         {
             return new
             {
-                direct = "nav.find_references <file-path> <line> <column> [--option value ...]",
+                direct = "nav.find_references <file-path> <line> <column> [--option value ...] OR nav.find_references --symbol <Type.Member> [--option value ...]",
                 run = "run nav.find_references --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"max_results\":200}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "include_declaration", "max_results", "context_lines", "workspace_path", "workspace_handle", "require_workspace" },
+                optional_properties = new[] { "symbol", "symbol_name", "include_declaration", "include_generated", "max_results", "context_lines", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
+                    "Pass either <file-path> <line> <column> (or file:line:col) or --symbol <Type.Member> (with optional parameter types for overload disambiguation).",
                     "When anchored on a type, includes both type references and constructor/object-creation sites (explicit and target-typed new).",
+                    "Handles positional record properties (member access, property patterns, and named primary-constructor arguments).",
                 },
             };
         }
@@ -5245,12 +5243,13 @@ Workflow:
         {
             return new
             {
-                direct = "nav.find_implementations <file-path> <line> <column> [--option value ...]",
+                direct = "nav.find_implementations <file-path> <line> <column> [--option value ...] OR nav.find_implementations --symbol <Type.Member> [--option value ...]",
                 run = "run nav.find_implementations --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "max_results", "workspace_path", "workspace_handle", "require_workspace" },
+                optional_properties = new[] { "symbol", "symbol_name", "max_results", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
+                    "Accepts either file/line/column or --symbol <Type.Member> on a loaded workspace.",
                     "Returns declaration identifier coordinates so each match can be passed straight to another nav.* command.",
                 },
             };
@@ -5260,12 +5259,13 @@ Workflow:
         {
             return new
             {
-                direct = "nav.find_overrides <file-path> <line> <column> [--option value ...]",
+                direct = "nav.find_overrides <file-path> <line> <column> [--option value ...] OR nav.find_overrides --symbol <Type.Member> [--option value ...]",
                 run = "run nav.find_overrides --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "max_results", "workspace_path", "workspace_handle", "require_workspace" },
+                optional_properties = new[] { "symbol", "symbol_name", "max_results", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
+                    "Accepts either file/line/column or --symbol <Type.Member> on a loaded workspace.",
                     "Returns declaration identifier coordinates for every override across the loaded solution.",
                 },
             };
@@ -5275,13 +5275,14 @@ Workflow:
         {
             return new
             {
-                direct = "nav.find_invocations <file-path> <line> <column> [--option value ...]",
+                direct = "nav.find_invocations <file-path> <line> <column> [--option value ...] OR nav.find_invocations --symbol <Type.Member> [--option value ...]",
                 run = "run nav.find_invocations --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"brief\":true}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "brief", "max_results", "context_lines", "include_object_creations", "workspace_path", "workspace_handle", "require_workspace" },
+                optional_properties = new[] { "symbol", "symbol_name", "brief", "max_results", "context_lines", "include_object_creations", "include_generated", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
-                    "Use line/column anchored on a method, constructor, primary constructor, or type declaration/reference token.",
+                    "Use line/column anchored on a method, constructor, primary constructor, or type declaration/reference token, or pass --symbol <Type.Member> (with optional parameter types for overload disambiguation).",
+                    "When --symbol matches multiple overloads on the same type, returns invocations across all matching overloads unless parameter types are specified.",
                     "For project-backed files, set require_workspace=true to fail closed if context falls back to ad_hoc.",
                 },
             };
@@ -5291,13 +5292,13 @@ Workflow:
         {
             return new
             {
-                direct = "nav.call_hierarchy <file-path> <line> <column> [--option value ...]",
+                direct = "nav.call_hierarchy <file-path> <line> <column> [--option value ...] OR nav.call_hierarchy --symbol <Type.Member> [--option value ...]",
                 run = "run nav.call_hierarchy --input '{\"file_path\":\"src/MyFile.cs\",\"line\":12,\"column\":15,\"direction\":\"both\",\"max_depth\":2,\"brief\":true}'",
                 required_properties = new[] { "file_path", "line", "column" },
-                optional_properties = new[] { "direction", "max_depth", "max_nodes", "max_edges", "context_lines", "brief", "include_object_creations", "include_external", "include_generated", "workspace_path", "require_workspace" },
+                optional_properties = new[] { "symbol", "symbol_name", "direction", "max_depth", "max_nodes", "max_edges", "context_lines", "brief", "include_object_creations", "include_external", "include_generated", "workspace_path", "workspace_handle", "require_workspace" },
                 notes = new[]
                 {
-                    "nav.call_hierarchy is the canonical Roslyn-style call graph command.",
+                    "nav.call_hierarchy is the canonical Roslyn-style call graph command; accepts either file/line/column or --symbol <Type.Member>.",
                     "direction accepts incoming, outgoing, or both.",
                     "Call hierarchy is recursive by depth and returns nodes+edges, unlike flat call-site queries.",
                     "Advanced/heuristic command: may omit dynamic/reflection/DI dispatch paths.",
@@ -6484,12 +6485,12 @@ Workflow:
                 repair.propose_from_diagnostics <file-path>
                 nav.find_symbol <file-path> <symbol-name>
                 nav.find_symbol_batch [queries-json-or-file]
-                nav.go_to_definition <file-path> <line> <column>
-                nav.find_references <file-path> <line> <column>
-                nav.find_implementations <file-path> <line> <column>
-                nav.find_overrides <file-path> <line> <column>
-                nav.find_invocations <file-path> <line> <column>
-                nav.call_hierarchy <file-path> <line> <column>
+                nav.go_to_definition <file-path> <line> <column> | --symbol <Type.Member>
+                nav.find_references <file-path> <line> <column> | --symbol <Type.Member>
+                nav.find_implementations <file-path> <line> <column> | --symbol <Type.Member>
+                nav.find_overrides <file-path> <line> <column> | --symbol <Type.Member>
+                nav.find_invocations <file-path> <line> <column> | --symbol <Type.Member>
+                nav.call_hierarchy <file-path> <line> <column> | --symbol <Type.Member>
                 nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column>
                 analyze.unused_private_symbols <workspace-path>
                 analyze.control_flow_graph <file-path> <line> <column>

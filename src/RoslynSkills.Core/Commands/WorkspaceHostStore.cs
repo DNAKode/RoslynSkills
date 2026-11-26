@@ -733,6 +733,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             }
 
             hosted.Dispose();
+            HotWorkspaceWarmup.Start(reloaded.Workspace.Solution);
             WorkspaceStatus statusAfter = BuildStatus(reloaded);
             return new WorkspaceRefreshResult(
                 Applied: true,
@@ -858,6 +859,7 @@ internal sealed record HostedWorkspace(
 {
     public void Dispose()
     {
+        HotWorkspaceWarmup.Cancel(Workspace.Solution);
         ChangeTracker.Dispose();
     }
 }

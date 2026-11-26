@@ -775,52 +775,78 @@ internal static class Program
 
         if (string.Equals(commandId, "nav.go_to_definition", StringComparison.OrdinalIgnoreCase))
         {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
             properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
             properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
+            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
             properties["brief"] = BoolProperty("Return compact definition locations without source snippets.");
             properties["context_lines"] = IntProperty("Number of context lines around each source definition.", 0);
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
+            return;
+        }
+
+        if (string.Equals(commandId, "nav.find_references", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
+            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
+            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
+            properties["include_declaration"] = BoolProperty("Include symbol declaration locations in matches.");
+            properties["include_generated"] = BoolProperty("Include generated source files.");
+            properties["max_results"] = IntProperty("Maximum reference matches to return.", 1);
+            properties["context_lines"] = IntProperty("Number of context lines around each match.", 0);
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            return;
+        }
+
+        if (string.Equals(commandId, "nav.find_implementations", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "nav.find_overrides", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
+            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
+            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
+            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
+            properties["max_results"] = IntProperty("Maximum matches to return.", 1);
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             return;
         }
 
         if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
         {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
             properties["line"] = IntProperty("1-based line number for method, constructor, or type anchor.", 1);
             properties["column"] = IntProperty("1-based column number for method, constructor, or type anchor.", 1);
+            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
             properties["brief"] = BoolProperty("Return compact match payload.");
             properties["max_results"] = IntProperty("Maximum invocation matches to return.", 1);
             properties["include_object_creations"] = BoolProperty("Include object creation calls for constructor or type targets.");
+            properties["include_generated"] = BoolProperty("Include generated source files.");
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
             properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
             return;
         }
 
         if (string.Equals(commandId, "nav.call_hierarchy", StringComparison.OrdinalIgnoreCase))
         {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
+            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
             properties["line"] = IntProperty("1-based line number for method anchor.", 1);
             properties["column"] = IntProperty("1-based column number for method anchor.", 1);
+            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
             properties["direction"] = StringProperty("Hierarchy direction: incoming, outgoing, or both.");
             properties["max_depth"] = IntProperty("Maximum recursive depth.", 1);
             properties["max_nodes"] = IntProperty("Maximum nodes returned.", 1);
             properties["max_edges"] = IntProperty("Maximum edges returned.", 1);
             properties["brief"] = BoolProperty("Return compact node/edge payload.");
             properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
+            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
             return;
         }
 
