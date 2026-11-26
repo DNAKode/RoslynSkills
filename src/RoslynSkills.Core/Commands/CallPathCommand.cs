@@ -9,7 +9,7 @@ public sealed class CallPathCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "nav.call_path",
-        Summary: "Find a shortest call path between two method anchors using workspace semantic analysis.",
+        Summary: "Find a shortest call path between two method anchors (coordinates or --source-symbol/--target-symbol) using workspace semantic analysis.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -20,16 +20,39 @@ public sealed class CallPathCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "source_file_path", errors, out string sourceFilePath))
+        string? sourceSymbol = GetOptionalNamedSymbol(input, "source_symbol", "source_symbol_name");
+        string? targetSymbol = GetOptionalNamedSymbol(input, "target_symbol", "target_symbol_name");
+
+        if (!string.IsNullOrWhiteSpace(sourceSymbol) || !string.IsNullOrWhiteSpace(targetSymbol))
         {
-            return errors;
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
         }
 
-        InputParsing.TryGetRequiredInt(input, "source_line", errors, out _, minValue: 1, maxValue: 1_000_000);
-        InputParsing.TryGetRequiredInt(input, "source_column", errors, out _, minValue: 1, maxValue: 1_000_000);
-        InputParsing.TryGetRequiredString(input, "target_file_path", errors, out string targetFilePath);
-        InputParsing.TryGetRequiredInt(input, "target_line", errors, out _, minValue: 1, maxValue: 1_000_000);
-        InputParsing.TryGetRequiredInt(input, "target_column", errors, out _, minValue: 1, maxValue: 1_000_000);
+        if (string.IsNullOrWhiteSpace(sourceSymbol))
+        {
+            if (InputParsing.TryGetRequiredString(input, "source_file_path", errors, out string sourceFilePath))
+            {
+                InputParsing.TryGetRequiredInt(input, "source_line", errors, out _, minValue: 1, maxValue: 1_000_000);
+                InputParsing.TryGetRequiredInt(input, "source_column", errors, out _, minValue: 1, maxValue: 1_000_000);
+                if (!File.Exists(sourceFilePath))
+                {
+                    errors.Add(new CommandError("file_not_found", $"Input source file '{sourceFilePath}' does not exist."));
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(targetSymbol))
+        {
+            if (InputParsing.TryGetRequiredString(input, "target_file_path", errors, out string targetFilePath))
+            {
+                InputParsing.TryGetRequiredInt(input, "target_line", errors, out _, minValue: 1, maxValue: 1_000_000);
+                InputParsing.TryGetRequiredInt(input, "target_column", errors, out _, minValue: 1, maxValue: 1_000_000);
+                if (!File.Exists(targetFilePath))
+                {
+                    errors.Add(new CommandError("file_not_found", $"Input target file '{targetFilePath}' does not exist."));
+                }
+            }
+        }
 
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
@@ -39,46 +62,12 @@ public sealed class CallPathCommand : IAgentCommand
         InputParsing.ValidateOptionalBool(input, "include_external", errors);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
 
-        if (!File.Exists(sourceFilePath))
-        {
-            errors.Add(new CommandError("file_not_found", $"Input source file '{sourceFilePath}' does not exist."));
-        }
-
-        if (!File.Exists(targetFilePath))
-        {
-            errors.Add(new CommandError("file_not_found", $"Input target file '{targetFilePath}' does not exist."));
-        }
-
         return errors;
     }
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "source_file_path", errors, out string sourceFilePath) ||
-            !InputParsing.TryGetRequiredInt(input, "source_line", errors, out int sourceLine, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredInt(input, "source_column", errors, out int sourceColumn, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredString(input, "target_file_path", errors, out string targetFilePath) ||
-            !InputParsing.TryGetRequiredInt(input, "target_line", errors, out int targetLine, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredInt(input, "target_column", errors, out int targetColumn, minValue: 1, maxValue: 1_000_000))
-        {
-            return new CommandExecutionResult(null, errors);
-        }
-
-        if (!File.Exists(sourceFilePath))
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("file_not_found", $"Input source file '{sourceFilePath}' does not exist.") });
-        }
-
-        if (!File.Exists(targetFilePath))
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("file_not_found", $"Input target file '{targetFilePath}' does not exist.") });
-        }
-
         int maxDepth = InputParsing.GetOptionalInt(input, "max_depth", defaultValue: 8, minValue: 1, maxValue: 40);
         int maxNodes = InputParsing.GetOptionalInt(input, "max_nodes", defaultValue: 2_000, minValue: 1, maxValue: 50_000);
         int maxGraphEdges = InputParsing.GetOptionalInt(input, "max_graph_edges", defaultValue: 30_000, minValue: 1, maxValue: 200_000);
@@ -88,9 +77,106 @@ public sealed class CallPathCommand : IAgentCommand
         bool includeExternal = InputParsing.GetOptionalBool(input, "include_external", defaultValue: false);
         bool includeGenerated = InputParsing.GetOptionalBool(input, "include_generated", defaultValue: false);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis sourceAnalysis = await CommandFileAnalysis.LoadAsync(sourceFilePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
+        string? sourceSymbolQuery = GetOptionalNamedSymbol(input, "source_symbol", "source_symbol_name");
+        string? targetSymbolQuery = GetOptionalNamedSymbol(input, "target_symbol", "target_symbol_name");
+
+        string? sourceFilePath = null;
+        int sourceLine = 0;
+        int sourceColumn = 0;
+        string? targetFilePath = null;
+        int targetLine = 0;
+        int targetColumn = 0;
+
+        if (!string.IsNullOrWhiteSpace(sourceSymbolQuery))
+        {
+            (SymbolQueryResult? resolvedSource, CommandExecutionResult? sourceErr) = await SymbolQueryResolution.ResolveAsync(
+                input,
+                sourceSymbolQuery,
+                workspacePath,
+                targetPredicate: s => s is IMethodSymbol,
+                invalidTargetMessageFormat: "Source symbol '{0}' ({1}) is not a method.",
+                allowSameTypeOverloads: false,
+                cancellationToken).ConfigureAwait(false);
+            if (sourceErr is not null || resolvedSource is null)
+            {
+                return sourceErr!;
+            }
+
+            (string? declFile, int? declLine, int? declCol) = SymbolQueryResolution.GetPrimaryDeclarationLocation(resolvedSource.Symbols[0]);
+            if (string.IsNullOrWhiteSpace(declFile) || !declLine.HasValue || !declCol.HasValue)
+            {
+                return new CommandExecutionResult(null, new[] { new CommandError("invalid_source_target", $"Source symbol '{sourceSymbolQuery}' does not have a source declaration.") });
+            }
+
+            sourceFilePath = declFile;
+            sourceLine = declLine.Value;
+            sourceColumn = declCol.Value;
+            workspacePath ??= resolvedSource.Workspace.ResolvedWorkspacePath;
+        }
+        else
+        {
+            if (!InputParsing.TryGetRequiredString(input, "source_file_path", errors, out sourceFilePath) ||
+                !InputParsing.TryGetRequiredInt(input, "source_line", errors, out sourceLine, minValue: 1, maxValue: 1_000_000) ||
+                !InputParsing.TryGetRequiredInt(input, "source_column", errors, out sourceColumn, minValue: 1, maxValue: 1_000_000))
+            {
+                return new CommandExecutionResult(null, errors);
+            }
+
+            if (!File.Exists(sourceFilePath))
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("file_not_found", $"Input source file '{sourceFilePath}' does not exist.") });
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetSymbolQuery))
+        {
+            (SymbolQueryResult? resolvedTarget, CommandExecutionResult? targetErr) = await SymbolQueryResolution.ResolveAsync(
+                input,
+                targetSymbolQuery,
+                workspacePath,
+                targetPredicate: s => s is IMethodSymbol,
+                invalidTargetMessageFormat: "Target symbol '{0}' ({1}) is not a method.",
+                allowSameTypeOverloads: false,
+                cancellationToken).ConfigureAwait(false);
+            if (targetErr is not null || resolvedTarget is null)
+            {
+                return targetErr!;
+            }
+
+            (string? declFile, int? declLine, int? declCol) = SymbolQueryResolution.GetPrimaryDeclarationLocation(resolvedTarget.Symbols[0]);
+            if (string.IsNullOrWhiteSpace(declFile) || !declLine.HasValue || !declCol.HasValue)
+            {
+                return new CommandExecutionResult(null, new[] { new CommandError("invalid_target", $"Target symbol '{targetSymbolQuery}' does not have a source declaration.") });
+            }
+
+            targetFilePath = declFile;
+            targetLine = declLine.Value;
+            targetColumn = declCol.Value;
+            workspacePath ??= resolvedTarget.Workspace.ResolvedWorkspacePath;
+        }
+        else
+        {
+            if (!InputParsing.TryGetRequiredString(input, "target_file_path", errors, out targetFilePath) ||
+                !InputParsing.TryGetRequiredInt(input, "target_line", errors, out targetLine, minValue: 1, maxValue: 1_000_000) ||
+                !InputParsing.TryGetRequiredInt(input, "target_column", errors, out targetColumn, minValue: 1, maxValue: 1_000_000))
+            {
+                return new CommandExecutionResult(null, errors);
+            }
+
+            if (!File.Exists(targetFilePath))
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("file_not_found", $"Input target file '{targetFilePath}' does not exist.") });
+            }
+        }
+
+        CommandFileAnalysis sourceAnalysis = await CommandFileAnalysis.LoadAsync(sourceFilePath, cancellationToken, workspacePath, workspaceHandle).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, sourceAnalysis);
         if (workspaceError is not null)
         {
@@ -219,6 +305,26 @@ public sealed class CallPathCommand : IAgentCommand
         };
 
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static string? GetOptionalNamedSymbol(JsonElement input, string primaryName, string aliasName)
+    {
+        if (input.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (input.TryGetProperty(primaryName, out JsonElement p) && p.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(p.GetString()))
+        {
+            return p.GetString()!.Trim();
+        }
+
+        if (input.TryGetProperty(aliasName, out JsonElement a) && a.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(a.GetString()))
+        {
+            return a.GetString()!.Trim();
+        }
+
+        return null;
     }
 
     private static object BuildSymbolPayload(IMethodSymbol method, string symbolId)

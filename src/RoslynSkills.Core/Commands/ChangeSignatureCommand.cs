@@ -17,7 +17,7 @@ public sealed class ChangeSignatureCommand : IAgentCommand
 
     public CommandDescriptor Descriptor { get; } = new(
         Id: "edit.change_signature",
-        Summary: "Change method signature anchored by line/column across the loaded solution (parameters, return type, optional name).",
+        Summary: "Change method signature anchored by line/column or --symbol across the loaded solution (parameters, return type, optional name).",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: true,
@@ -26,20 +26,31 @@ public sealed class ChangeSignatureCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
         {
-            return errors;
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
+            InputParsing.TryGetRequiredString(input, "parameters", errors, out _);
+            InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+            InputParsing.ValidateOptionalBool(input, "apply", errors);
         }
-
-        InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
-        InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
-        InputParsing.TryGetRequiredString(input, "parameters", errors, out _);
-        WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
-        WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
-        InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
-        if (!File.Exists(filePath))
+        else
         {
-            errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
+            if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
+            {
+                return errors;
+            }
+
+            InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
+            InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+            InputParsing.TryGetRequiredString(input, "parameters", errors, out _);
+            WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
+            WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
+            InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+            if (!File.Exists(filePath))
+            {
+                errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
+            }
         }
 
         if (input.TryGetProperty("new_name", out JsonElement newNameProperty) && newNameProperty.ValueKind == JsonValueKind.String)
@@ -59,26 +70,16 @@ public sealed class ChangeSignatureCommand : IAgentCommand
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
-            !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredInt(input, "column", errors, out int column, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredString(input, "parameters", errors, out string parametersRaw))
-        {
-            return new CommandExecutionResult(null, errors);
-        }
-
-        if (!File.Exists(filePath))
-        {
-            return new CommandExecutionResult(
-                null,
-                new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
-        }
-
         bool apply = InputParsing.GetOptionalBool(input, "apply", defaultValue: true);
         int maxDiagnostics = InputParsing.GetOptionalInt(input, "max_diagnostics", defaultValue: 50, minValue: 1, maxValue: 500);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        if (!InputParsing.TryGetRequiredString(input, "parameters", errors, out string parametersRaw))
+        {
+            return new CommandExecutionResult(null, errors);
+        }
 
         string? newName = null;
         if (input.TryGetProperty("new_name", out JsonElement newNameProperty) && newNameProperty.ValueKind == JsonValueKind.String)
@@ -123,6 +124,55 @@ public sealed class ChangeSignatureCommand : IAgentCommand
                 return new CommandExecutionResult(
                     null,
                     new[] { new CommandError("invalid_input", $"Property 'return_type' value '{returnTypeRaw}' is not a valid C# type.") });
+            }
+        }
+
+        string? filePath;
+        int line;
+        int column;
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            (SymbolQueryResult? resolved, CommandExecutionResult? errorResult) = await SymbolQueryResolution.ResolveAsync(
+                input,
+                symbolQuery,
+                workspacePath,
+                targetPredicate: s => s is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation or MethodKind.ReducedExtension },
+                invalidTargetMessageFormat: "Symbol '{0}' ({1}) is not a method declaration. Specify a method (e.g. Type.Method or Type.Method(int)) and retry.",
+                allowSameTypeOverloads: false,
+                cancellationToken).ConfigureAwait(false);
+            if (errorResult is not null || resolved is null)
+            {
+                return errorResult!;
+            }
+
+            (string? declFile, int? declLine, int? declColumn) = SymbolQueryResolution.GetPrimaryDeclarationLocation(resolved.Symbols[0]);
+            if (string.IsNullOrWhiteSpace(declFile) || !declLine.HasValue || !declColumn.HasValue)
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("invalid_target", $"Method '{resolved.Symbols[0].ToDisplayString()}' does not have a source declaration.") });
+            }
+
+            filePath = declFile;
+            line = declLine.Value;
+            column = declColumn.Value;
+            workspacePath ??= resolved.Workspace.ResolvedWorkspacePath;
+        }
+        else
+        {
+            if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out filePath) ||
+                !InputParsing.TryGetRequiredInt(input, "line", errors, out line, minValue: 1, maxValue: 1_000_000) ||
+                !InputParsing.TryGetRequiredInt(input, "column", errors, out column, minValue: 1, maxValue: 1_000_000))
+            {
+                return new CommandExecutionResult(null, errors);
+            }
+
+            if (!File.Exists(filePath))
+            {
+                return new CommandExecutionResult(
+                    null,
+                    new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
             }
         }
 

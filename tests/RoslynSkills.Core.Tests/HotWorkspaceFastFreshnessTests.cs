@@ -37,7 +37,7 @@ public sealed class HotWorkspaceFastFreshnessTests
 
             // 1. Nothing changed: the call skips the stat sweep.
             JsonElement firstSearch = await SearchAsync(host, handle, root, "HotMarker");
-            Assert.Equal("hot_text_index", TextSource(firstSearch));
+            Assert.Equal("workspace_overlay_index", TextSource(firstSearch));
             Assert.Equal("watcher_fast_path", firstSearch.GetProperty("freshness_mode").GetString());
             Assert.Equal(2, MatchCount(firstSearch));
             JsonElement quietFind = await FindSymbolAsync(host, handle, Path.Combine(root, "Lib", "Service.cs"), "Run");
@@ -52,7 +52,7 @@ public sealed class HotWorkspaceFastFreshnessTests
 
             JsonElement afterEdit = await SearchAsync(host, handle, root, "HotMarker");
             Assert.Equal("watcher_fast_path", afterEdit.GetProperty("freshness_mode").GetString());
-            Assert.Equal("hot_text_index", TextSource(afterEdit));
+            Assert.Equal("workspace_overlay_index", TextSource(afterEdit));
             string[] hotMarkerFiles = MatchFiles(afterEdit);
             Assert.Contains(hotMarkerFiles, file => file.EndsWith("External.cs", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(hotMarkerFiles, file => file.EndsWith("Service.cs", StringComparison.OrdinalIgnoreCase));
@@ -124,7 +124,7 @@ public sealed class HotWorkspaceFastFreshnessTests
             string handle = preload.GetProperty("data").GetProperty("workspace_handle").GetString()!;
 
             JsonElement hot = await SearchAsync(host, handle, root, "HotMarker", caseSensitive: false);
-            Assert.Equal("hot_text_index", TextSource(hot));
+            Assert.Equal("workspace_overlay_index", TextSource(hot));
 
             // The same query without a workspace handle walks the disk in-process.
             ICommandRegistry registry = DefaultRegistryFactory.Create();
@@ -146,9 +146,9 @@ public sealed class HotWorkspaceFastFreshnessTests
                 .Select(match => $"{Path.GetRelativePath(root, match.GetProperty("file_path").GetString()!)}:{match.GetProperty("line").GetInt32()}:{match.GetProperty("column").GetInt32()}")
                 .ToArray();
             Assert.Equal(Describe(diskData), Describe(hot.GetProperty("data")));
-            Assert.Equal(
-                diskData.GetProperty("files_scanned").GetInt32(),
-                hot.GetProperty("data").GetProperty("files_scanned").GetInt32());
+            Assert.True(
+                hot.GetProperty("data").GetProperty("files_scanned").GetInt32() <= diskData.GetProperty("files_scanned").GetInt32(),
+                "Overlay trigram index must scan no more files than disk walk.");
         }
         finally
         {

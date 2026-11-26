@@ -1,9 +1,9 @@
 # Roslyn Harness Integration Study: CLI + NativeAOT Daemon vs. LSP vs. MCP vs. Built-In Tools
 
 **Date:** 2026-11-26  
-**Version Studied:** RoslynSkills `0.1.6-preview.31` (commit `72a4b26`)  
-**Benchmark Subject:** `CalcDb.slnx` (33 projects, 621 source documents, .NET 11.0 / mixed `net11.0` & `net11.0-windows`)  
-**Status:** Empirical engineering report & harness integration standard
+**Version Studied:** RoslynSkills `0.1.6-preview.31` (commit `72a4b26`, Sections 1–9 baseline) through `0.1.6-preview.33` (Pass 5, Section 10)  
+**Benchmark Subject:** `CalcDb.slnx` (33 projects, 621–632 source documents, .NET 11.0 / mixed `net11.0` & `net11.0-windows`)  
+**Status:** Empirical engineering report & harness integration standard (all Roadmap §8 P0/P1/P2 items shipped in Passes 4–5)
 
 ---
 
@@ -243,4 +243,84 @@ Ranked by **measured impact / engineering effort** from the bottlenecks and defe
 
 ## 9. Verification Summary & Artifact Provenance
 
-All empirical claims in Sections 1–8 were directly observed in sequential benchmark runs executed on `2026-11-26` against `C:\Work\DnaCalc\CalcDb\CalcDb.slnx` using `roscli` / `roscli-fast.exe` `0.1.6-preview.31+72a4b26`, `RoslynSkills.McpServer.dll`, `Microsoft.CodeAnalysis.LanguageServer.exe` `5.7.0-1.26220.12`, `csharp-ls.exe` `0.22.0.0`, `tools/csharp-lsp-mcp/server.js`, and `rg`. Build/test landing timings cite recorded measurements in `CalcDb/docs/work/process-log.md`; historical multi-turn token/trajectory baselines cite [docs/research-findings.md](research-findings.md) and [README.md](../README.md).
+All empirical claims in Sections 1–8 were directly observed in sequential benchmark runs executed on `2026-11-26` against `C:\Work\DnaCalc\CalcDb\CalcDb.slnx` using `roscli` / `roscli-fast.exe` `0.1.6-preview.31+72a4b26`, `RoslynSkills.McpServer.dll`, `Microsoft.CodeAnalysis.LanguageServer.exe` `5.7.0-1.26220.12`, `csharp-ls.exe` `0.22.0.0`, `tools/csharp-lsp-mcp/server.js`, and `rg`. Build/test landing timings cite recorded measurements in `CalcDb/docs/work/process-log.md`; historical multi-turn token/trajectory baselines cite [docs/research-findings.md](research-findings.md) and [README.md](../README.md). Section 10 below records the Pass 5 (`0.1.6-preview.33`) transcript audit, architecture, trade-off analysis, and sequential read-only benchmarks measured on the same `CalcDb.slnx` host.
+
+---
+
+## 10. Pass 5 (`0.1.6-preview.33`): Transcript Audit, Live Overlay Index, Compound Mindspace, and Roadmap Closure
+
+Pass 4 (`0.1.6-preview.32`) shipped Roadmap §8 P0 items 1–4 and P1 items 5–6 (hot `ctx.file_outline`, expanded `query.batch`, compact redirected stdout JSON, `nav.call_hierarchy` default `--max-depth 1`, slim 10-tool MCP mode at ~4.9 KB, and direct persistent `WorkspaceHost` pipe routing with auto-bind). Pass 5 (`0.1.6-preview.33`) closes the remaining Roadmap §8 items (**P1.7**, **P2.8**, **P2.9**, **P2.10**) and adds a **live in-memory overlay trigram/token + line-offset index**, **syntax-aware search**, **zero-disk window reads**, and **compound symbol mindspace retrieval** driven directly by real multi-agent transcript measurements.
+
+### 10.1 Empirical Transcript Audit (48 Real CalcDb/C# Sessions)
+
+Read-only analysis across **48 real Antigravity C#/CalcDb worker sessions** (**5,129** tool-bearing turns, **10,137** tool calls) surfaced the exact multi-turn loops where agents burned wall time and context tokens:
+
+| Observed Tool / Pattern | Count / Share | Engineering Diagnosis | Pass 5 Target |
+|---|---:|---|---|
+| `read_file` total / `.cs` reads | **3,863** / **2,477** (`2,326` windowed, `151` full; med `101` lines, p90 `340` lines) | **64.5%** (`1,598 / 2,477`) were repeat reads of the same `.cs` file in one session, including **551** adjacent window-paging hops on the same file. | Zero-disk `ctx.read_window` (single + batched `windows`) backed by `SourceText.Lines`, returning `file_sha256` & `enclosing_symbol`. |
+| `run_command` (`rg`) | **1,140** commands (**1,567** `rg` invocations; **151** manually multi-batched) | **1,071** `rg` queries searched C# identifiers/symbols (mixing comments, strings, declarations, and calls); **699** `.cs` reads immediately followed `rg`. | `WorkspaceOverlayIndex` + syntax-filtered `ctx.search_text` (`code`/`comments`/`strings`/`identifiers`/`declarations`/`invocations`) + batched `queries`. |
+| `run_command` (`roscli`) | **114** calls (**1.1%** of all calls) | Top action bigrams were `read_cs -> read_cs` (**1,447**), `edit_cs -> edit_cs` (**1,184**), `rg -> read_cs` (**342**), `read_cs -> rg` (**320**), `rg -> rg` (**297**); agents spent 3–5 sequential turns to assemble one symbol's definition, callers, refs, and diagnostics. | Compound `ctx.symbol_context` / MCP `roslyn_context` collapsing search + read + nav + interface callers + diag into **1 bounded round trip**. |
+| `edit_file` (`.cs`) | **1,735** calls; **144** multi-file `.cs` edit bursts (avg **3.37** files/burst) | Multi-file edits lacked content-hash optimistic locking and crash-safe atomic commit across files. | `EditFileText.WriteAtomicBatchAsync` (temp-file + TOCTOU SHA-256 re-check + atomic `File.Move` + rollback) + `expected_sha256` / `expected_file_hashes` on `edit.transaction` / `edit.batch_exact`. |
+
+### 10.2 Live In-Memory Overlay Index & Persistence Trade-Off Analysis
+
+**Architecture (`WorkspaceOverlayIndex.cs`):** Layered directly over `WorkspaceHost`'s already-resident `StaticAnalysisWorkspace.SyntaxTreesByPath` and `SourceTextsByTree` without duplicating Roslyn semantic analysis:
+
+- **Per-tree immutable entry cache:** `ConditionalWeakTable<SyntaxTree, OverlayDocumentEntry>` stores each document's `SourceText`, `FullText`, sorted 48-bit packed case-folded unique trigrams (`ulong[]`), lowercased unique identifier tokens (`string[]`), and lazy encoding-aware SHA-256 (`EditFileText.ComputeEncodedSha256(FullText, SourceText.Encoding)` — zero disk reads and bit-identical to disk bytes for both BOM and no-BOM UTF-8 files).
+- **Inverted posting lists + BFS directory parity:** `_trigramPostings` and `_tokenPostings` prune non-matching workspace files via smallest-posting-list intersection (including literal anchor extraction for regex patterns). Surviving candidates sort breadth-first by directory depth/name to match `Directory.EnumerateFiles` order.
+- **Zero-duplication AST filtering:** When `syntax_filter` (`code`, `comments`, `strings`, `comments_and_strings`, `non_code`, `identifiers`, `declarations`, `invocations`) or `include_syntax_context` is requested, `WorkspaceOverlayIndex.ClassifySyntaxMatch` inspects Roslyn's cached `SyntaxTree` token/trivia/parent syntax nodes directly (zero semantic compilation duplication).
+- **Incremental invalidation by Roslyn tree identity:** Because Roslyn's `Solution` is immutable, unchanged documents preserve `ReferenceEquals(existing.SyntaxTree, tree)`. `SyncWithWorkspace` removes postings only for changed/deleted paths and indexes only modified/new trees (`O(changed files)`).
+
+**Evaluated Trade-Off — Why Incremental In-Memory Wins Over On-Disk Persistence (SQLite / mmap):**
+
+| Dimension | Incremental In-Memory Overlay (Chosen) | On-Disk Persistent Index (SQLite / mmap) |
+|---|---|---|
+| **Cold build cost on `CalcDb.slnx` (521 docs, 51,530 trigrams, 31,913 tokens)** | Built in parallel during Warmup Phase 0 in **`~100–150 ms`** (~**0.2–0.3%** of the `52.9 s` `workspace.use --wait-warmup` bind+compile cost). | Saves `<150 ms` on a `20–53 s` cold MSBuild load (negligible wall-time gain). |
+| **Resident memory overhead** | `~15–25 MB` inside the `1,180.5 MB` warmed `WorkspaceHost` (~2% of host RAM); `SourceText` and `SyntaxTree` are already resident in Roslyn. | Still requires resident `SourceText`/`SyntaxTree` in `WorkspaceHost` plus mmap/page-cache working set. |
+| **Incremental edit invalidation** | **Exact, `<1 ms`, zero race conditions:** keyed directly on Roslyn's immutable `SyntaxTree` object identity synced from `WorkspaceChangeTracker` and `HotWorkspaceEditRefresh`. | Must detect branch switches, worktree resets, partial writes, and external edits across restarts; risks stale postings or SQLite write-lock contention across concurrent worktrees (`CalcDb`, `CalcDb-w1`, `CalcDb-w2`). |
+| **Disk / hygiene footprint** | **Zero** files written on disk (no cache bloat, no repo pollution, no schema-version migration). | Requires persistent cache directory, compaction/pruning, and corruption recovery. |
+
+*Verdict:* Because `WorkspaceHost` already pays the MSBuild solution load once per worktree session and keeps every `SourceText`/`SyntaxTree` in RAM, a live incremental in-memory overlay delivers sub-2 ms index pruning and `0.2–0.3 ms` host window reads with zero persistence complexity. Persistent disk indexing would only become worthwhile for repositories an order of magnitude larger (`>10,000` source files) without an already-loaded Roslyn workspace.
+
+### 10.3 Measured Pass 5 Benchmarks on `CalcDb.slnx` (`0.1.6-preview.33`)
+
+Measured sequentially and strictly read-only on `C:\Work\DnaCalc\CalcDb\CalcDb.slnx` (`33` projects, `632` Roslyn documents, `521` non-generated overlay documents, `0` unresolved projects, `1,180.5 MB` warmed host):
+
+- **Bind + full 33-project `--wait-warmup` (`workspace.use --wait-warmup true`):** **`52,852.5 ms`** total wall (`~20.3 s` MSBuild bind + `32,569.2 ms` topological warmup across all `33/33` projects, `warmup_state: "complete"`, `overlay_index`: `521` docs, `51,530` trigrams, `31,913` tokens, `full_rebuilds: 1`).
+
+| Category & Command (`0.1.6-preview.33`) | Cold Wall (ms) | Warm Med Wall (ms) | Host Exec Med (ms) | Output Bytes (~Tokens) | Key Observed Result |
+|---|---:|---:|---:|---:|---|
+| **`rg -n -w Execute (*.cs src tests)`** (baseline) | — | `95.6` | — | `201,252` (`~50.3K`) | `1,248` lines (comments, strings, decls, calls mixed) |
+| **`ctx.search_text Execute --syntax-filter code`** | `138.6` | `133.6` | `50.6` | `268,821` (full) | **`541` matches** (eliminates 707 comment/string hits; `350` files pruned) |
+| **`ctx.search_text Execute --syntax-filter declarations`** | `112.0` | `106.5` | `52.4` | **`6,649` (`~1.7K`)** | **`15` declarations** (**96.7% token reduction** vs `rg`!) |
+| **`ctx.search_text Execute --syntax-filter invocations`** | `160.4` | `111.6` | `51.3` | **`5,755` (`~1.4K`)** | **`428` invocations** (brief capped, `350` files pruned) |
+| **`rg -n -w DeferredCatalogCommit (*.cs src tests)`** | — | `94.7` | — | `4,904` (`~1.2K`) | `35` lines (disk walk) |
+| **`ctx.search_text DeferredCatalogCommit --syntax-filter code`** | **`61.0`** | **`58.3`** | **`1.5`** | `5,734` (`~1.4K`) | **Faster than `rg` (`58.3` vs `94.7 ms`)**, scans `4` files, prunes **`517 / 521`** (`workspace_overlay_index`) |
+| **`ctx.search_text` batched (3 queries, decl+inv)** | `69.6` | **`58.0`** | **`5.5`** | `10,824` (`~2.7K`) | **`46` filtered matches in 1 call** (**~4.9× faster** than 3 sequential `rg` calls) |
+| **`ctx.read_window SchemaWriter.cs 1 100`** | `84.1` | **`55.6`** | **`0.3`** | `6,389` (`~1.6K`) | Zero-disk (`workspace_overlay_index`) + exact `file_sha256` |
+| **`ctx.read_window` batched (3 files × 60 lines)** | `66.3` | **`54.2`** | **`0.2`** | `12,255` (`~3.1K`) | `overlay_hits=3, disk_reads=0` in **1 round trip** |
+| **`ctx.symbol_context ComSqlDatabase.OpenSchemaWriter`** | `1,002.1` | **`64.2`** | **`11.7`** | **`5,404` (`~1.4K`)** | **1 call:** def + `4` interface-aware callers + refs + `0` diag (vs 4-step `228.9 ms` + `14,975 B` + file read!) |
+| **`ctx.symbol_context DeferredCatalogCommit.Kind`** | `646.1` | **`64.1`** | **`9.2`** | `6,773` (`~1.7K`) | Def + `14` semantic refs + `0` diag in **1 call** |
+| **`ctx.symbol_context SchemaWriter.CreateTable`** | `871.1` | **`69.7`** | **`16.8`** | `24,618` (`~6.2K`) | Def + `42` callers + `20` refs + `0` diag in **1 call** |
+| **`nav.find_references --symbols` (2 symbols, P2.10)** | `92.6` | **`71.0`** | **`8.4`** | `35,755` (`~8.9K`) | `2/2` succeeded (`59` refs in 1 call) |
+| **`nav.find_invocations --symbols` (2 symbols, P2.10)** | `73.9` | **`59.7`** | **`3.2`** | `16,547` (`~4.1K`) | `2/2` succeeded (`42` calls in 1 combined `CallSiteLookup` pass) |
+| **`edit.rename_symbol --symbol TextCodec.Decode` (dry-run, P2.9)** | `2,228.3` | `787.6` | `734.8` | `3,794` (`~0.9K`) | Direct `--symbol` solution rename + post-edit diagnostics |
+| **`edit.transaction` + `expected_sha256` (dry-run, P2.10)** | `2,056.7` | **`69.6`** | **`19.3`** | `5,997` (`~1.5K`) | Verified SHA-256 precondition + post-edit diagnostics |
+| **`analyze.impact_slice --symbol DeferredCatalogCommit.Kind`** | `43,977` | `49,789` | `49,334` | `3,373` (`~0.8K`) | *Honest finding:* `impact_slice` still binds every matching tree manually (`Kind` appears widely); prefer `ctx.symbol_context` (**770× faster**, `64.1 ms`!) until `impact_slice` adopts `SymbolFinder`/`CallSiteLookup`. |
+| **MCP `--mode slim` `tools/list` (12 tools, P1.7)** | `184.0` (init) | — | — | **`6,016` (`~1.5K`)** | **12 complete descriptor-driven tools** (`roslyn_search`, `roslyn_context`, + 10); **93.3% smaller** than Pass 5 `--mode full` (`90,498 B`, 61 complete tools). |
+| **MCP `roslyn_search` (`DeferredCatalogCommit`, `code`)** | `170.0` | **`6.6`** | — | `5,664` (`~1.4K`) | Persistent pipe over `WorkspaceOverlayIndex` |
+| **MCP `roslyn_context` (`OpenSchemaWriter` / `Kind`)** | `1,052–1,197` | **`13.3–15.6`** | — | `5,190–6,571` | Full symbol mindspace in **~14 ms** over persistent pipe |
+| **MCP `roslyn_run` `ctx.read_window` (`SchemaWriter 1..100`)** | `6.2` | **`4.8`** | — | `6,865` (`~1.7K`) | Sub-5 ms zero-disk file read over persistent pipe |
+
+### 10.4 Roadmap §8 Closure & Updated Harness Guidance
+
+Every item in Section 8 is now implemented and verified (`378/378` Release tests passing, `0` warnings, `0` skill-validation warnings):
+
+- **P0 (Items 1–4):** Shipped in Pass 4 (`0.1.6-preview.32`).
+- **P1 (Items 5–6):** Shipped in Pass 4 (`0.1.6-preview.32`); **Item 7 (Descriptor-Driven Single Schema Source)** shipped in Pass 5 (`CommandInputSchemaCatalog` drives all `61` Core commands, CLI `describe-command` + schema-aware option coercion, MCP `--mode full` [0 parameterized schema-less tools], and MCP `--mode slim` [12 tools at `6,016 B`]).
+- **P2 (Items 8–10):** All shipped in Pass 5 (`warmup_state` + `--wait-warmup` on `workspace.use`/`preload`/`status`; `--symbol` / `--source-symbol` / `--target-symbol` on `edit.rename_symbol`, `edit.change_signature`, `nav.call_path`, `analyze.impact_slice`; `--symbols` multi-symbol batching on `nav.find_references` / `nav.find_invocations`; SHA-256 preconditions + crash-safe atomic temp-file/rename/rollback in `EditFileText.WriteAtomicBatchAsync` + `edit.transaction` / `edit.batch_exact`).
+- **Updated Default Guidance:**
+  - Start symbol investigations with **`ctx.symbol_context --symbol Type.Member`** (or MCP **`roslyn_context`**): replaces 4–5 separate search/read/nav/diag turns with a single `~64 ms` CLI / `~14 ms` MCP call (`~1.4K–1.7K` tokens) that also returns `file_sha256` ready for guarded edits.
+  - When searching C# code on a bound daemon, prefer **`ctx.search_text --syntax-filter code|declarations|invocations --whole-word true`** (or batched `--queries`, or MCP **`roslyn_search`**): faster than `rg` (`58 ms` vs `95 ms` on selective tokens, `6.6 ms` over MCP) while eliminating comment/string noise (`96.7%` smaller on `Execute` declarations). Keep `rg` for non-C# files (`.md`, `.json`, `.csproj`, `.slnx`).
+  - Use **`ctx.read_window`** (single or batched `windows`) when reading multiple `.cs` slices or capturing `file_sha256` preconditions before **`edit.transaction` / `edit.batch_exact`** (`expected_sha256` / `expected_file_hashes`).
+  - **Future follow-up spotted by benchmarks:** Migrate `analyze.impact_slice`'s internal reference/caller scan loops to reuse `FindReferencesCommand.FindSolutionReferencesAsync` and `CallSiteAnalysis` (matching `ctx.symbol_context`'s `~64 ms` speed instead of scanning all syntax trees).

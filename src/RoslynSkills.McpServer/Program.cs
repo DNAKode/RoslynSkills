@@ -131,7 +131,7 @@ internal static class Program
 
                             string protocolVersion = ResolveProtocolVersion(@params);
                             string instructions = ActiveMode == McpToolMode.Slim
-                                ? "Roslyn-backed C# navigation, diagnostics, and edits (slim mode: 10 tools). Use roslyn_nav_* with symbol ('Type.Member') or file_path/line/column, roslyn_diag_snapshot for multi-project diagnostics, roslyn_edit_* for semantic/atomic edits, and roslyn_run for any other RoslynSkills command (ctx.file_outline, ctx.member_source, ctx.search_text, nav.find_overrides, query.batch, workspace.status)."
+                                ? "Roslyn-backed C# navigation, mindspace context, search, diagnostics, and edits (slim mode: 12 tools). Use roslyn_search for syntax-aware overlay search (code/comments/strings/declarations/invocations), roslyn_context for one-call symbol mindspace (definition+refs+callers+impls+diag), roslyn_nav_* with symbol/symbols or file_path/line/column, roslyn_diag_snapshot for multi-project diagnostics, roslyn_edit_* for semantic/atomic edits with SHA-256 preconditions, and roslyn_run for any other RoslynSkills command (ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.status)."
                                 : "Roslyn-backed C# navigation, diagnostics, and edits. Tool names map from command ids via roslyn_<command_id_with_underscores>. Resource template invocation is available via roslyn://command/{commandId}.";
                             JsonObject result = new()
                             {
@@ -453,7 +453,7 @@ internal static class Program
         else
         {
             string hint = ActiveMode == McpToolMode.Slim
-                ? $"Unknown tool '{toolName}'. In slim mode call one of the 10 exposed tools or use 'roslyn_run' with command_id."
+                ? $"Unknown tool '{toolName}'. In slim mode call one of the 12 exposed tools or use 'roslyn_run' with command_id."
                 : $"Unknown tool '{toolName}'.";
             await WriteErrorResponseAsync(
                 output,
@@ -510,6 +510,14 @@ internal static class Program
     {
         switch (toolName.ToLowerInvariant())
         {
+            case "roslyn_search":
+                commandId = "ctx.search_text";
+                return true;
+
+            case "roslyn_context":
+                commandId = "ctx.symbol_context";
+                return true;
+
             case "roslyn_nav_symbol":
                 // Support both solution-wide declaration jump (nav.go_to_definition via symbol or file/line/col)
                 // and file-scoped identifier lookup (nav.find_symbol via file_path + symbol_name without line).
@@ -816,25 +824,52 @@ internal static class Program
 
     private static JsonArray BuildSlimToolList()
     {
-        static JsonObject Str(string? desc = null) => desc is null
-            ? new() { ["type"] = "string" }
-            : new() { ["type"] = "string", ["description"] = desc };
-        static JsonObject Int(string? desc = null) => desc is null
-            ? new() { ["type"] = "integer" }
-            : new() { ["type"] = "integer", ["description"] = desc };
-        static JsonObject Bool() => new() { ["type"] = "boolean" };
-        static JsonObject StrEnum(params string[] values)
+        // Project every slim tool's JSON Schema from the single descriptor-driven CommandInputSchemaCatalog
+        // while keeping tools/list compact (~5-6 KB for all 12 tools).
+        static JsonObject SlimTool(
+            string name,
+            string desc,
+            bool readOnly,
+            string backingCommandId,
+            string[] allowedParams,
+            string[]? requiredOverride = null,
+            Dictionary<string, string>? shortDescs = null,
+            Dictionary<string, IReadOnlySet<string>>? allowedNested = null,
+            Action<JsonObject>? extraProps = null)
         {
-            JsonArray arr = new();
-            foreach (string v in values) arr.Add(v);
-            return new JsonObject { ["type"] = "string", ["enum"] = arr };
+            CommandInputSchema schema = CommandInputSchemaCatalog.GetSchema(backingCommandId)
+                ?? throw new InvalidOperationException($"Missing descriptor input schema for '{backingCommandId}'.");
+
+            HashSet<string> allowed = new(allowedParams, StringComparer.OrdinalIgnoreCase);
+            HashSet<string>? requiredSet = requiredOverride is null
+                ? null
+                : new HashSet<string>(requiredOverride, StringComparer.OrdinalIgnoreCase);
+
+            JsonObject inputSchema = CommandInputSchemaCatalog.ToJsonSchemaObject(
+                schema,
+                description: null,
+                includeDescriptions: false,
+                allowedParameters: allowed,
+                descriptionOverrides: shortDescs,
+                requiredOverrides: requiredSet,
+                additionalPropertiesOverride: null,
+                allowedItemProperties: allowedNested);
+
+            if (extraProps is not null && inputSchema["properties"] is JsonObject propsObj)
+            {
+                extraProps(propsObj);
+            }
+
+            return new JsonObject
+            {
+                ["name"] = name,
+                ["description"] = desc,
+                ["inputSchema"] = inputSchema,
+                ["annotations"] = new JsonObject { ["readOnlyHint"] = readOnly },
+            };
         }
-        static JsonObject StrArray() => new()
-        {
-            ["type"] = "array",
-            ["items"] = new JsonObject { ["type"] = "string" },
-        };
-        static JsonObject Tool(string name, string desc, bool readOnly, JsonObject props, params string[] req)
+
+        static JsonObject SlimRawTool(string name, string desc, bool readOnly, JsonObject props, params string[] req)
         {
             JsonObject schema = new()
             {
@@ -857,131 +892,106 @@ internal static class Program
             };
         }
 
-        static void AddNavTarget(JsonObject p)
-        {
-            p["symbol"] = Str("Type.Member");
-            p["file_path"] = Str();
-            p["line"] = Int();
-            p["column"] = Int();
-        }
-
-        JsonObject navSymbol = new();
-        AddNavTarget(navSymbol);
-        navSymbol["symbol_name"] = Str("File lookup");
-        navSymbol["brief"] = Bool();
-        navSymbol["max_results"] = Int();
-
-        JsonObject navRefs = new();
-        AddNavTarget(navRefs);
-        navRefs["include_declaration"] = Bool();
-        navRefs["max_results"] = Int();
-        navRefs["context_lines"] = Int();
-
-        JsonObject navInvoc = new();
-        AddNavTarget(navInvoc);
-        navInvoc["brief"] = Bool();
-        navInvoc["max_results"] = Int();
-        navInvoc["include_object_creations"] = Bool();
-
-        JsonObject navHier = new();
-        AddNavTarget(navHier);
-        navHier["direction"] = StrEnum("incoming", "outgoing", "both");
-        navHier["max_depth"] = Int("Default 1 (1..8)");
-        navHier["max_nodes"] = Int();
-        navHier["max_edges"] = Int();
-        navHier["brief"] = Bool();
-
-        JsonObject navImpl = new();
-        AddNavTarget(navImpl);
-        navImpl["max_results"] = Int();
-
-        JsonObject diagSnap = new()
-        {
-            ["directory_path"] = Str(),
-            ["workspace_path"] = Str(),
-            ["file_paths"] = StrArray(),
-            ["mode"] = StrEnum("compact", "raw", "guided"),
-            ["brief"] = Bool(),
-            ["include_diagnostics"] = Bool(),
-            ["severity_filter"] = StrArray(),
-            ["max_diagnostics"] = Int(),
-            ["require_workspace"] = Bool(),
-        };
-
-        JsonObject editRename = new()
-        {
-            ["file_path"] = Str(),
-            ["line"] = Int(),
-            ["column"] = Int(),
-            ["new_name"] = Str(),
-            ["apply"] = Bool(),
-            ["max_diagnostics"] = Int(),
-        };
-
-        JsonObject editTxOpProps = new()
-        {
-            ["kind"] = StrEnum("replace_text", "insert_text", "replace_span", "set_content"),
-            ["file_path"] = Str(),
-            ["old_text"] = Str(),
-            ["new_text"] = Str(),
-            ["expected_text"] = Str(),
-            ["anchor_text"] = Str(),
-            ["position"] = StrEnum("before", "after"),
-            ["start_line"] = Int(),
-            ["start_column"] = Int(),
-            ["end_line"] = Int(),
-            ["end_column"] = Int(),
-            ["new_content"] = Str(),
-            ["replace_all"] = Bool(),
-        };
-        JsonObject editTx = new()
-        {
-            ["operations"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject
-                {
-                    ["type"] = "object",
-                    ["properties"] = editTxOpProps,
-                    ["required"] = new JsonArray { "kind" },
-                },
-            },
-            ["file_path"] = Str(),
-            ["apply"] = Bool(),
-            ["atomic"] = Bool(),
-            ["include_diagnostics"] = Bool(),
-            ["max_diagnostics"] = Int(),
-        };
-
-        JsonObject editFix = new()
-        {
-            ["file_path"] = Str(),
-            ["diagnostic_id"] = Str("e.g. CS0246"),
-            ["line"] = Int(),
-            ["column"] = Int(),
-            ["fix_title"] = Str(),
-            ["apply"] = Bool(),
-            ["max_diagnostics"] = Int(),
-        };
-
         JsonObject runGeneric = new()
         {
-            ["command_id"] = Str("ctx.*, nav.*, analyze.*, edit.*, repair.*, query.batch, workspace.*"),
+            ["command_id"] = new JsonObject { ["type"] = "string", ["description"] = "ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.*" },
             ["input"] = new JsonObject { ["type"] = "object" },
+        };
+
+        Dictionary<string, IReadOnlySet<string>> txSlimNested = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["operations"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "kind", "file_path", "expected_sha256", "old_text", "new_text", "anchor_text", "insert_text", "new_content",
+            },
         };
 
         return new JsonArray
         {
-            Tool("roslyn_nav_symbol", "Go to definition (symbol or file/line/col) or find symbol_name in file.", readOnly: true, navSymbol),
-            Tool("roslyn_nav_references", "Find solution-wide semantic references.", readOnly: true, navRefs),
-            Tool("roslyn_nav_invocations", "Find call sites and object creations.", readOnly: true, navInvoc),
-            Tool("roslyn_nav_call_hierarchy", "Call graph (default max_depth=1; includes interface callers).", readOnly: true, navHier),
-            Tool("roslyn_nav_implementations", "Find implementing types/members and derived interfaces.", readOnly: true, navImpl),
-            Tool("roslyn_diag_snapshot", "Multi-project Roslyn compiler diagnostics snapshot.", readOnly: true, diagSnap),
-            Tool("roslyn_edit_rename", "Solution-wide Roslyn symbol rename (with XML crefs).", readOnly: false, editRename, "file_path", "line", "column", "new_name"),
-            Tool("roslyn_edit_transaction", "Atomic multi-file edits with post-edit diagnostics.", readOnly: false, editTx, "operations"),
-            Tool("roslyn_edit_code_fix", "Discover or apply Roslyn CodeFixProvider fixes.", readOnly: false, editFix, "file_path"),
-            Tool("roslyn_run", "Run any RoslynSkills command by command_id (ctx.*, nav.*, query.batch, workspace.*).", readOnly: false, runGeneric, "command_id"),
+            SlimTool(
+                "roslyn_search",
+                "Zero-disk overlay search with AST syntax_filter and batched queries.",
+                readOnly: true,
+                "ctx.search_text",
+                ["pattern", "patterns", "syntax_filter", "whole_word", "mode", "file_path", "roots", "max_results", "brief"],
+                requiredOverride: []),
+            SlimTool(
+                "roslyn_context",
+                "One-call symbol mindspace: def + refs + interface callers + impls + diag.",
+                readOnly: true,
+                "ctx.symbol_context",
+                ["symbol", "file_path", "line", "column", "include_definition", "include_references", "include_callers", "include_callees", "include_implementations", "include_diagnostics", "brief"],
+                requiredOverride: []),
+            SlimTool(
+                "roslyn_nav_symbol",
+                "Go to definition or find symbol_name in file.",
+                readOnly: true,
+                "nav.go_to_definition",
+                ["symbol", "file_path", "line", "column", "brief"],
+                requiredOverride: [],
+                extraProps: static p =>
+                {
+                    p["symbol_name"] = new JsonObject { ["type"] = "string" };
+                    p["max_results"] = new JsonObject { ["type"] = "integer" };
+                }),
+            SlimTool(
+                "roslyn_nav_references",
+                "Solution-wide references (single symbol or symbols batch).",
+                readOnly: true,
+                "nav.find_references",
+                ["symbol", "symbols", "file_path", "line", "column", "include_declaration", "max_results"],
+                requiredOverride: []),
+            SlimTool(
+                "roslyn_nav_invocations",
+                "Call sites and creations (single symbol or symbols batch).",
+                readOnly: true,
+                "nav.find_invocations",
+                ["symbol", "symbols", "file_path", "line", "column", "brief", "max_results", "include_object_creations"],
+                requiredOverride: []),
+            SlimTool(
+                "roslyn_nav_call_hierarchy",
+                "Call graph (default max_depth=1; interface callers included).",
+                readOnly: true,
+                "nav.call_hierarchy",
+                ["symbol", "file_path", "line", "column", "direction", "max_depth", "max_nodes", "max_edges", "brief"],
+                requiredOverride: []),
+            SlimTool(
+                "roslyn_nav_implementations",
+                "Implementing types/members and derived interfaces.",
+                readOnly: true,
+                "nav.find_implementations",
+                ["symbol", "file_path", "line", "column", "max_results"],
+                requiredOverride: []),
+            SlimTool(
+                "roslyn_diag_snapshot",
+                "Multi-project Roslyn compiler diagnostics snapshot.",
+                readOnly: true,
+                "diag.get_workspace_snapshot",
+                ["directory_path", "workspace_path", "file_paths", "mode", "brief", "include_diagnostics", "severity_filter", "max_diagnostics", "require_workspace"],
+                requiredOverride: []),
+            SlimTool(
+                "roslyn_edit_rename",
+                "Solution-wide rename by symbol or file/line/col (with XML crefs).",
+                readOnly: false,
+                "edit.rename_symbol",
+                ["symbol", "file_path", "line", "column", "new_name", "apply", "max_diagnostics"],
+                requiredOverride: ["new_name"]),
+            SlimTool(
+                "roslyn_edit_transaction",
+                "Atomic multi-file edits with SHA-256 preconditions and diagnostics.",
+                readOnly: false,
+                "edit.transaction",
+                ["operations", "file_path", "expected_sha256", "expected_file_hashes", "apply", "atomic", "include_diagnostics"],
+                requiredOverride: ["operations"],
+                allowedNested: txSlimNested),
+            SlimTool(
+                "roslyn_edit_code_fix",
+                "Discover or apply Roslyn CodeFixProvider fixes.",
+                readOnly: false,
+                "edit.apply_code_fix",
+                ["file_path", "diagnostic_id", "line", "column", "fix_title", "apply", "max_diagnostics"],
+                requiredOverride: ["file_path"]),
+            SlimRawTool("roslyn_run", "Run any RoslynSkills command by command_id.", readOnly: false, runGeneric, "command_id"),
         };
     }
 
@@ -990,7 +1000,7 @@ internal static class Program
         JsonArray tools = new();
         foreach (ToolBinding binding in toolMap.OrderedBindings)
         {
-            JsonObject inputSchema = BuildInputSchema(binding.CommandId, binding.InputSchemaVersion);
+            JsonObject inputSchema = BuildInputSchema(binding);
 
             JsonObject tool = new()
             {
@@ -1011,585 +1021,24 @@ internal static class Program
         return tools;
     }
 
-    private static JsonObject BuildInputSchema(string commandId, string schemaVersion)
+    private static JsonObject BuildInputSchema(ToolBinding binding)
     {
-        JsonObject schema = new()
+        CommandInputSchema? schema = binding.InputSchema ?? CommandInputSchemaCatalog.GetSchema(binding.CommandId);
+        string description = $"Arguments for command '{binding.CommandId}'. Schema version: {binding.InputSchemaVersion}.";
+        if (schema is not null)
+        {
+            return CommandInputSchemaCatalog.ToJsonSchemaObject(
+                schema,
+                description: description,
+                includeDescriptions: true);
+        }
+
+        return new JsonObject
         {
             ["type"] = "object",
             ["additionalProperties"] = true,
-            ["description"] = $"Arguments for command '{commandId}'. Schema version: {schemaVersion}.",
-        };
-
-        JsonObject properties = new();
-        JsonArray required = new();
-
-        AddCommandInputHints(commandId, properties, required);
-
-        if (properties.Count > 0)
-        {
-            schema["properties"] = properties;
-        }
-
-        if (required.Count > 0)
-        {
-            schema["required"] = required;
-        }
-
-        return schema;
-    }
-
-    private static void AddCommandInputHints(string commandId, JsonObject properties, JsonArray required)
-    {
-        static JsonObject StringProperty(string description) => new()
-        {
-            ["type"] = "string",
             ["description"] = description,
         };
-
-        static JsonObject IntProperty(string description, int min) => new()
-        {
-            ["type"] = "integer",
-            ["minimum"] = min,
-            ["description"] = description,
-        };
-
-        static JsonObject BoolProperty(string description) => new()
-        {
-            ["type"] = "boolean",
-            ["description"] = description,
-        };
-
-        if (string.Equals(commandId, "session.open", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# source file (.cs/.csx).");
-            properties["session_id"] = StringProperty("Optional session identifier.");
-            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned in snapshot.", 1);
-            required.Add("file_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "edit.create_file", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path of the file to create.");
-            properties["content"] = StringProperty("File content; defaults to empty file.");
-            properties["overwrite"] = BoolProperty("Whether to overwrite an existing file.");
-            properties["create_directories"] = BoolProperty("Create missing parent directories.");
-            properties["apply"] = BoolProperty("When false, run as dry-run.");
-            properties["include_diagnostics"] = BoolProperty("Evaluate C# diagnostics for .cs/.csx content.");
-            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned.", 1);
-            required.Add("file_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "edit.rename_symbol", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# source file.");
-            properties["line"] = IntProperty("1-based line number for rename anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for rename anchor.", 1);
-            properties["new_name"] = StringProperty("New symbol name.");
-            properties["apply"] = BoolProperty("When false, run as dry-run.");
-            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned.", 1);
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
-            required.Add("new_name");
-            return;
-        }
-
-        if (string.Equals(commandId, "edit.apply_code_fix", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# source file.");
-            properties["diagnostic_id"] = StringProperty("Optional Roslyn diagnostic id (for example CS0103, CS0246, CS1061, CS0535). Required when line is omitted.");
-            properties["line"] = IntProperty("Optional 1-based line number of the diagnostic.", 1);
-            properties["column"] = IntProperty("Optional 1-based column number of the diagnostic.", 1);
-            properties["fix_title"] = StringProperty("Optional exact Roslyn code-fix title to apply (for example 'using System.Diagnostics;' or 'Implement interface').");
-            properties["apply"] = BoolProperty("When false, inspect offered fixes and preview changes without writing files.");
-            properties["max_diagnostics"] = IntProperty("Maximum post-edit diagnostics returned.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path for workspace context.");
-            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "repair.propose_from_diagnostics", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# source file.");
-            properties["max_proposals"] = IntProperty("Maximum repair proposals returned.", 1);
-            properties["max_diagnostics"] = IntProperty("Maximum diagnostics inspected.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path for workspace context.");
-            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "repair.apply_plan", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["steps"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["description"] = "Sequence of repair steps ({ operation_id, input }). Can also be supplied inside 'plan.steps'.",
-            };
-            properties["file_path"] = StringProperty("Optional default file path inherited by steps omitting file_path.");
-            properties["stop_on_error"] = BoolProperty("Stop executing remaining steps after the first failure (default true).");
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path inherited by steps.");
-            properties["workspace_handle"] = StringProperty("Optional hot workspace handle inherited by steps.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.find_symbol", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["symbol_name"] = StringProperty("Symbol name to search for.");
-            properties["brief"] = BoolProperty("Return compact result payload.");
-            properties["max_results"] = IntProperty("Maximum matches to return.", 1);
-            properties["declarations_only"] = BoolProperty("When true, return only declaration matches.");
-            properties["first_declaration"] = BoolProperty("When true, return first declaration match (or first match when no declaration exists).");
-            properties["snippet_single_line"] = BoolProperty("Render context snippets as a single line with separators.");
-            properties["max_snippet_chars"] = IntProperty("Maximum snippet character count (0 means no limit).", 0);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            required.Add("symbol_name");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.find_symbol_batch", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["queries"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["description"] = "Array of symbol queries. Each item requires file_path and symbol_name; optional label is allowed.",
-                ["items"] = new JsonObject
-                {
-                    ["type"] = "object",
-                    ["properties"] = new JsonObject
-                    {
-                        ["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb)."),
-                        ["symbol_name"] = StringProperty("Symbol name to search for."),
-                        ["label"] = StringProperty("Optional caller-defined label for result correlation."),
-                    },
-                    ["required"] = new JsonArray { "file_path", "symbol_name" },
-                },
-            };
-            properties["continue_on_error"] = BoolProperty("Continue remaining queries after an error.");
-            properties["brief"] = BoolProperty("Default brief mode applied to all queries unless overridden.");
-            properties["max_results"] = IntProperty("Default max results applied to all queries unless overridden.", 1);
-            properties["context_lines"] = IntProperty("Default context lines applied to all queries unless overridden.", 0);
-            properties["declarations_only"] = BoolProperty("Default declaration-only behavior for queries.");
-            properties["first_declaration"] = BoolProperty("Default first-declaration behavior for queries.");
-            properties["snippet_single_line"] = BoolProperty("Default snippet single-line rendering for queries.");
-            properties["max_snippet_chars"] = IntProperty("Default max snippet chars for queries (0 means no limit).", 0);
-            properties["workspace_path"] = StringProperty("Default workspace path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["workspace_handle"] = StringProperty("Default hot workspace handle returned by workspace.preload.");
-            properties["require_workspace"] = BoolProperty("Default fail-closed workspace policy for queries.");
-            required.Add("queries");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.go_to_definition", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
-            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
-            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
-            properties["brief"] = BoolProperty("Return compact definition locations without source snippets.");
-            properties["context_lines"] = IntProperty("Number of context lines around each source definition.", 0);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.find_references", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
-            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
-            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
-            properties["include_declaration"] = BoolProperty("Include symbol declaration locations in matches.");
-            properties["include_generated"] = BoolProperty("Include generated source files.");
-            properties["max_results"] = IntProperty("Maximum reference matches to return.", 1);
-            properties["context_lines"] = IntProperty("Number of context lines around each match.", 0);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.find_implementations", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(commandId, "nav.find_overrides", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
-            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
-            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
-            properties["max_results"] = IntProperty("Maximum matches to return.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.find_invocations", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
-            properties["line"] = IntProperty("1-based line number for method, constructor, or type anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for method, constructor, or type anchor.", 1);
-            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
-            properties["brief"] = BoolProperty("Return compact match payload.");
-            properties["max_results"] = IntProperty("Maximum invocation matches to return.", 1);
-            properties["include_object_creations"] = BoolProperty("Include object creation calls for constructor or type targets.");
-            properties["include_generated"] = BoolProperty("Include generated source files.");
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.call_hierarchy", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb). Required unless 'symbol' is provided.");
-            properties["line"] = IntProperty("1-based line number for method anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for method anchor.", 1);
-            properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
-            properties["direction"] = StringProperty("Hierarchy direction: incoming, outgoing, or both.");
-            properties["max_depth"] = IntProperty("Maximum recursive depth (default 1, range 1..8).", 1);
-            properties["max_nodes"] = IntProperty("Maximum nodes returned.", 1);
-            properties["max_edges"] = IntProperty("Maximum edges returned.", 1);
-            properties["brief"] = BoolProperty("Return compact node/edge payload.");
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            return;
-        }
-
-        if (string.Equals(commandId, "nav.call_path", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["source_file_path"] = StringProperty("Path to a C# or VB source file containing the source method anchor.");
-            properties["source_line"] = IntProperty("1-based line number for source method anchor.", 1);
-            properties["source_column"] = IntProperty("1-based column number for source method anchor.", 1);
-            properties["target_file_path"] = StringProperty("Path to a C# or VB source file containing the target method anchor.");
-            properties["target_line"] = IntProperty("1-based line number for target method anchor.", 1);
-            properties["target_column"] = IntProperty("1-based column number for target method anchor.", 1);
-            properties["max_depth"] = IntProperty("Maximum BFS depth for path search.", 1);
-            properties["max_nodes"] = IntProperty("Maximum visited nodes during path search.", 1);
-            properties["max_graph_edges"] = IntProperty("Maximum edges collected for graph construction.", 1);
-            properties["brief"] = BoolProperty("Return compact path payload.");
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("source_file_path");
-            required.Add("source_line");
-            required.Add("source_column");
-            required.Add("target_file_path");
-            required.Add("target_line");
-            required.Add("target_column");
-            return;
-        }
-
-        if (string.Equals(commandId, "analyze.unused_private_symbols", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
-            properties["include_generated"] = BoolProperty("Include generated source files.");
-            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
-            properties["max_symbols"] = IntProperty("Maximum unused-symbol results returned.", 1);
-            properties["brief"] = BoolProperty("Return compact result payload.");
-            required.Add("workspace_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "analyze.control_flow_graph", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["line"] = IntProperty("1-based line number for executable region anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for executable region anchor.", 1);
-            properties["brief"] = BoolProperty("Return compact CFG payload.");
-            properties["max_blocks"] = IntProperty("Maximum CFG blocks returned.", 1);
-            properties["max_edges"] = IntProperty("Maximum CFG edges returned.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
-            return;
-        }
-
-        if (string.Equals(commandId, "analyze.dataflow_slice", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["line"] = IntProperty("1-based line number for data-flow anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for data-flow anchor.", 1);
-            properties["brief"] = BoolProperty("Return compact symbol sets.");
-            properties["max_symbols"] = IntProperty("Maximum symbols returned per set.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
-            return;
-        }
-
-        if (string.Equals(commandId, "analyze.dependency_violations", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
-            properties["layers"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Ordered namespace layer prefixes (minimum two).",
-            };
-            properties["direction"] = StringProperty("Layer direction rule: toward_end or toward_start.");
-            properties["ignore_same_namespace"] = BoolProperty("Ignore dependencies that stay in the same namespace.");
-            properties["include_generated"] = BoolProperty("Include generated source files.");
-            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
-            properties["max_violations"] = IntProperty("Maximum violation results returned.", 1);
-            properties["brief"] = BoolProperty("Return compact result payload.");
-            required.Add("workspace_path");
-            required.Add("layers");
-            return;
-        }
-
-        if (string.Equals(commandId, "analyze.impact_slice", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["line"] = IntProperty("1-based line number for symbol anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for symbol anchor.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            properties["include_references"] = BoolProperty("Include reference locations for the anchor symbol.");
-            properties["include_callers"] = BoolProperty("Include caller sites for method anchors.");
-            properties["include_callees"] = BoolProperty("Include callee sites from anchored method body.");
-            properties["include_overrides"] = BoolProperty("Include override relationships.");
-            properties["include_implementations"] = BoolProperty("Include interface/type implementation matches.");
-            properties["max_references"] = IntProperty("Maximum reference matches returned.", 1);
-            properties["max_callers"] = IntProperty("Maximum caller matches returned.", 1);
-            properties["max_callees"] = IntProperty("Maximum callee matches returned.", 1);
-            properties["max_related"] = IntProperty("Maximum override/implementation matches returned.", 1);
-            properties["brief"] = BoolProperty("Return compact result payload.");
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
-            return;
-        }
-
-        if (string.Equals(commandId, "analyze.override_coverage", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
-            properties["coverage_threshold"] = new JsonObject
-            {
-                ["type"] = "number",
-                ["minimum"] = 0,
-                ["maximum"] = 1,
-                ["description"] = "Minimum override coverage ratio before a virtual member is flagged.",
-            };
-            properties["min_derived_types"] = IntProperty("Minimum derived-type count before coverage analysis applies.", 1);
-            properties["include_generated"] = BoolProperty("Include generated source files.");
-            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
-            properties["max_members"] = IntProperty("Maximum finding entries returned.", 1);
-            properties["brief"] = BoolProperty("Return compact result payload.");
-            required.Add("workspace_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "analyze.async_risk_scan", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["workspace_path"] = StringProperty("Workspace path (.sln/.slnx/.csproj/.vbproj/file/directory) used as analysis root. Prefer .sln/.slnx for whole-solution analysis; use project files only when intentionally scoped.");
-            properties["severity_filter"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Optional severities to include (for example warning, info).",
-            };
-            properties["include_generated"] = BoolProperty("Include generated source files.");
-            properties["max_files"] = IntProperty("Maximum C#/VB files analyzed.", 1);
-            properties["max_findings"] = IntProperty("Maximum findings returned.", 1);
-            properties["brief"] = BoolProperty("Return compact result payload.");
-            required.Add("workspace_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "ctx.search_text", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["pattern"] = StringProperty("Single search pattern (literal or regex).");
-            properties["patterns"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Multiple search patterns.",
-            };
-            properties["mode"] = StringProperty("Search mode: literal or regex.");
-            properties["file_path"] = StringProperty("Optional single-file search scope.");
-            properties["roots"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Directory/file search roots.",
-            };
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory anchor used as search scope. Prefer .sln/.slnx for whole-solution search scope.");
-            properties["include_globs"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Include glob filters.",
-            };
-            properties["exclude_globs"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Exclude glob filters.",
-            };
-            properties["max_results"] = IntProperty("Maximum matches to return.", 1);
-            properties["max_files"] = IntProperty("Maximum files to scan.", 1);
-            return;
-        }
-
-        if (string.Equals(commandId, "ctx.file_outline", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["include_usings"] = BoolProperty("Include using/import directives in response.");
-            properties["include_members"] = BoolProperty("Include member outlines for each type.");
-            properties["max_types"] = IntProperty("Maximum type declarations returned.", 1);
-            properties["max_members"] = IntProperty("Maximum member declarations returned.", 1);
-            properties["type_name_contains"] = StringProperty("Optional case-insensitive type-name substring filter.");
-            properties["member_name_contains"] = StringProperty("Optional case-insensitive member-name/signature substring filter; useful for huge test files.");
-            properties["workspace_handle"] = StringProperty("Optional hot workspace handle for cached syntax tree lookup.");
-            required.Add("file_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "ctx.member_source", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["line"] = IntProperty("1-based line number for member anchor.", 1);
-            properties["column"] = IntProperty("1-based column number for member anchor.", 1);
-            properties["member_name"] = StringProperty("Optional exact member name anchor. Use when the member name is unique in the file; otherwise provide line/column.");
-            properties["mode"] = StringProperty("member or body.");
-            properties["brief"] = BoolProperty("Compact output; omits source text by default.");
-            properties["include_source_text"] = BoolProperty("Include extracted source snippet.");
-            properties["include_line_numbers"] = BoolProperty("Prefix snippet lines with line numbers.");
-            properties["include_trivia"] = BoolProperty("Include leading/trailing trivia when computing spans.");
-            properties["focus_text"] = StringProperty("Optional literal text to focus the returned source window inside a huge member. Combine with context_lines_before/context_lines_after.");
-            properties["context_lines_before"] = IntProperty("Additional lines before extracted span.", 0);
-            properties["context_lines_after"] = IntProperty("Additional lines after extracted span.", 0);
-            properties["max_chars"] = IntProperty("Maximum characters returned for source text.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace semantic calls.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            required.Add("line");
-            required.Add("column");
-            return;
-        }
-
-        if (string.Equals(commandId, "query.batch", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["queries"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["description"] = "Array of query objects with command_id and input payload.",
-                ["items"] = new JsonObject
-                {
-                    ["type"] = "object",
-                    ["properties"] = new JsonObject
-                    {
-                        ["command_id"] = StringProperty("Read-only command id to run."),
-                        ["input"] = new JsonObject
-                        {
-                            ["type"] = "object",
-                            ["description"] = "Input payload for the command.",
-                        },
-                    },
-                    ["required"] = new JsonArray { "command_id", "input" },
-                },
-            };
-            properties["continue_on_error"] = BoolProperty("Continue remaining queries after an error.");
-            properties["workspace_handle"] = StringProperty("Optional hot workspace handle applied to query inputs that do not specify their own workspace_handle.");
-            required.Add("queries");
-            return;
-        }
-
-        if (string.Equals(commandId, "diag.get_file_diagnostics", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["file_path"] = StringProperty("Path to a C# or VB source file (.cs/.csx/.vb).");
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj or directory path used to force workspace context. Prefer .sln/.slnx for repo-wide or hot-workspace scope; use project files only when intentionally project-scoped.");
-            properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace diagnostic calls.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("file_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "diag.get_workspace_snapshot", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["directory_path"] = StringProperty("Optional directory scope to filter diagnostics.");
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj path.");
-            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
-            properties["file_paths"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Optional explicit file paths.",
-            };
-            properties["mode"] = StringProperty("Output mode: compact, raw, or guided.");
-            properties["brief"] = BoolProperty("Return compact summary payload.");
-            properties["include_diagnostics"] = BoolProperty("Include diagnostic entries in response.");
-            properties["severity_filter"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Optional severity filter (Error, Warning, Info, Hidden).",
-            };
-            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned.", 1);
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            return;
-        }
-
-        if (string.Equals(commandId, "edit.transaction", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["operations"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["description"] = "Atomic edit operations (replace_text, insert_text, replace_span, set_content).",
-            };
-            properties["file_path"] = StringProperty("Optional default file path inherited by operations omitting file_path.");
-            properties["apply"] = BoolProperty("When false, run as dry-run.");
-            properties["atomic"] = BoolProperty("When true, skip writing files if any operation fails.");
-            properties["include_diagnostics"] = BoolProperty("Include post-edit diagnostics.");
-            properties["max_diagnostics"] = IntProperty("Maximum post-edit diagnostics returned.", 1);
-            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path.");
-            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
-            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
-            required.Add("operations");
-            return;
-        }
-
-        if (string.Equals(commandId, "workspace.preload", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["workspace_path"] = StringProperty("Solution/project workspace path to preload. Prefer .sln/.slnx for hot workspace hosts.");
-            properties["mode"] = StringProperty("balanced or strict.");
-            properties["include_generated"] = BoolProperty("Include generated source files.");
-            properties["require_solution"] = BoolProperty("When true, fail if the resolved host is not .sln/.slnx solution scoped.");
-            properties["max_files"] = IntProperty("Maximum source documents loaded into command-facing indexes.", 1);
-            required.Add("workspace_path");
-            return;
-        }
-
-        if (string.Equals(commandId, "workspace.status", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(commandId, "workspace.close", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["workspace_handle"] = StringProperty("Handle returned by workspace.preload.");
-            required.Add("workspace_handle");
-            return;
-        }
-
-        if (commandId.StartsWith("session.", StringComparison.OrdinalIgnoreCase))
-        {
-            properties["session_id"] = StringProperty("Session identifier.");
-            required.Add("session_id");
-        }
     }
 
     private static JsonArray BuildResourceList(ToolMap toolMap)
@@ -1673,7 +1122,8 @@ internal static class Program
                 InputSchemaVersion: descriptor.InputSchemaVersion,
                 MutatesState: descriptor.MutatesState,
                 Maturity: descriptor.Maturity,
-                Traits: descriptor.Traits ?? Array.Empty<string>());
+                Traits: descriptor.Traits ?? Array.Empty<string>(),
+                InputSchema: descriptor.InputSchema);
             bindings.Add(binding);
             byToolName[toolName] = binding;
             byCommandId[descriptor.Id] = binding;
@@ -2270,7 +1720,8 @@ internal static class Program
         string InputSchemaVersion,
         bool MutatesState,
         string Maturity,
-        IReadOnlyList<string> Traits);
+        IReadOnlyList<string> Traits,
+        CommandInputSchema? InputSchema = null);
 
     private sealed record ToolMap(
         IReadOnlyList<ToolBinding> OrderedBindings,

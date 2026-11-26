@@ -21,14 +21,17 @@ This skill is optimized for low-churn, "just enough Roslyn" workflows.
 
 ## Rules (Pit Of Success)
 
-- **Hybrid routing ("text first, semantic second, scoped diag third"):**
-  - Use `rg` / `read_file` for string literals, error codes, docs, non-C# files, and known 50–150 line file slices (`~66–116 ms`, zero tax).
-  - Use `roscli` / `roscli-fast` (`0.1.6-preview.32`) for semantic work: overloaded/ambiguous symbols (`Execute`, `OpenRecordset`), `--symbol Type.Member` navigation, interface-dispatched `nav.call_hierarchy` (defaults to `--max-depth 1`), hot-routed `ctx.file_outline`, `query.batch`, multi-file edits/renames (`edit.*`), and scoped `diag.get_workspace_snapshot --directory-path`.
-- **Fast daemon workflow (`0.1.6-preview.32`):**
-  - Bind the solution once: `roscli workspace.use <MySolution.slnx> --require-solution true`, then set `ROSCLI_DAEMON=required`.
-  - Prefer `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) over managed `roscli` for `~50–75 ms` warm queries (vs `~365–465 ms` CLR spawn); redirected stdout emits compact JSON automatically (use `--pretty-json` for indented output). Stop only your own daemon (`roscli daemon.stop`) when finished.
+- **Hybrid routing ("overlay/text first, compound mindspace second, scoped diag third"):**
+  - Use `rg` / `read_file` for non-C# files (`.md`, `.slnx`, `.csproj`, `.json`) and quick slices when no daemon is bound (`~66–116 ms`).
+  - Use `roscli` / `roscli-fast` (`0.1.6-preview.33`) on a bound daemon for C# discovery & edits:
+    - **`ctx.symbol_context --symbol Type.Member`** (1-call mindspace: zero-disk def + `file_sha256` + refs + interface-aware callers + callees + impls + file diag in `~64 ms` CLI / `~14 ms` MCP).
+    - **`ctx.search_text --syntax-filter code|declarations|invocations --whole-word true`** (zero-disk overlay trigram/token index, `~58 ms` selective, batched `queries`) and **`ctx.read_window`** (zero-disk single/batched windows + `file_sha256`, `0.2 ms` host).
+    - `--symbol` / `--symbols` across `nav.*`, `edit.rename_symbol`, `edit.change_signature`, `nav.call_path` (`--source-symbol`/`--target-symbol`), atomic SHA-256 `edit.transaction` / `edit.batch_exact`, and scoped `diag.get_workspace_snapshot --directory-path`.
+- **Fast daemon workflow (`0.1.6-preview.33`):**
+  - Bind the solution once: `roscli workspace.use <MySolution.slnx> --require-solution true` (add `--wait-warmup true` to wait for `warmup_state=complete`), then set `ROSCLI_DAEMON=required`.
+  - Prefer `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) over managed `roscli` for `~54–71 ms` warm queries (vs `~365–465 ms` CLR spawn); redirected stdout emits compact JSON automatically (`--pretty-json` opt-in). Stop only your own daemon (`roscli daemon.stop`) when finished.
 - **Channel choice (CLI vs MCP vs LSP):**
-  - Default to `roscli-fast` / `roscli` + this skill (`0` per-turn schema tax). When using MCP, launch `RoslynSkills.McpServer --mode slim` (`10` complete-schema tools, `~4.9 KB` `tools/list`, direct persistent `WorkspaceHost` pipe with auto-bind) rather than `--mode full` (`59` tools, `53.85 KB`).
+  - Default to `roscli-fast` / `roscli` + this skill (`0` per-turn schema tax). When using MCP, launch `RoslynSkills.McpServer --mode slim` (`12` descriptor-driven tools including `roslyn_search` + `roslyn_context`, `6,016 B` `tools/list`, `4.8–15.6 ms` warm over a persistent `WorkspaceHost` pipe with auto-bind) rather than `--mode full` (`61` tools, `90.5 KB`).
   - Prefer `roscli-fast` over C# LSP (`csharp-ls` / `Roslyn LSP`) on multi-project `.slnx` repos: `roscli` fails closed (`--require-workspace true`), resolves `--symbol` directly, captures interface callers (`edges[].implemented_member`), and compiles folder diagnostics in `~104–240 ms`.
 - Default to `stable` commands; use `advanced`/`experimental` commands intentionally (`nav.call_hierarchy`, `diag.get_workspace_snapshot`).
 - Keep Roslyn calls sequential per workspace (avoid parallel `dotnet` locks).
@@ -70,20 +73,21 @@ roscli quickstart
 
 ## Minimal Workflows
 
-### 1) Direct `--symbol` navigation & interface call hierarchy (`0.1.6-preview.32`)
+### 1) One-call mindspace, overlay search & direct `--symbol` workflows (`0.1.6-preview.33`)
 
-All 6 `nav.*` commands accept `--symbol Type.Member` (including positional record properties and optional parameter-type overloads) when a hot workspace is bound:
+Use `ctx.symbol_context --symbol` first, syntax-filtered `ctx.search_text` / zero-disk `ctx.read_window` on the live overlay index, `--symbols` batching on refs/invocations, and `--symbol` directly on `edit.rename_symbol` / `edit.change_signature` / `nav.call_path`:
 
 ```powershell
 roscli workspace.use MySolution.slnx --require-solution true
-roscli-fast nav.find_references --symbol MyNamespace.DeferredCatalogCommit.Kind --max-results 100
-roscli-fast nav.find_invocations --symbol MyNamespace.SchemaWriter.CreateTable --brief true --max-results 100
-roscli-fast nav.find_implementations --symbol MyNamespace.ISqlDatabase --max-results 50
-roscli-fast nav.call_hierarchy --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --direction incoming --brief true
+roscli-fast ctx.symbol_context --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --brief true
+roscli-fast ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
+roscli-fast ctx.read_window src/MyProject/File.cs 1 100
+roscli-fast nav.find_references --symbols MyNamespace.DeferredCatalogCommit.Kind,MyNamespace.SchemaWriter.CreateTable --max-results 50
+roscli-fast edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
 roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
-Note: `nav.call_hierarchy` resolves incoming callers across implemented interface members (`edges[].implemented_member`) and defaults to `--max-depth 1` (opt in to `--max-depth 2..8` when needed).
+Note: `ctx.symbol_context` and `nav.call_hierarchy` resolve incoming callers across implemented interface members (`edges[].implemented_member`), and `ctx.read_window` / `ctx.symbol_context` return `file_sha256` for optimistic locking with `edit.transaction --expected-sha256` / `expected_file_hashes`.
 
 ### 2) Ambiguous target & rename (2 calls, then stop)
 

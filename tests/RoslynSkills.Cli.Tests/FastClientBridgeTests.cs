@@ -82,7 +82,7 @@ public sealed class FastClientBridgeTests
             Assert.Equal(
                 searchFull.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32(),
                 searchFast.RootElement.GetProperty("Data").GetProperty("total_matches").GetInt32());
-            Assert.Equal("hot_text_index", searchFast.RootElement.GetProperty("Data").GetProperty("analysis_scope").GetProperty("text_source").GetString());
+            Assert.Equal("workspace_overlay_index", searchFast.RootElement.GetProperty("Data").GetProperty("analysis_scope").GetProperty("text_source").GetString());
 
             // The MCP server takes the same daemon route for hot-workspace tools instead of loading the solution itself.
             string mcpDll = ResolveSiblingDll("RoslynSkills.McpServer");

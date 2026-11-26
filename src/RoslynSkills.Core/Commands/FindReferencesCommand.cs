@@ -19,8 +19,9 @@ public sealed class FindReferencesCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        string[] symbolBatch = SymbolQueryResolution.GetOptionalSymbolQueries(input);
         string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
-        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        if (symbolBatch.Length > 0 || !string.IsNullOrWhiteSpace(symbolQuery))
         {
             WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
             InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
@@ -63,6 +64,22 @@ public sealed class FindReferencesCommand : IAgentCommand
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        string[] symbolBatch = SymbolQueryResolution.GetOptionalSymbolQueries(input);
+        if (symbolBatch.Length > 0)
+        {
+            return await ExecuteBySymbolBatchAsync(
+                input,
+                symbolBatch,
+                workspacePath,
+                workspaceHandle,
+                requireWorkspace,
+                includeDeclaration,
+                includeGenerated,
+                contextLines,
+                maxResults,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
         if (!string.IsNullOrWhiteSpace(symbolQuery))
@@ -242,6 +259,117 @@ public sealed class FindReferencesCommand : IAgentCommand
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 
+    private async Task<CommandExecutionResult> ExecuteBySymbolBatchAsync(
+        JsonElement input,
+        string[] symbolQueries,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        bool includeDeclaration,
+        bool includeGenerated,
+        int contextLines,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        (StaticAnalysisWorkspace? workspace, CommandError? loadError) = await StaticAnalysisWorkspace
+            .ResolveAsync(input, workspacePath, includeGenerated: false, maxFiles: 50_000, cancellationToken)
+            .ConfigureAwait(false);
+        if (loadError is not null || workspace?.Solution is null)
+        {
+            return new CommandExecutionResult(
+                null,
+                new[] { loadError ?? new CommandError("workspace_required", "Multi-symbol lookup (--symbols) requires a loaded MSBuild solution or project workspace.") });
+        }
+
+        List<object> batchEntries = new(symbolQueries.Length);
+        int aggregateMatches = 0;
+        int succeededCount = 0;
+        int failedCount = 0;
+
+        foreach (string query in symbolQueries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            List<ISymbol> candidates = await SymbolQueryResolution.ResolveSymbolsByNameAsync(workspace.Solution, query, cancellationToken).ConfigureAwait(false);
+            if (candidates.Count == 0)
+            {
+                failedCount++;
+                batchEntries.Add(new
+                {
+                    symbol_query = query,
+                    ok = false,
+                    error = new CommandError("symbol_not_found", $"No source symbol matching '{query}' was found."),
+                });
+                continue;
+            }
+
+            if (candidates.Count > 1)
+            {
+                failedCount++;
+                batchEntries.Add(new
+                {
+                    symbol_query = query,
+                    ok = false,
+                    error = new CommandError(
+                        "ambiguous_symbol",
+                        $"Symbol '{query}' matched {candidates.Count} declarations.",
+                        new { candidates = candidates.Take(10).Select(SymbolQueryResolution.FormatSymbolCandidate).ToArray() }),
+                });
+                continue;
+            }
+
+            ISymbol targetSymbol = SolutionSearchScope.NormalizePositionalRecordProperty(candidates[0]);
+            (List<ReferenceMatch> matches, bool truncated) = await FindSolutionReferencesAsync(
+                workspace.Solution,
+                targetSymbol,
+                includeDeclaration,
+                includeGenerated,
+                contextLines,
+                maxResults,
+                cancellationToken).ConfigureAwait(false);
+
+            succeededCount++;
+            aggregateMatches += matches.Count;
+            batchEntries.Add(new
+            {
+                symbol_query = query,
+                ok = true,
+                symbol = new
+                {
+                    symbol_display = targetSymbol.ToDisplayString(),
+                    symbol_kind = targetSymbol.Kind.ToString(),
+                    symbol_id = CommandTextFormatting.GetStableSymbolId(targetSymbol),
+                },
+                total_matches = matches.Count,
+                truncated,
+                matches,
+            });
+        }
+
+        object data = new
+        {
+            batched = true,
+            query = new
+            {
+                symbols = symbolQueries,
+                include_declaration = includeDeclaration,
+                include_generated = includeGenerated,
+                max_results = maxResults,
+                workspace_path = workspacePath ?? workspace.ResolvedWorkspacePath,
+                workspace_handle = workspaceHandle,
+                require_workspace = requireWorkspace,
+            },
+            search_scope = SolutionSearchScope.SolutionKind,
+            searched_projects = workspace.Solution.Projects.Count(),
+            symbol_count = symbolQueries.Length,
+            succeeded = succeededCount,
+            failed = failedCount,
+            total_matches = aggregateMatches,
+            results = batchEntries,
+        };
+
+        return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
     private static (List<ReferenceMatch> Matches, bool Truncated) FindSameFileReferences(
         CommandFileAnalysis analysis,
         ISymbol targetSymbol,
@@ -361,7 +489,7 @@ public sealed class FindReferencesCommand : IAgentCommand
     /// For a named type, includes its constructor reference groups so explicit <c>new Type(...)</c>,
     /// target-typed <c>new(...)</c>, and primary-constructor creations are all reported.
     /// </summary>
-    private static async Task<(List<ReferenceMatch> Matches, bool Truncated)> FindSolutionReferencesAsync(
+    internal static async Task<(List<ReferenceMatch> Matches, bool Truncated)> FindSolutionReferencesAsync(
         Solution solution,
         ISymbol targetSymbol,
         bool includeDeclaration,
@@ -514,7 +642,7 @@ public sealed class FindReferencesCommand : IAgentCommand
         return (ordered, found.Count > maxResults);
     }
 
-    private sealed record ReferenceMatch(
+    internal sealed record ReferenceMatch(
         string file_path,
         int line,
         int column,

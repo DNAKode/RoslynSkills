@@ -496,7 +496,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
             : edge.from_symbol_id;
     }
 
-    private static ISymbol NormalizeGraphSymbol(ISymbol symbol)
+    internal static ISymbol NormalizeGraphSymbol(ISymbol symbol)
     {
         if (symbol is IMethodSymbol method)
         {
@@ -678,7 +678,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
     /// outgoing edges of a node look only at the trees that declare it. Discovery of a node's edges is deterministic and
     /// yields the same edges, in the same per-node order, as filtering a whole-solution graph.
     /// </summary>
-    private sealed class CallGraph
+    internal sealed class CallGraph
     {
         private readonly SearchScope scope;
         private readonly bool includeObjectCreations;
@@ -999,7 +999,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
         }
     }
 
-    private sealed record CallHierarchyNode(
+    internal sealed record CallHierarchyNode(
         string symbol_id,
         string symbol_display,
         string symbol_kind,
@@ -1010,7 +1010,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
         int? line,
         int? column);
 
-    private sealed record CallHierarchyEdge(
+    internal sealed record CallHierarchyEdge(
         string edge_key,
         string from_symbol_id,
         string to_symbol_id,

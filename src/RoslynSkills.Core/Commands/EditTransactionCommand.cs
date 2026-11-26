@@ -60,6 +60,9 @@ public sealed class EditTransactionCommand : IAgentCommand
         InputParsing.ValidateOptionalBool(input, "continue_on_error", errors);
         InputParsing.ValidateOptionalBool(input, "include_diagnostics", errors);
         InputParsing.ValidateOptionalInt(input, "max_diagnostics", errors, minValue: 1, maxValue: 5_000);
+        ValidateOptionalHashProperty(input, "expected_sha256", "Top-level", errors);
+        ValidateOptionalHashProperty(input, "expected_content_hash", "Top-level", errors);
+        ValidateOptionalExpectedFileHashes(input, errors);
         WorkspaceInput.ValidateOptionalWorkspacePath(input, errors);
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
@@ -83,6 +86,8 @@ public sealed class EditTransactionCommand : IAgentCommand
         string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
         string? defaultFilePath = TryGetOptionalString(input, "file_path");
+        string? topLevelExpectedHash = TryGetExpectedHash(input);
+        Dictionary<string, string> expectedFileHashes = BuildExpectedFileHashMap(input, defaultFilePath, topLevelExpectedHash);
 
         JsonElement operationsProperty = input.GetProperty("operations");
         int totalOperations = operationsProperty.GetArrayLength();
@@ -93,34 +98,74 @@ public sealed class EditTransactionCommand : IAgentCommand
         int failed = 0;
         int index = 0;
 
-        foreach (JsonElement operationElement in operationsProperty.EnumerateArray())
+        // Verify top-level expected_file_hashes for any referenced files upfront (even before mutating).
+        foreach ((string expectedPath, string expectedSha) in expectedFileHashes)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            OperationOutcome outcome = await ApplyOperationAsync(
-                    operationElement,
-                    index,
-                    defaultFilePath,
-                    fileStates,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            operationResults.Add(outcome.Data);
-
-            if (outcome.Error is null)
+            if (!fileStates.TryGetValue(expectedPath, out TransactionFileState? existingState))
             {
-                succeeded++;
+                if (!File.Exists(expectedPath))
+                {
+                    operationErrors.Add(new CommandError(
+                        "file_not_found",
+                        $"Precondition file '{expectedPath}' does not exist."));
+                    break;
+                }
+
+                FileTextSnapshot snapshot = await EditFileText.ReadAsync(expectedPath, cancellationToken).ConfigureAwait(false);
+                existingState = new TransactionFileState(snapshot);
+                fileStates.Add(expectedPath, existingState);
             }
-            else
+
+            if (!string.Equals(existingState.Snapshot.ContentSha256, expectedSha, StringComparison.OrdinalIgnoreCase))
             {
-                failed++;
-                operationErrors.Add(outcome.Error);
+                operationErrors.Add(new CommandError(
+                    "content_hash_mismatch",
+                    $"Content hash precondition failed for '{expectedPath}': expected sha256 '{expectedSha}', actual '{existingState.Snapshot.ContentSha256}'.",
+                    new
+                    {
+                        file_path = expectedPath,
+                        expected_sha256 = expectedSha,
+                        actual_sha256 = existingState.Snapshot.ContentSha256,
+                    }));
                 if (!continueOnError)
                 {
                     break;
                 }
             }
+        }
 
-            index++;
+        if (operationErrors.Count == 0 || continueOnError)
+        {
+            foreach (JsonElement operationElement in operationsProperty.EnumerateArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                OperationOutcome outcome = await ApplyOperationAsync(
+                        operationElement,
+                        index,
+                        defaultFilePath,
+                        fileStates,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                operationResults.Add(outcome.Data);
+
+                if (outcome.Error is null)
+                {
+                    succeeded++;
+                }
+                else
+                {
+                    failed++;
+                    operationErrors.Add(outcome.Error);
+                    if (!continueOnError)
+                    {
+                        break;
+                    }
+                }
+
+                index++;
+            }
         }
 
         bool canWrite = apply && (!atomic || operationErrors.Count == 0);
@@ -134,6 +179,8 @@ public sealed class EditTransactionCommand : IAgentCommand
         int changedFileCount = 0;
         int totalChangedLines = 0;
 
+        List<AtomicFileWrite> pendingAtomicWrites = new();
+        List<(TransactionFileState State, string OriginalText, string CurrentText, bool Changed, int[] ChangedLines)> preparedStates = new(orderedStates.Count);
         foreach (TransactionFileState state in orderedStates)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -150,24 +197,59 @@ public sealed class EditTransactionCommand : IAgentCommand
                 changedFileCount++;
             }
 
-            bool wroteFile = false;
+            preparedStates.Add((state, originalText, currentText, changed, changedLines));
             if (canWrite && changed)
             {
-                await EditFileText.WriteAsync(
-                        state.FilePath,
-                        currentText,
-                        state.Snapshot.Encoding,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                writtenPaths.Add(state.FilePath);
-                wroteFile = true;
+                pendingAtomicWrites.Add(new AtomicFileWrite(
+                    FilePath: state.FilePath,
+                    UpdatedText: currentText,
+                    Encoding: state.Snapshot.Encoding,
+                    OriginalBytes: state.Snapshot.OriginalBytes,
+                    ExpectedOriginalSha256: state.Snapshot.ContentSha256));
             }
+        }
+
+        if (canWrite && pendingAtomicWrites.Count > 0)
+        {
+            AtomicBatchWriteResult commitResult = await EditFileText
+                .WriteAtomicBatchAsync(pendingAtomicWrites, cancellationToken)
+                .ConfigureAwait(false);
+            if (!commitResult.Succeeded)
+            {
+                operationErrors.Add(new CommandError(
+                    commitResult.ErrorCode ?? "transaction_write_failed",
+                    commitResult.ErrorMessage ?? "Atomic multi-file transaction commit failed.",
+                    new
+                    {
+                        file_path = commitResult.FailedFilePath,
+                        expected_sha256 = commitResult.ExpectedSha256,
+                        actual_sha256 = commitResult.ActualSha256,
+                        rolled_back_paths = commitResult.RolledBackPaths,
+                        rollback_errors = commitResult.RollbackErrors,
+                    }));
+                skippedApplyDueToErrors = true;
+            }
+            else
+            {
+                writtenPaths.AddRange(commitResult.WrittenPaths);
+            }
+        }
+
+        HashSet<string> writtenPathSet = new(writtenPaths, StringComparer.OrdinalIgnoreCase);
+        foreach ((TransactionFileState state, _, string currentText, bool changed, int[] changedLines) in preparedStates)
+        {
+            bool wroteFile = writtenPathSet.Contains(state.FilePath);
+            string currentSha256 = changed
+                ? EditFileText.ComputeEncodedSha256(currentText, state.Snapshot.Encoding)
+                : state.Snapshot.ContentSha256;
 
             fileSummaries.Add(new
             {
                 file_path = state.FilePath,
                 changed,
                 wrote_file = wroteFile,
+                original_sha256 = state.Snapshot.ContentSha256,
+                current_sha256 = currentSha256,
                 changed_line_count = changedLines.Length,
                 changed_lines = changedLines,
                 original_character_count = state.Original.Length,
@@ -305,6 +387,9 @@ public sealed class EditTransactionCommand : IAgentCommand
             return;
         }
 
+        ValidateOptionalHashProperty(operationElement, "expected_sha256", $"Operation[{index}]", errors);
+        ValidateOptionalHashProperty(operationElement, "expected_content_hash", $"Operation[{index}]", errors);
+
         switch (operationKind)
         {
             case "set_content":
@@ -411,6 +496,24 @@ public sealed class EditTransactionCommand : IAgentCommand
         }
 
         TryGetOperationKind(operationElement, index, errors: null, out string operationKind);
+        string? opExpectedHash = TryGetExpectedHash(operationElement);
+        if (opExpectedHash is not null &&
+            !string.Equals(state.Snapshot.ContentSha256, opExpectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            CommandError hashError = new(
+                "content_hash_mismatch",
+                $"Operation {index} content hash precondition failed for '{state.FilePath}': expected sha256 '{opExpectedHash}', actual '{state.Snapshot.ContentSha256}'.",
+                new
+                {
+                    file_path = state.FilePath,
+                    expected_sha256 = opExpectedHash,
+                    actual_sha256 = state.Snapshot.ContentSha256,
+                });
+            return OperationOutcome.Failed(
+                BuildOperationData(index, operationKind, state.FilePath, changed: false, changedLines: Array.Empty<int>(), hashError),
+                hashError);
+        }
+
         return operationKind switch
         {
             "set_content" => ApplySetContent(operationElement, index, state),
@@ -1002,6 +1105,83 @@ public sealed class EditTransactionCommand : IAgentCommand
 
         value = parsed;
         return true;
+    }
+
+    private static string? TryGetExpectedHash(JsonElement element)
+    {
+        string? raw = TryGetOptionalString(element, "expected_sha256") ?? TryGetOptionalString(element, "expected_content_hash");
+        return raw is null ? null : EditFileText.NormalizeSha256(raw);
+    }
+
+    private static void ValidateOptionalHashProperty(JsonElement element, string propertyName, string context, List<CommandError> errors)
+    {
+        if (!element.TryGetProperty(propertyName, out JsonElement prop))
+        {
+            return;
+        }
+
+        if (prop.ValueKind != JsonValueKind.String)
+        {
+            errors.Add(new CommandError("invalid_input", $"{context} property '{propertyName}' must be a SHA-256 hex string."));
+            return;
+        }
+
+        string normalized = EditFileText.NormalizeSha256(prop.GetString() ?? string.Empty);
+        if (!EditFileText.IsValidSha256Hex(normalized))
+        {
+            errors.Add(new CommandError("invalid_input", $"{context} property '{propertyName}' must be a valid 64-character SHA-256 hex digest."));
+        }
+    }
+
+    private static void ValidateOptionalExpectedFileHashes(JsonElement input, List<CommandError> errors)
+    {
+        if (!input.TryGetProperty("expected_file_hashes", out JsonElement mapProp))
+        {
+            return;
+        }
+
+        if (mapProp.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add(new CommandError("invalid_input", "Property 'expected_file_hashes' must be an object mapping file paths to SHA-256 hex digests."));
+            return;
+        }
+
+        foreach (JsonProperty entry in mapProp.EnumerateObject())
+        {
+            if (entry.Value.ValueKind != JsonValueKind.String)
+            {
+                errors.Add(new CommandError("invalid_input", $"Property 'expected_file_hashes[\"{entry.Name}\"]' must be a SHA-256 hex string."));
+                continue;
+            }
+
+            string normalized = EditFileText.NormalizeSha256(entry.Value.GetString() ?? string.Empty);
+            if (!EditFileText.IsValidSha256Hex(normalized))
+            {
+                errors.Add(new CommandError("invalid_input", $"Property 'expected_file_hashes[\"{entry.Name}\"]' must be a valid 64-character SHA-256 hex digest."));
+            }
+        }
+    }
+
+    private static Dictionary<string, string> BuildExpectedFileHashMap(JsonElement input, string? defaultFilePath, string? topLevelExpectedHash)
+    {
+        Dictionary<string, string> map = new(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(defaultFilePath) && topLevelExpectedHash is not null)
+        {
+            map[Path.GetFullPath(defaultFilePath)] = topLevelExpectedHash;
+        }
+
+        if (input.TryGetProperty("expected_file_hashes", out JsonElement mapProp) && mapProp.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty entry in mapProp.EnumerateObject())
+            {
+                if (!string.IsNullOrWhiteSpace(entry.Name) && entry.Value.ValueKind == JsonValueKind.String)
+                {
+                    map[Path.GetFullPath(entry.Name)] = EditFileText.NormalizeSha256(entry.Value.GetString() ?? string.Empty);
+                }
+            }
+        }
+
+        return map;
     }
 
     private static string? TryGetOptionalString(JsonElement input, string propertyName)

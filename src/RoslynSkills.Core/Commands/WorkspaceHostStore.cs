@@ -182,7 +182,8 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             BaselineExcludedSourcePaths: baselineExcludedSourcePaths,
             TrackedWriteTimes: trackedWriteTimes,
             ChangeTracker: changeTracker,
-            TextIndex: new HotTextIndex(workspace.RootDirectory));
+            TextIndex: new HotTextIndex(workspace.RootDirectory),
+            OverlayIndex: new WorkspaceOverlayIndex(workspace.RootDirectory));
 
         return hosted;
     }
@@ -630,6 +631,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             TrackedSourcePathSet = nextSourceSet,
             TrackedWriteTimes = trackedWriteTimes,
         };
+        refreshed.OverlayIndex.SyncWithWorkspace(updatedWorkspace, cancellationToken);
 
         lock (_gate)
         {
@@ -733,7 +735,7 @@ internal sealed class InMemoryWorkspaceHostStore : IWorkspaceHostStore
             }
 
             hosted.Dispose();
-            HotWorkspaceWarmup.Start(reloaded.Workspace.Solution);
+            HotWorkspaceWarmup.Start(reloaded);
             WorkspaceStatus statusAfter = BuildStatus(reloaded);
             return new WorkspaceRefreshResult(
                 Applied: true,
@@ -855,7 +857,8 @@ internal sealed record HostedWorkspace(
     IReadOnlySet<string> BaselineExcludedSourcePaths,
     IReadOnlyDictionary<string, DateTimeOffset?> TrackedWriteTimes,
     WorkspaceChangeTracker ChangeTracker,
-    HotTextIndex TextIndex) : IDisposable
+    HotTextIndex TextIndex,
+    WorkspaceOverlayIndex OverlayIndex) : IDisposable
 {
     public void Dispose()
     {

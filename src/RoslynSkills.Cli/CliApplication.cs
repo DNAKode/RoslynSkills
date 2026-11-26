@@ -321,6 +321,7 @@ public sealed class CliApplication
                 return 1;
             }
 
+            CommandInputSchema? cliSchema = CommandInputSchemaCatalog.GetSchema(commandId);
             await WriteEnvelopeAsync(
                 stdout,
                 new CommandEnvelope(
@@ -330,6 +331,7 @@ public sealed class CliApplication
                     Data: new
                     {
                         command = cliDescriptor,
+                        input_schema = cliSchema is null ? null : CommandInputSchemaCatalog.ToJsonSchemaObject(cliSchema, $"Arguments for '{commandId}'."),
                         usage = BuildCommandUsageHints(commandId),
                     },
                     Errors: Array.Empty<CommandError>(),
@@ -337,6 +339,7 @@ public sealed class CliApplication
             return 0;
         }
 
+        CommandInputSchema? descriptorSchema = command.Descriptor.InputSchema ?? CommandInputSchemaCatalog.GetSchema(commandId);
         await WriteEnvelopeAsync(
             stdout,
             new CommandEnvelope(
@@ -346,6 +349,7 @@ public sealed class CliApplication
                 Data: new
                 {
                     command = command.Descriptor,
+                    input_schema = descriptorSchema is null ? null : CommandInputSchemaCatalog.ToJsonSchemaObject(descriptorSchema, $"Arguments for '{commandId}'."),
                     usage = BuildCommandUsageHints(commandId),
                 },
                 Errors: Array.Empty<CommandError>(),
@@ -1011,7 +1015,10 @@ Workflow:
 
         WorkspaceHostDaemonEndpoint endpoint = manager.GetDefaultEndpoint(repoRoot);
         request = ApplyPersistedWorkspaceAlias(verb, request!, endpoint.RepoRoot);
-        TimeSpan requestTimeout = verb is "workspace.use" or "workspace.preload" or "workspace.refresh"
+        bool waitWarmupRequested = request!.Input is { ValueKind: JsonValueKind.Object } reqInput &&
+                                   reqInput.TryGetProperty("wait_warmup", out JsonElement wwProp) &&
+                                   wwProp.ValueKind == JsonValueKind.True;
+        TimeSpan requestTimeout = verb is "workspace.use" or "workspace.preload" or "workspace.refresh" || waitWarmupRequested
             ? TimeSpan.FromMinutes(5)
             : TimeSpan.FromSeconds(30);
         Stopwatch roundtripTimer = Stopwatch.StartNew();
@@ -1417,6 +1424,20 @@ Workflow:
                     result[property.Name] = string.IsNullOrWhiteSpace(raw)
                         ? raw
                         : Path.GetFullPath(NormalizeCliPathValue(raw));
+                }
+                else if (string.Equals(property.Name, "expected_file_hashes", StringComparison.Ordinal) &&
+                         property.Value.ValueKind == JsonValueKind.Object)
+                {
+                    Dictionary<string, object?> normalizedHashes = new(StringComparer.Ordinal);
+                    foreach (JsonProperty hashEntry in property.Value.EnumerateObject())
+                    {
+                        string normalizedKey = string.IsNullOrWhiteSpace(hashEntry.Name)
+                            ? hashEntry.Name
+                            : Path.GetFullPath(NormalizeCliPathValue(hashEntry.Name));
+                        normalizedHashes[normalizedKey] = hashEntry.Value.Clone();
+                    }
+
+                    result[property.Name] = normalizedHashes;
                 }
                 else if ((string.Equals(property.Name, "roots", StringComparison.Ordinal) ||
                           string.Equals(property.Name, "file_paths", StringComparison.Ordinal)) &&
@@ -2607,6 +2628,17 @@ Workflow:
                 continue;
             }
 
+            if (string.Equals(arg, "--wait-warmup", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseOptionalBooleanFlag(args, ref i, inlineValue, verb, arg, out bool parsedWaitWarmup, out error))
+                {
+                    return false;
+                }
+
+                options["--wait-warmup"] = parsedWaitWarmup ? "true" : "false";
+                continue;
+            }
+
             if (string.Equals(arg, "--launch-mode", StringComparison.OrdinalIgnoreCase))
             {
                 if (!TryReadCliOptionValue(args, ref i, inlineValue, out string? launchModeValue))
@@ -2739,6 +2771,11 @@ Workflow:
                 }
 
                 AddWorkspaceTargetToInput(input, workspaceAlias, workspaceHandle);
+                if (!TryAddWaitWarmupOptions(input, options, verb, out error))
+                {
+                    return false;
+                }
+
                 break;
 
             case "workspace.refresh":
@@ -2825,6 +2862,8 @@ Workflow:
                    string.Equals(option, "--include-generated", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(option, "--max-files", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(option, "--mode", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--wait-warmup", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(option, "--wait-warmup-timeout-ms", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(option, "--nodetach", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(option, "--launch-mode", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(option, "--idle-timeout-minutes", StringComparison.OrdinalIgnoreCase) ||
@@ -2834,6 +2873,9 @@ Workflow:
         return verb is "workspace.status" or "workspace.refresh" or "workspace.close"
             ? string.Equals(option, "--alias", StringComparison.OrdinalIgnoreCase) ||
               string.Equals(option, "--refresh-policy", StringComparison.OrdinalIgnoreCase) ||
+              (string.Equals(verb, "workspace.status", StringComparison.OrdinalIgnoreCase) &&
+               (string.Equals(option, "--wait-warmup", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option, "--wait-warmup-timeout-ms", StringComparison.OrdinalIgnoreCase))) ||
               (string.Equals(verb, "workspace.refresh", StringComparison.OrdinalIgnoreCase) &&
                string.Equals(option, "--mode", StringComparison.OrdinalIgnoreCase))
             : false;
@@ -2905,6 +2947,38 @@ Workflow:
             }
 
             input["max_files"] = parsedMaxFiles;
+        }
+
+        return TryAddWaitWarmupOptions(input, options, verb, out error);
+    }
+
+    private static bool TryAddWaitWarmupOptions(
+        Dictionary<string, object?> input,
+        Dictionary<string, string> options,
+        string verb,
+        out CommandEnvelope? error)
+    {
+        error = null;
+        if (options.TryGetValue("--wait-warmup", out _))
+        {
+            if (!TryGetBoolOption(options, "--wait-warmup", defaultValue: true, out bool waitWarmup, out error, verb))
+            {
+                return false;
+            }
+
+            input["wait_warmup"] = waitWarmup;
+        }
+
+        if (options.TryGetValue("--wait-warmup-timeout-ms", out string? rawTimeout))
+        {
+            if (!int.TryParse(rawTimeout, NumberStyles.Integer, CultureInfo.InvariantCulture, out int timeoutMs) ||
+                timeoutMs < 100 || timeoutMs > 600_000)
+            {
+                error = ErrorEnvelope(verb, "invalid_args", "Option '--wait-warmup-timeout-ms' must be an integer in 100..600000.");
+                return false;
+            }
+
+            input["wait_warmup_timeout_ms"] = timeoutMs;
         }
 
         return true;
@@ -3050,7 +3124,8 @@ Workflow:
             string.Equals(commandId, "nav.go_to_definition", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(commandId, "nav.find_references", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(commandId, "nav.find_implementations", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(commandId, "nav.find_overrides", StringComparison.OrdinalIgnoreCase))
+            string.Equals(commandId, "nav.find_overrides", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "ctx.symbol_context", StringComparison.OrdinalIgnoreCase))
         {
             TryPromoteOptionToPositional(options, "file_path", ref positionalArgs, 0);
             TryPromoteOptionToPositional(options, "line", ref positionalArgs, 1);
@@ -3223,8 +3298,9 @@ Workflow:
             case "nav.find_overrides":
             case "nav.find_invocations":
             case "nav.call_hierarchy":
+            case "ctx.symbol_context":
                 if (positionalArgs.Length == 0 &&
-                    (options.ContainsKey("symbol") || options.ContainsKey("symbol_name")))
+                    (options.ContainsKey("symbol") || options.ContainsKey("symbol_name") || options.ContainsKey("symbols")))
                 {
                     break;
                 }
@@ -3247,8 +3323,102 @@ Workflow:
                 input["column"] = invocationColumn;
                 break;
 
+            case "ctx.read_window":
+                if (positionalArgs.Length == 0 && options.ContainsKey("windows"))
+                {
+                    break;
+                }
+
+                if (positionalArgs.Length == 0 && options.ContainsKey("file_path"))
+                {
+                    break;
+                }
+
+                if (positionalArgs.Length == 1 && TryParseFileLineRangeArg(positionalArgs[0], out string rangeFile, out int rangeStart, out int? rangeEnd))
+                {
+                    input["file_path"] = NormalizeCliPathValue(rangeFile);
+                    input["start_line"] = rangeStart;
+                    if (rangeEnd.HasValue)
+                    {
+                        input["end_line"] = rangeEnd.Value;
+                    }
+
+                    break;
+                }
+
+                if (positionalArgs.Length < 1 || positionalArgs.Length > 3 || string.IsNullOrWhiteSpace(positionalArgs[0]))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "ctx.read_window <file-path> [start-line] [end-line] [--option value ...] OR ctx.read_window <file-path>:<start>-<end> [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(positionalArgs[0]);
+                if (positionalArgs.Length >= 2)
+                {
+                    if (!int.TryParse(positionalArgs[1], out int winStart) || winStart < 1)
+                    {
+                        error = ErrorEnvelope(
+                            commandId: "cli",
+                            code: "invalid_args",
+                            message: BuildUsageMessage(commandId, "ctx.read_window <file-path> [start-line] [end-line] [--option value ...]"));
+                        return false;
+                    }
+
+                    input["start_line"] = winStart;
+                }
+
+                if (positionalArgs.Length == 3)
+                {
+                    if (!int.TryParse(positionalArgs[2], out int winEnd) || winEnd < 1)
+                    {
+                        error = ErrorEnvelope(
+                            commandId: "cli",
+                            code: "invalid_args",
+                            message: BuildUsageMessage(commandId, "ctx.read_window <file-path> [start-line] [end-line] [--option value ...]"));
+                        return false;
+                    }
+
+                    input["end_line"] = winEnd;
+                }
+
+                break;
+
             case "nav.call_path":
+                bool hasSourceSymbol = options.ContainsKey("source_symbol") || options.ContainsKey("source_symbol_name");
+                bool hasTargetSymbol = options.ContainsKey("target_symbol") || options.ContainsKey("target_symbol_name");
+                if (positionalArgs.Length == 0 && hasSourceSymbol && hasTargetSymbol)
+                {
+                    break;
+                }
+
                 string[] callPathArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (hasSourceSymbol && !hasTargetSymbol &&
+                    callPathArgs.Length == 3 &&
+                    !string.IsNullOrWhiteSpace(callPathArgs[0]) &&
+                    int.TryParse(callPathArgs[1], out int mixedTargetLine) &&
+                    int.TryParse(callPathArgs[2], out int mixedTargetCol))
+                {
+                    input["target_file_path"] = NormalizeCliPathValue(callPathArgs[0]);
+                    input["target_line"] = mixedTargetLine;
+                    input["target_column"] = mixedTargetCol;
+                    break;
+                }
+
+                if (!hasSourceSymbol && hasTargetSymbol &&
+                    callPathArgs.Length == 3 &&
+                    !string.IsNullOrWhiteSpace(callPathArgs[0]) &&
+                    int.TryParse(callPathArgs[1], out int mixedSourceLine) &&
+                    int.TryParse(callPathArgs[2], out int mixedSourceCol))
+                {
+                    input["source_file_path"] = NormalizeCliPathValue(callPathArgs[0]);
+                    input["source_line"] = mixedSourceLine;
+                    input["source_column"] = mixedSourceCol;
+                    break;
+                }
+
                 if (callPathArgs.Length != 6 ||
                     string.IsNullOrWhiteSpace(callPathArgs[0]) ||
                     !int.TryParse(callPathArgs[1], out int sourceLine) ||
@@ -3260,7 +3430,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column> [--option value ...] OR nav.call_path <source-file>:<line>:<col> <target-file>:<line>:<col> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "nav.call_path <source-file-path> <source-line> <source-column> <target-file-path> <target-line> <target-column> [--option value ...] OR nav.call_path --source-symbol <Type.Method> --target-symbol <Type.Method> [--option value ...]"));
                     return false;
                 }
 
@@ -3356,6 +3526,12 @@ Workflow:
                 break;
 
             case "analyze.impact_slice":
+                if (positionalArgs.Length == 0 &&
+                    (options.ContainsKey("symbol") || options.ContainsKey("symbol_name")))
+                {
+                    break;
+                }
+
                 string[] impactArgs = ExpandFileLineColumnArgs(positionalArgs);
                 if (impactArgs.Length != 3 ||
                     string.IsNullOrWhiteSpace(impactArgs[0]) ||
@@ -3365,7 +3541,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "analyze.impact_slice <file-path> <line> <column> [--option value ...] OR analyze.impact_slice <file-path>:<line>:<column> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "analyze.impact_slice <file-path> <line> <column> [--option value ...] OR analyze.impact_slice <file-path>:<line>:<column> [--option value ...] OR analyze.impact_slice --symbol <Type.Member> [--option value ...]"));
                     return false;
                 }
 
@@ -3407,6 +3583,24 @@ Workflow:
                 break;
 
             case "ctx.search_text":
+                if (positionalArgs.Length == 0 && options.ContainsKey("queries"))
+                {
+                    if (!HasExplicitSearchScope(options))
+                    {
+                        string? defaultWorkspacePath = TryGetDefaultAliasWorkspacePath();
+                        if (!string.IsNullOrWhiteSpace(defaultWorkspacePath))
+                        {
+                            input["workspace_path"] = NormalizeCliPathValue(defaultWorkspacePath);
+                        }
+                        else if (TryDiscoverSingleTopLevelSolution() is { Length: > 0 } discoveredSolution)
+                        {
+                            input["workspace_path"] = NormalizeCliPathValue(discoveredSolution);
+                        }
+                    }
+
+                    break;
+                }
+
                 if (positionalArgs.Length < 1 ||
                     positionalArgs.Length > 2 ||
                     string.IsNullOrWhiteSpace(positionalArgs[0]))
@@ -3414,7 +3608,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "ctx.search_text <pattern> [root-or-file] [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "ctx.search_text <pattern> [root-or-file] [--syntax-filter code|comments|strings|identifiers|declarations|invocations] [--option value ...]"));
                     return false;
                 }
 
@@ -3471,6 +3665,20 @@ Workflow:
                 break;
 
             case "edit.rename_symbol":
+                if (options.ContainsKey("symbol") || options.ContainsKey("symbol_name"))
+                {
+                    if (positionalArgs.Length == 1 && !string.IsNullOrWhiteSpace(positionalArgs[0]))
+                    {
+                        input["new_name"] = positionalArgs[0];
+                        break;
+                    }
+
+                    if (positionalArgs.Length == 0 && options.ContainsKey("new_name"))
+                    {
+                        break;
+                    }
+                }
+
                 string[] renameArgs = ExpandFileLineColumnArgs(positionalArgs);
                 if (renameArgs.Length != 4 ||
                     string.IsNullOrWhiteSpace(renameArgs[0]) ||
@@ -3481,7 +3689,7 @@ Workflow:
                     error = ErrorEnvelope(
                         commandId: "cli",
                         code: "invalid_args",
-                        message: BuildUsageMessage(commandId, "edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...] OR edit.rename_symbol <file-path>:<line>:<column> <new-name> [--option value ...]"));
+                        message: BuildUsageMessage(commandId, "edit.rename_symbol <file-path> <line> <column> <new-name> [--option value ...] OR edit.rename_symbol --symbol <Type.Member> <new-name> [--option value ...]"));
                     return false;
                 }
 
@@ -3489,6 +3697,31 @@ Workflow:
                 input["line"] = renameLine;
                 input["column"] = renameColumn;
                 input["new_name"] = renameArgs[3];
+                break;
+
+            case "edit.change_signature":
+                if (positionalArgs.Length == 0 &&
+                    (options.ContainsKey("symbol") || options.ContainsKey("symbol_name")))
+                {
+                    break;
+                }
+
+                string[] sigArgs = ExpandFileLineColumnArgs(positionalArgs);
+                if (sigArgs.Length != 3 ||
+                    string.IsNullOrWhiteSpace(sigArgs[0]) ||
+                    !int.TryParse(sigArgs[1], out int sigLine) ||
+                    !int.TryParse(sigArgs[2], out int sigColumn))
+                {
+                    error = ErrorEnvelope(
+                        commandId: "cli",
+                        code: "invalid_args",
+                        message: BuildUsageMessage(commandId, "edit.change_signature <file-path> <line> <column> --parameters \"<params>\" [--option value ...] OR edit.change_signature --symbol <Type.Method> --parameters \"<params>\" [--option value ...]"));
+                    return false;
+                }
+
+                input["file_path"] = NormalizeCliPathValue(sigArgs[0]);
+                input["line"] = sigLine;
+                input["column"] = sigColumn;
                 break;
 
             case "edit.create_file":
@@ -3730,44 +3963,70 @@ Workflow:
                 return false;
         }
 
+        CommandInputSchema? commandSchema = CommandInputSchemaCatalog.GetSchema(commandId);
         foreach ((string key, object? value) in options)
         {
+            CommandParameterDescriptor? paramDesc = CommandInputSchemaCatalog.FindParameter(commandSchema, key);
+            string targetKey = key;
+
             if (string.Equals(key, "roots", StringComparison.OrdinalIgnoreCase))
             {
                 if (TryConvertOptionToStringArray(value, out string[] roots))
                 {
-                    input[key] = roots.Select(NormalizeCliPathValue).ToArray();
+                    input[targetKey] = roots.Select(NormalizeCliPathValue).ToArray();
                 }
                 else
                 {
-                    input[key] = value;
+                    input[targetKey] = value;
                 }
 
                 continue;
             }
 
             if (string.Equals(key, "include_globs", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(key, "exclude_globs", StringComparison.OrdinalIgnoreCase))
+                string.Equals(key, "exclude_globs", StringComparison.OrdinalIgnoreCase) ||
+                (paramDesc is not null &&
+                 string.Equals(paramDesc.Type, "array", StringComparison.Ordinal) &&
+                 string.Equals(paramDesc.ItemType, "string", StringComparison.Ordinal)))
             {
-                if (TryConvertOptionToStringArray(value, out string[] globs))
+                if (TryConvertOptionToStringArray(value, out string[] arrValues))
                 {
-                    input[key] = globs;
+                    input[targetKey] = paramDesc is { IsPath: true }
+                        ? arrValues.Select(NormalizeCliPathValue).ToArray()
+                        : arrValues;
                 }
                 else
                 {
-                    input[key] = value;
+                    input[targetKey] = value;
                 }
 
                 continue;
             }
 
-            if (value is string pathValue && IsPathLikeOptionName(key))
+            if (paramDesc is not null &&
+                string.Equals(paramDesc.Type, "array", StringComparison.Ordinal) &&
+                string.Equals(paramDesc.ItemType, "object", StringComparison.Ordinal) &&
+                value is string jsonArrayText &&
+                jsonArrayText.TrimStart().StartsWith("[", StringComparison.Ordinal))
             {
-                input[key] = NormalizeCliPathValue(pathValue);
+                try
+                {
+                    using JsonDocument parsedArr = JsonDocument.Parse(jsonArrayText);
+                    input[targetKey] = parsedArr.RootElement.Clone();
+                    continue;
+                }
+                catch (JsonException)
+                {
+                }
+            }
+
+            if (value is string pathValue && (IsPathLikeOptionName(key) || paramDesc is { IsPath: true }))
+            {
+                input[targetKey] = NormalizeCliPathValue(pathValue);
             }
             else
             {
-                input[key] = value;
+                input[targetKey] = value;
             }
         }
 
@@ -3781,6 +4040,8 @@ Workflow:
         {
             "ctx.file_outline" => true,
             "ctx.member_source" => true,
+            "ctx.read_window" => true,
+            "ctx.symbol_context" => true,
             "diag.get_file_diagnostics" => true,
             "diag.get_solution_snapshot" => true,
             "diag.get_workspace_snapshot" => true,
@@ -3805,6 +4066,7 @@ Workflow:
             "ctx.changed_files" => true,
             "query.batch" => true,
             "edit.rename_symbol" => true,
+            "edit.change_signature" => true,
             "edit.create_file" => true,
             "edit.replace_text" => true,
             "edit.replace_in_member" => true,
@@ -3835,6 +4097,8 @@ Workflow:
         List<string> positional = new();
         options = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         error = null;
+
+        CommandInputSchema? schema = CommandInputSchemaCatalog.GetSchema(commandId);
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -3873,7 +4137,7 @@ Workflow:
             {
                 optionName = token[..equalsIndex];
                 string rawValue = token[(equalsIndex + 1)..];
-                optionValue = ParseOptionValue(optionName, rawValue);
+                optionValue = ParseOptionValue(optionName, rawValue, schema);
             }
             else if (token.StartsWith("no-", StringComparison.OrdinalIgnoreCase))
             {
@@ -3883,7 +4147,7 @@ Workflow:
             else if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 optionName = token;
-                optionValue = ParseOptionValue(optionName, args[++i]);
+                optionValue = ParseOptionValue(optionName, args[++i], schema);
             }
             else
             {
@@ -3916,7 +4180,7 @@ Workflow:
         return true;
     }
 
-    private static object? ParseOptionValue(string optionName, string rawValue)
+    private static object? ParseOptionValue(string optionName, string rawValue, CommandInputSchema? schema = null)
     {
         string value = rawValue.Trim();
         if (value.Length == 0)
@@ -3929,13 +4193,63 @@ Workflow:
             return value;
         }
 
+        string normalized = NormalizeOptionName(optionName);
+        CommandParameterDescriptor? paramDesc = CommandInputSchemaCatalog.FindParameter(schema, normalized);
+
         string[] parts = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 1 && IsCommaListOption(optionName) && IsCompactCommaList(value, parts))
+        bool acceptCommaList = paramDesc?.AcceptCommaList == true || IsCommaListOption(optionName);
+        if (parts.Length > 1 && acceptCommaList && IsCompactCommaList(value, parts))
         {
-            return parts.Select(ParseScalarOptionValue).ToArray();
+            return paramDesc is not null && string.Equals(paramDesc.ItemType, "string", StringComparison.Ordinal)
+                ? parts
+                : parts.Select(ParseScalarOptionValue).ToArray();
+        }
+
+        // Schema-driven coercion: keep string-typed parameters as strings even when they look numeric (e.g. pattern "3191" or SHA-256 hex).
+        if (paramDesc is not null && string.Equals(paramDesc.Type, "string", StringComparison.Ordinal))
+        {
+            return value;
         }
 
         return ParseScalarOptionValue(value);
+    }
+
+    private static bool TryParseFileLineRangeArg(string token, out string filePath, out int startLine, out int? endLine)
+    {
+        filePath = string.Empty;
+        startLine = 1;
+        endLine = null;
+        int colonIdx = token.LastIndexOf(':');
+        if (colonIdx <= 1 || colonIdx >= token.Length - 1)
+        {
+            return false;
+        }
+
+        string rangePart = token[(colonIdx + 1)..];
+        int dashIdx = rangePart.IndexOf('-');
+        if (dashIdx > 0)
+        {
+            if (int.TryParse(rangePart[..dashIdx], out int s) &&
+                int.TryParse(rangePart[(dashIdx + 1)..], out int e) &&
+                s >= 1 && e >= s)
+            {
+                filePath = token[..colonIdx];
+                startLine = s;
+                endLine = e;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (int.TryParse(rangePart, out int singleLine) && singleLine >= 1)
+        {
+            filePath = token[..colonIdx];
+            startLine = singleLine;
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsCommaListOption(string optionName)
@@ -4477,6 +4791,34 @@ Workflow:
                     ? $"matches={totalMatches}"
                     : $"matches={totalMatches}, workspace={workspaceMode}";
             }
+        }
+
+        if (string.Equals(commandId, "ctx.read_window", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetInt(element, "window_count", out int winCount))
+            {
+                string src = TryGetString(element, "text_source", out string s) ? s : "disk";
+                return $"windows={winCount}, source={src}";
+            }
+
+            if (TryGetInt(element, "start_line", out int startLine) &&
+                TryGetInt(element, "end_line", out int endLine))
+            {
+                string src = TryGetString(element, "text_source", out string s) ? s : "disk";
+                return $"lines={startLine}..{endLine}, source={src}";
+            }
+        }
+
+        if (string.Equals(commandId, "ctx.symbol_context", StringComparison.OrdinalIgnoreCase))
+        {
+            string display = TryGetObject(element, "symbol", out JsonElement symObj) &&
+                             TryGetString(symObj, "symbol_display", out string symDisplay)
+                ? Truncate(symDisplay, 48)
+                : "symbol";
+            int refs = TryGetObject(element, "references", out JsonElement refsObj) && TryGetInt(refsObj, "total_returned", out int r) ? r : 0;
+            int callers = TryGetObject(element, "callers", out JsonElement callersObj) && TryGetInt(callersObj, "total_count", out int c) ? c : 0;
+            int errors = TryGetObject(element, "diagnostics", out JsonElement diagObj) && TryGetInt(diagObj, "errors", out int e) ? e : 0;
+            return $"{display}, refs={refs}, callers={callers}, errors={errors}";
         }
 
         if (string.Equals(commandId, "nav.call_hierarchy", StringComparison.OrdinalIgnoreCase))
@@ -5157,6 +5499,38 @@ Workflow:
                     "Prefer replace_span with ctx.member_source Data.edit_target spans and expected_text for large member replacements; start from edit_target.exact_span_text.text and do not duplicate preserved_line_prefix_text.",
                     "Atomic apply means any operation failure prevents all file writes; response still reports the failed operation and recovery_hint.",
                     "Evaluates unified cross-file solution diagnostics in diagnostics_after_edit and refreshes tracked hot workspaces via hot_workspace_refresh.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "ctx.read_window", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "ctx.read_window <file-path> [start-line] [end-line] [--option value ...] OR ctx.read_window <file-path>:<start>-<end>",
+                run = "run ctx.read_window --input '{\"file_path\":\"src/MyFile.cs\",\"start_line\":1,\"line_count\":100}'",
+                required_properties = new[] { "file_path (or windows)" },
+                optional_properties = new[] { "start_line", "end_line", "line_count", "anchor_line", "context_before", "context_after", "windows", "include_line_numbers", "include_content_hash", "include_enclosing_outline", "max_chars", "brief", "workspace_handle" },
+                notes = new[]
+                {
+                    "Reads line windows directly from the hot workspace's in-memory SourceText (zero disk reads when warm).",
+                    "Returns file_sha256 ready for edit.transaction expected_sha256 / expected_file_hashes preconditions.",
+                    "Supports batched multi-window reads across one or more files via the 'windows' array.",
+                },
+            };
+        }
+
+        if (string.Equals(commandId, "ctx.symbol_context", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                direct = "ctx.symbol_context --symbol <Type.Member> [--brief true] OR ctx.symbol_context <file-path> <line> <column>",
+                run = "run ctx.symbol_context --input '{\"symbol\":\"MyNamespace.MyType.MyMethod\",\"brief\":true}'",
+                required_properties = new[] { "symbol (or file_path + line + column)" },
+                optional_properties = new[] { "brief", "include_definition", "include_references", "include_callers", "include_callees", "include_implementations", "include_diagnostics", "max_definition_lines", "max_references", "max_callers", "max_callees", "max_implementations", "max_diagnostics", "workspace_path", "workspace_handle", "require_workspace" },
+                notes = new[]
+                {
+                    "Compound Mindspace command collapsing symbol lookup + zero-disk declaration source + references + interface-aware callers + callees + implementations + declaring-file diagnostics into one bounded call.",
                 },
             };
         }

@@ -3,6 +3,24 @@ using System.Text.Json.Serialization;
 
 namespace RoslynSkills.Contracts;
 
+public sealed record CommandParameterDescriptor(
+    string Name,
+    string Type,
+    string Description,
+    bool Required = false,
+    string? ItemType = null,
+    IReadOnlyList<string>? EnumValues = null,
+    int? Minimum = null,
+    int? Maximum = null,
+    bool IsPath = false,
+    bool AcceptCommaList = false,
+    IReadOnlyList<CommandParameterDescriptor>? ItemProperties = null,
+    IReadOnlyList<string>? Aliases = null);
+
+public sealed record CommandInputSchema(
+    IReadOnlyList<CommandParameterDescriptor> Parameters,
+    bool AdditionalProperties = true);
+
 public sealed record CommandDescriptor(
     string Id,
     string Summary,
@@ -12,7 +30,8 @@ public sealed record CommandDescriptor(
     string Maturity = CommandMaturity.Stable,
     IReadOnlyList<string>? Traits = null,
     bool RunsOnHotWorkspace = false,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool HotWorkspaceOptional = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool HotWorkspaceOptional = false,
+    [property: JsonIgnore] CommandInputSchema? InputSchema = null);
 
 public static class CommandMaturity
 {

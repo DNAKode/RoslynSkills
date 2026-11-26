@@ -10,7 +10,7 @@ public sealed class ImpactSliceCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "analyze.impact_slice",
-        Summary: "Build a bounded impact slice for an anchored symbol (references/callers/callees/overrides/implementations).",
+        Summary: "Build a bounded impact slice for an anchored symbol (coordinates or --symbol: references/callers/callees/overrides/implementations).",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -21,13 +21,26 @@ public sealed class ImpactSliceCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
         {
-            return errors;
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
+        }
+        else
+        {
+            if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
+            {
+                return errors;
+            }
+
+            InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
+            InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
+            if (!File.Exists(filePath))
+            {
+                errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
+            }
         }
 
-        InputParsing.TryGetRequiredInt(input, "line", errors, out _, minValue: 1, maxValue: 1_000_000);
-        InputParsing.TryGetRequiredInt(input, "column", errors, out _, minValue: 1, maxValue: 1_000_000);
         InputParsing.ValidateOptionalBool(input, "brief", errors);
         InputParsing.ValidateOptionalBool(input, "include_references", errors);
         InputParsing.ValidateOptionalBool(input, "include_callers", errors);
@@ -38,24 +51,12 @@ public sealed class ImpactSliceCommand : IAgentCommand
         WorkspaceInput.ValidateOptionalWorkspaceHandle(input, errors);
         InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
 
-        if (!File.Exists(filePath))
-        {
-            errors.Add(new CommandError("file_not_found", $"Input file '{filePath}' does not exist."));
-        }
-
         return errors;
     }
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
         List<CommandError> errors = new();
-        if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
-            !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
-            !InputParsing.TryGetRequiredInt(input, "column", errors, out int column, minValue: 1, maxValue: 1_000_000))
-        {
-            return new CommandExecutionResult(null, errors);
-        }
-
         bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: true);
         bool includeReferences = InputParsing.GetOptionalBool(input, "include_references", defaultValue: true);
         bool includeCallers = InputParsing.GetOptionalBool(input, "include_callers", defaultValue: true);
@@ -67,9 +68,50 @@ public sealed class ImpactSliceCommand : IAgentCommand
         int maxCallees = InputParsing.GetOptionalInt(input, "max_callees", defaultValue: 200, minValue: 1, maxValue: 10_000);
         int maxRelated = InputParsing.GetOptionalInt(input, "max_related", defaultValue: 200, minValue: 1, maxValue: 10_000);
         string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
         bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
 
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
+        string? filePath;
+        int line;
+        int column;
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            (SymbolQueryResult? resolved, CommandExecutionResult? errorResult) = await SymbolQueryResolution.ResolveAsync(
+                input,
+                symbolQuery,
+                workspacePath,
+                targetPredicate: null,
+                invalidTargetMessageFormat: string.Empty,
+                allowSameTypeOverloads: false,
+                cancellationToken).ConfigureAwait(false);
+            if (errorResult is not null || resolved is null)
+            {
+                return errorResult!;
+            }
+
+            (string? declFile, int? declLine, int? declCol) = SymbolQueryResolution.GetPrimaryDeclarationLocation(resolved.Symbols[0]);
+            if (string.IsNullOrWhiteSpace(declFile) || !declLine.HasValue || !declCol.HasValue)
+            {
+                return new CommandExecutionResult(null, new[] { new CommandError("invalid_target", $"Symbol '{symbolQuery}' does not have a source declaration.") });
+            }
+
+            filePath = declFile;
+            line = declLine.Value;
+            column = declCol.Value;
+            workspacePath ??= resolved.Workspace.ResolvedWorkspacePath;
+        }
+        else
+        {
+            if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out filePath) ||
+                !InputParsing.TryGetRequiredInt(input, "line", errors, out line, minValue: 1, maxValue: 1_000_000) ||
+                !InputParsing.TryGetRequiredInt(input, "column", errors, out column, minValue: 1, maxValue: 1_000_000))
+            {
+                return new CommandExecutionResult(null, errors);
+            }
+        }
+
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, workspaceHandle).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {

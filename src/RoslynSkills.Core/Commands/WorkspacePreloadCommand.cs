@@ -19,6 +19,8 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
         InputParsing.TryGetRequiredString(input, "workspace_path", errors, out _);
         InputParsing.ValidateOptionalBool(input, "include_generated", errors);
         InputParsing.ValidateOptionalBool(input, "require_solution", errors);
+        InputParsing.ValidateOptionalBool(input, "wait_warmup", errors);
+        InputParsing.ValidateOptionalInt(input, "wait_warmup_timeout_ms", errors, minValue: 100, maxValue: 600_000);
         InputParsing.ValidateOptionalInt(input, "max_files", errors, minValue: 1, maxValue: 100_000);
 
         if (input.TryGetProperty("mode", out JsonElement modeProperty) &&
@@ -50,6 +52,8 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
             : "balanced";
         bool includeGenerated = InputParsing.GetOptionalBool(input, "include_generated", defaultValue: false);
         bool requireSolution = InputParsing.GetOptionalBool(input, "require_solution", defaultValue: false);
+        bool waitWarmup = InputParsing.GetOptionalBool(input, "wait_warmup", defaultValue: false);
+        int waitWarmupTimeoutMs = InputParsing.GetOptionalInt(input, "wait_warmup_timeout_ms", defaultValue: 180_000, minValue: 100, maxValue: 600_000);
         int maxFiles = InputParsing.GetOptionalInt(input, "max_files", defaultValue: 10_000, minValue: 1, maxValue: 100_000);
 
         Stopwatch stopwatch = Stopwatch.StartNew();
@@ -82,7 +86,17 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
 
         IWorkspaceHostStore workspaceStore = WorkspaceHostStoreProvider.Current;
         HostedWorkspace hosted = workspaceStore.Add(loaded.Workspace, mode, includeGenerated, maxFiles);
-        HotWorkspaceWarmup.Start(loaded.Workspace.Solution);
+        HotWorkspaceWarmup.Start(hosted);
+        bool warmupTimedOut = false;
+        if (waitWarmup)
+        {
+            bool completed = await HotWorkspaceWarmup
+                .WaitForWarmupAsync(loaded.Workspace.Solution, TimeSpan.FromMilliseconds(waitWarmupTimeoutMs), cancellationToken)
+                .ConfigureAwait(false);
+            warmupTimedOut = !completed;
+        }
+
+        WarmupProgressSnapshot warmup = HotWorkspaceWarmup.GetSnapshot(loaded.Workspace.Solution);
         WorkspaceStatus status = workspaceStore.BuildStatus(hosted);
 
         object data = new
@@ -93,6 +107,12 @@ public sealed class WorkspacePreloadCommand : IAgentCommand
             mode,
             include_generated = includeGenerated,
             require_solution = requireSolution,
+            wait_warmup = waitWarmup,
+            warmup_timed_out = warmupTimedOut,
+            warmup_state = warmup.State,
+            projects_warmed = warmup.ProjectsWarmed,
+            warmup = warmup.ToPayload(),
+            overlay_index = hosted.OverlayIndex.GetStatsPayload(),
             workspace_fingerprint = hosted.WorkspaceFingerprint,
             workspace_load_duration_ms = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3),
             requested_workspace_path = Path.GetFullPath(workspacePath),
