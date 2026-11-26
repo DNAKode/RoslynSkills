@@ -360,6 +360,99 @@ public sealed class Pass5CliAndMcpTests
         }
     }
 
+    [Fact]
+    public async Task McpServer_LargeUtf8Request_AndConcurrentPipelinedReadOnlyCalls()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-p5-mcp-perf-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string mcpDll = ResolveSiblingDll("RoslynSkills.McpServer", "RoslynSkills.McpServer.dll");
+
+        try
+        {
+            string testFile = Path.Combine(root, "Utf8Sample.cs");
+            await File.WriteAllTextAsync(testFile, "// §1 äöü €100\npublic sealed class Utf8Sample { public int Value => 42; }\n", new UTF8Encoding(false));
+
+            using Process mcp = StartMcpProcess(mcpDll, root, "--mode", "slim");
+            try
+            {
+                using (await SendMcpAsync(mcp, 1, "initialize", new { protocolVersion = "2025-06-18" })) { }
+
+                // 1. > 10 KB newline-delimited UTF-8 request with non-ASCII characters (previously broke 8 KB cap & ASCII decoding).
+                string largeNonAsciiPadding = new string('ä', 4500) + "§€" + new string('x', 4500);
+                using (JsonDocument largeResp = await SendMcpAsync(mcp, 2, "tools/call", new
+                {
+                    name = "roslyn_edit_transaction",
+                    arguments = new
+                    {
+                        apply = false,
+                        file_path = testFile,
+                        operations = new object[]
+                        {
+                            new
+                            {
+                                kind = "replace_text",
+                                old_text = "// §1 äöü €100",
+                                new_text = $"// §2 {largeNonAsciiPadding}",
+                            },
+                        },
+                    },
+                }))
+                {
+                    JsonElement structured = largeResp.RootElement.GetProperty("result").GetProperty("structuredContent");
+                    Assert.True(structured.GetProperty("ok").GetBoolean(), largeResp.RootElement.GetRawText());
+                    Assert.Equal(1, structured.GetProperty("data").GetProperty("succeeded_operations").GetInt32());
+                }
+
+                // 2. Pipeline 4 read-only calls back-to-back without waiting between writes.
+                int[] ids = [10, 11, 12, 13];
+                foreach (int id in ids)
+                {
+                    string req = JsonSerializer.Serialize(new
+                    {
+                        jsonrpc = "2.0",
+                        id,
+                        method = "tools/call",
+                        @params = new
+                        {
+                            name = "roslyn_run",
+                            arguments = new
+                            {
+                                command_id = "ctx.read_window",
+                                input = new { file_path = testFile, start_line = 1, end_line = 2 },
+                            },
+                        },
+                    });
+                    await mcp.StandardInput.WriteLineAsync(req);
+                }
+
+                await mcp.StandardInput.FlushAsync();
+
+                HashSet<int> receivedIds = new();
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    string? line = await mcp.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                    Assert.False(string.IsNullOrWhiteSpace(line));
+                    using JsonDocument doc = JsonDocument.Parse(line!);
+                    int respId = doc.RootElement.GetProperty("id").GetInt32();
+                    receivedIds.Add(respId);
+                    JsonElement structured = doc.RootElement.GetProperty("result").GetProperty("structuredContent");
+                    Assert.True(structured.GetProperty("ok").GetBoolean(), line);
+                    Assert.Contains("§1 äöü €100", structured.GetProperty("data").GetProperty("content").GetString());
+                }
+
+                Assert.Equal(ids.ToHashSet(), receivedIds);
+            }
+            finally
+            {
+                TryKill(mcp);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private static async Task CreateSampleSolutionAsync(string root)
     {
         await File.WriteAllTextAsync(

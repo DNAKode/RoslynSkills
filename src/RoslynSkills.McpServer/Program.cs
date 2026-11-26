@@ -30,15 +30,16 @@ internal static class Program
     private const string CommandResourceTemplateInputBase64 = "roslyn://command/{commandId}?input_b64=ey4uLn0";
     private const int MaxHeaderLineLength = 8192;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = McpContractsJsonContext.CreateMcpOptions();
+    private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
+    private static readonly SemaphoreSlim OutputGate = new(1, 1);
+    private static readonly ArrayBufferWriter<byte> OutputBuffer = new(8192);
 
     private static HotCommandRouter? Router;
     private static McpToolMode ActiveMode = McpToolMode.Full;
+    private static ReadOnlyMemory<byte> CachedToolListResult;
+    private static ReadOnlyMemory<byte> CachedResourceListResult;
+    private static ReadOnlyMemory<byte> CachedResourceTemplateListResult;
 
     public static async Task<int> Main(string[] args)
     {
@@ -61,24 +62,28 @@ internal static class Program
 
         Stream input = Console.OpenStandardInput();
         Stream output = Console.OpenStandardOutput();
+        BufferedMessageReader messageReader = new(input);
+        List<Task> inFlight = new();
 
         try
         {
             while (true)
             {
+                PruneCompletedTasks(inFlight);
+
                 JsonDocument? request;
                 try
                 {
-                    request = await ReadMessageAsync(input, CancellationToken.None).ConfigureAwait(false);
+                    request = await messageReader.ReadMessageAsync(CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     await WriteErrorResponseAsync(
                         output,
-                        idNode: null,
+                        idElement: null,
                         code: -32700,
                         message: "Parse error.",
-                        dataNode: JsonValue.Create(ex.Message)).ConfigureAwait(false);
+                        dataText: ex.Message).ConfigureAwait(false);
                     continue;
                 }
 
@@ -87,22 +92,22 @@ internal static class Program
                     break;
                 }
 
-                using (request)
+                bool transferredOwnership = false;
+                try
                 {
                     JsonElement root = request.RootElement;
                     if (root.ValueKind != JsonValueKind.Object)
                     {
                         await WriteErrorResponseAsync(
                             output,
-                            idNode: null,
+                            idElement: null,
                             code: -32600,
                             message: "Invalid request: top-level JSON must be an object.",
-                            dataNode: null).ConfigureAwait(false);
+                            dataText: null).ConfigureAwait(false);
                         continue;
                     }
 
-                    JsonNode? idNode = TryGetIdNode(root);
-                    bool hasResponseId = idNode is not null;
+                    bool hasResponseId = root.TryGetProperty("id", out JsonElement idElement);
 
                     if (!TryGetStringProperty(root, "method", out string? method) || string.IsNullOrWhiteSpace(method))
                     {
@@ -110,10 +115,10 @@ internal static class Program
                         {
                             await WriteErrorResponseAsync(
                                 output,
-                                idNode,
+                                idElement,
                                 code: -32600,
                                 message: "Invalid request: missing method.",
-                                dataNode: null).ConfigureAwait(false);
+                                dataText: null).ConfigureAwait(false);
                         }
 
                         continue;
@@ -133,30 +138,7 @@ internal static class Program
                             string instructions = ActiveMode == McpToolMode.Slim
                                 ? "Roslyn-backed C# navigation, mindspace context, search, diagnostics, and edits (slim mode: 12 tools). Use roslyn_search for syntax-aware overlay search (code/comments/strings/declarations/invocations), roslyn_context for one-call symbol mindspace (definition+refs+callers+impls+diag), roslyn_nav_* with symbol/symbols or file_path/line/column, roslyn_diag_snapshot for multi-project diagnostics, roslyn_edit_* for semantic/atomic edits with SHA-256 preconditions, and roslyn_run for any other RoslynSkills command (ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.status)."
                                 : "Roslyn-backed C# navigation, diagnostics, and edits. Tool names map from command ids via roslyn_<command_id_with_underscores>. Resource template invocation is available via roslyn://command/{commandId}.";
-                            JsonObject result = new()
-                            {
-                                ["protocolVersion"] = protocolVersion,
-                                ["capabilities"] = new JsonObject
-                                {
-                                    ["tools"] = new JsonObject
-                                    {
-                                        ["listChanged"] = false,
-                                    },
-                                    ["resources"] = new JsonObject
-                                    {
-                                        ["subscribe"] = false,
-                                        ["listChanged"] = false,
-                                    },
-                                },
-                                ["serverInfo"] = new JsonObject
-                                {
-                                    ["name"] = "roslynskills-mcp",
-                                    ["version"] = GetServerVersion(),
-                                },
-                                ["instructions"] = instructions,
-                            };
-
-                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
+                            await WriteInitializeResponseAsync(output, idElement, protocolVersion, instructions).ConfigureAwait(false);
                             break;
                         }
 
@@ -170,14 +152,8 @@ internal static class Program
                                 break;
                             }
 
-                            JsonObject result = new()
-                            {
-                                ["tools"] = ActiveMode == McpToolMode.Slim
-                                    ? BuildSlimToolList()
-                                    : BuildToolList(toolMap),
-                            };
-
-                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
+                            ReadOnlyMemory<byte> rawResult = GetOrBuildToolListResult(toolMap);
+                            await WriteRawResultResponseAsync(output, idElement, rawResult).ConfigureAwait(false);
                             break;
                         }
 
@@ -188,7 +164,28 @@ internal static class Program
                                 break;
                             }
 
-                            await HandleToolCallAsync(output, idNode!, @params, registry, toolMap).ConfigureAwait(false);
+                            if (IsConcurrentReadOnlyToolCall(@params, registry, toolMap))
+                            {
+                                JsonDocument ownedRequest = request;
+                                transferredOwnership = true;
+                                Task task = Task.Run(async () =>
+                                {
+                                    using (ownedRequest)
+                                    {
+                                        JsonElement taskRoot = ownedRequest.RootElement;
+                                        taskRoot.TryGetProperty("id", out JsonElement taskId);
+                                        JsonElement taskParams = GetParams(taskRoot);
+                                        await HandleToolCallAsync(output, taskId, taskParams, registry, toolMap).ConfigureAwait(false);
+                                    }
+                                });
+                                inFlight.Add(task);
+                            }
+                            else
+                            {
+                                await DrainInFlightAsync(inFlight).ConfigureAwait(false);
+                                await HandleToolCallAsync(output, idElement, @params, registry, toolMap).ConfigureAwait(false);
+                            }
+
                             break;
                         }
 
@@ -199,12 +196,8 @@ internal static class Program
                                 break;
                             }
 
-                            JsonObject result = new()
-                            {
-                                ["resources"] = BuildResourceList(toolMap),
-                            };
-
-                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
+                            ReadOnlyMemory<byte> rawResult = GetOrBuildResourceListResult(toolMap);
+                            await WriteRawResultResponseAsync(output, idElement, rawResult).ConfigureAwait(false);
                             break;
                         }
 
@@ -215,12 +208,8 @@ internal static class Program
                                 break;
                             }
 
-                            JsonObject result = new()
-                            {
-                                ["resourceTemplates"] = BuildResourceTemplateList(),
-                            };
-
-                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
+                            ReadOnlyMemory<byte> rawResult = GetOrBuildResourceTemplateListResult();
+                            await WriteRawResultResponseAsync(output, idElement, rawResult).ConfigureAwait(false);
                             break;
                         }
 
@@ -231,7 +220,8 @@ internal static class Program
                                 break;
                             }
 
-                            await HandleResourceReadAsync(output, idNode!, @params, registry, toolMap).ConfigureAwait(false);
+                            await DrainInFlightAsync(inFlight).ConfigureAwait(false);
+                            await HandleResourceReadAsync(output, idElement, @params, registry, toolMap).ConfigureAwait(false);
                             break;
                         }
 
@@ -242,7 +232,7 @@ internal static class Program
                                 break;
                             }
 
-                            await WriteResultResponseAsync(output, idNode!, new JsonObject()).ConfigureAwait(false);
+                            await WriteEmptyResultResponseAsync(output, idElement).ConfigureAwait(false);
                             break;
                         }
 
@@ -255,15 +245,24 @@ internal static class Program
 
                             await WriteErrorResponseAsync(
                                 output,
-                                idNode,
+                                idElement,
                                 code: -32601,
                                 message: $"Method not found: {method}",
-                                dataNode: null).ConfigureAwait(false);
+                                dataText: null).ConfigureAwait(false);
                             break;
                         }
                     }
                 }
+                finally
+                {
+                    if (!transferredOwnership)
+                    {
+                        request.Dispose();
+                    }
+                }
             }
+
+            await DrainInFlightAsync(inFlight).ConfigureAwait(false);
         }
         finally
         {
@@ -275,6 +274,134 @@ internal static class Program
         }
 
         return 0;
+    }
+
+    private static void PruneCompletedTasks(List<Task> inFlight)
+    {
+        for (int i = inFlight.Count - 1; i >= 0; i--)
+        {
+            if (inFlight[i].IsCompleted)
+            {
+                inFlight.RemoveAt(i);
+            }
+        }
+    }
+
+    private static async Task DrainInFlightAsync(List<Task> inFlight)
+    {
+        if (inFlight.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.WhenAll(inFlight).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"roslynskills-mcp: background request error: {ex.Message}");
+        }
+        finally
+        {
+            inFlight.Clear();
+        }
+    }
+
+    private static bool IsConcurrentReadOnlyToolCall(JsonElement @params, ICommandRegistry registry, ToolMap toolMap)
+    {
+        if (@params.ValueKind != JsonValueKind.Object ||
+            !TryGetStringProperty(@params, "name", out string? toolName) ||
+            string.IsNullOrWhiteSpace(toolName))
+        {
+            return false;
+        }
+
+        JsonElement arguments = @params.TryGetProperty("arguments", out JsonElement argsElem)
+            ? argsElem
+            : EmptyObject;
+
+        string? resolvedCommandId;
+        if (string.Equals(toolName, "roslyn_run", StringComparison.OrdinalIgnoreCase))
+        {
+            if (arguments.ValueKind != JsonValueKind.Object ||
+                !TryGetStringProperty(arguments, "command_id", out string? requestedId) ||
+                string.IsNullOrWhiteSpace(requestedId))
+            {
+                return false;
+            }
+
+            resolvedCommandId = requestedId.Trim();
+        }
+        else if (TryResolveSlimToolCommandId(toolName, arguments, out string? slimId))
+        {
+            resolvedCommandId = slimId;
+        }
+        else if (ActiveMode == McpToolMode.Full && toolMap.ByToolName.TryGetValue(toolName, out ToolBinding? binding))
+        {
+            resolvedCommandId = binding.CommandId;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(resolvedCommandId) ||
+            HotCommandRouter.IsWorkspaceLifecycleCommand(resolvedCommandId))
+        {
+            return false;
+        }
+
+        return registry.TryGet(resolvedCommandId, out IAgentCommand? command) &&
+               command is not null &&
+               !command.Descriptor.MutatesState;
+    }
+
+    private static ReadOnlyMemory<byte> GetOrBuildToolListResult(ToolMap toolMap)
+    {
+        if (!CachedToolListResult.IsEmpty)
+        {
+            return CachedToolListResult;
+        }
+
+        JsonObject result = new()
+        {
+            ["tools"] = ActiveMode == McpToolMode.Slim
+                ? BuildSlimToolList()
+                : BuildToolList(toolMap),
+        };
+        CachedToolListResult = JsonSerializer.SerializeToUtf8Bytes(result, JsonOptions);
+        return CachedToolListResult;
+    }
+
+    private static ReadOnlyMemory<byte> GetOrBuildResourceListResult(ToolMap toolMap)
+    {
+        if (!CachedResourceListResult.IsEmpty)
+        {
+            return CachedResourceListResult;
+        }
+
+        JsonObject result = new()
+        {
+            ["resources"] = BuildResourceList(toolMap),
+        };
+        CachedResourceListResult = JsonSerializer.SerializeToUtf8Bytes(result, JsonOptions);
+        return CachedResourceListResult;
+    }
+
+    private static ReadOnlyMemory<byte> GetOrBuildResourceTemplateListResult()
+    {
+        if (!CachedResourceTemplateListResult.IsEmpty)
+        {
+            return CachedResourceTemplateListResult;
+        }
+
+        JsonObject result = new()
+        {
+            ["resourceTemplates"] = BuildResourceTemplateList(),
+        };
+        CachedResourceTemplateListResult = JsonSerializer.SerializeToUtf8Bytes(result, JsonOptions);
+        return CachedResourceTemplateListResult;
     }
 
     private static bool TryParseOptions(string[] args, out McpToolMode mode, out bool showHelp, out string? error)
@@ -371,7 +498,7 @@ internal static class Program
 
     private static async Task HandleToolCallAsync(
         Stream output,
-        JsonNode idNode,
+        JsonElement idElement,
         JsonElement @params,
         ICommandRegistry registry,
         ToolMap toolMap)
@@ -380,10 +507,10 @@ internal static class Program
         {
             await WriteErrorResponseAsync(
                 output,
-                idNode,
+                idElement,
                 code: -32602,
                 message: "Invalid params: tools/call expects an object.",
-                dataNode: null).ConfigureAwait(false);
+                dataText: null).ConfigureAwait(false);
             return;
         }
 
@@ -391,10 +518,10 @@ internal static class Program
         {
             await WriteErrorResponseAsync(
                 output,
-                idNode,
+                idElement,
                 code: -32602,
                 message: "Invalid params: tools/call requires a non-empty tool name.",
-                dataNode: null).ConfigureAwait(false);
+                dataText: null).ConfigureAwait(false);
             return;
         }
 
@@ -410,10 +537,10 @@ internal static class Program
             {
                 await WriteErrorResponseAsync(
                     output,
-                    idNode,
+                    idElement,
                     code: -32602,
                     message: "Invalid params: roslyn_run requires a non-empty string 'command_id'.",
-                    dataNode: null).ConfigureAwait(false);
+                    dataText: null).ConfigureAwait(false);
                 return;
             }
 
@@ -424,20 +551,20 @@ internal static class Program
                 {
                     await WriteErrorResponseAsync(
                         output,
-                        idNode,
+                        idElement,
                         code: -32602,
                         message: "Invalid params: roslyn_run 'input' must be an object.",
-                        dataNode: null).ConfigureAwait(false);
+                        dataText: null).ConfigureAwait(false);
                     return;
                 }
 
                 commandInput = nestedInput.ValueKind == JsonValueKind.Object
-                    ? nestedInput.Clone()
-                    : JsonSerializer.SerializeToElement(new { });
+                    ? nestedInput
+                    : EmptyObject;
             }
             else
             {
-                commandInput = JsonSerializer.SerializeToElement(new { });
+                commandInput = EmptyObject;
             }
         }
         else if (TryResolveSlimToolCommandId(toolName, arguments, out string? slimCommandId))
@@ -457,10 +584,10 @@ internal static class Program
                 : $"Unknown tool '{toolName}'.";
             await WriteErrorResponseAsync(
                 output,
-                idNode,
+                idElement,
                 code: -32602,
                 message: hint,
-                dataNode: null).ConfigureAwait(false);
+                dataText: null).ConfigureAwait(false);
             return;
         }
 
@@ -479,31 +606,36 @@ internal static class Program
                 Preview: $"{resolvedCommandId} failed",
                 Summary: $"Command '{resolvedCommandId}' was not found.",
                 Transport: new CommandTransportMetadata(Mode: "mcp"));
-            await WriteToolEnvelopeResultAsync(output, idNode, notFoundEnvelope).ConfigureAwait(false);
+            await WriteToolEnvelopeResultAsync(output, idElement, notFoundEnvelope).ConfigureAwait(false);
             return;
         }
 
         CommandEnvelope envelope = await ExecuteCommandAsync(command, resolvedCommandId, commandInput).ConfigureAwait(false);
-        await WriteToolEnvelopeResultAsync(output, idNode, envelope).ConfigureAwait(false);
+        await WriteToolEnvelopeResultAsync(output, idElement, envelope).ConfigureAwait(false);
     }
 
-    private static async Task WriteToolEnvelopeResultAsync(Stream output, JsonNode idNode, CommandEnvelope envelope)
+    private static async Task WriteToolEnvelopeResultAsync(Stream output, JsonElement idElement, CommandEnvelope envelope)
     {
-        JsonObject toolResult = new()
+        string resultText = BuildToolResultText(envelope);
+        await WriteUtf8MessageAsync(output, writer =>
         {
-            ["content"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["type"] = "text",
-                    ["text"] = BuildToolResultText(envelope),
-                },
-            },
-            ["structuredContent"] = ToJsonNode(envelope),
-            ["isError"] = !envelope.Ok,
-        };
-
-        await WriteResultResponseAsync(output, idNode, toolResult).ConfigureAwait(false);
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc"u8, JsonRpcVersion);
+            writer.WritePropertyName("id"u8);
+            idElement.WriteTo(writer);
+            writer.WriteStartObject("result"u8);
+            writer.WriteStartArray("content"u8);
+            writer.WriteStartObject();
+            writer.WriteString("type"u8, "text"u8);
+            writer.WriteString("text"u8, resultText);
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WritePropertyName("structuredContent"u8);
+            JsonSerializer.Serialize(writer, envelope, JsonOptions);
+            writer.WriteBoolean("isError"u8, !envelope.Ok);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }).ConfigureAwait(false);
     }
 
     private static bool TryResolveSlimToolCommandId(string toolName, JsonElement arguments, out string? commandId)
@@ -569,7 +701,7 @@ internal static class Program
 
     private static async Task HandleResourceReadAsync(
         Stream output,
-        JsonNode idNode,
+        JsonElement idElement,
         JsonElement @params,
         ICommandRegistry registry,
         ToolMap toolMap)
@@ -578,10 +710,10 @@ internal static class Program
         {
             await WriteErrorResponseAsync(
                 output,
-                idNode,
+                idElement,
                 code: -32602,
                 message: "Invalid params: resources/read expects an object.",
-                dataNode: null).ConfigureAwait(false);
+                dataText: null).ConfigureAwait(false);
             return;
         }
 
@@ -589,10 +721,10 @@ internal static class Program
         {
             await WriteErrorResponseAsync(
                 output,
-                idNode,
+                idElement,
                 code: -32602,
                 message: "Invalid params: resources/read requires a non-empty uri.",
-                dataNode: null).ConfigureAwait(false);
+                dataText: null).ConfigureAwait(false);
             return;
         }
 
@@ -600,10 +732,10 @@ internal static class Program
         {
             await WriteErrorResponseAsync(
                 output,
-                idNode,
+                idElement,
                 code: -32602,
                 message: $"Invalid resource URI '{uriString}'.",
-                dataNode: null).ConfigureAwait(false);
+                dataText: null).ConfigureAwait(false);
             return;
         }
 
@@ -611,10 +743,10 @@ internal static class Program
         {
             await WriteErrorResponseAsync(
                 output,
-                idNode,
+                idElement,
                 code: -32602,
                 message: $"Unsupported resource scheme '{uri.Scheme}'.",
-                dataNode: null).ConfigureAwait(false);
+                dataText: null).ConfigureAwait(false);
             return;
         }
 
@@ -626,7 +758,7 @@ internal static class Program
         {
             JsonNode payload = BuildCommandsCatalog(toolMap);
             string text = JsonSerializer.Serialize(payload, JsonOptions);
-            await WriteResourceTextResultAsync(output, idNode, CommandsCatalogResourceUri, "application/json", text).ConfigureAwait(false);
+            await WriteResourceTextResultAsync(output, idElement, CommandsCatalogResourceUri, "application/json", text).ConfigureAwait(false);
             return;
         }
 
@@ -637,10 +769,10 @@ internal static class Program
             {
                 await WriteErrorResponseAsync(
                     output,
-                    idNode,
+                    idElement,
                     code: -32602,
                     message: $"Unknown command metadata resource '{uri.AbsoluteUri}'.",
-                    dataNode: null).ConfigureAwait(false);
+                    dataText: null).ConfigureAwait(false);
                 return;
             }
 
@@ -657,7 +789,7 @@ internal static class Program
             };
 
             string text = JsonSerializer.Serialize(payload, JsonOptions);
-            await WriteResourceTextResultAsync(output, idNode, uri.AbsoluteUri, "application/json", text).ConfigureAwait(false);
+            await WriteResourceTextResultAsync(output, idElement, uri.AbsoluteUri, "application/json", text).ConfigureAwait(false);
             return;
         }
 
@@ -668,10 +800,10 @@ internal static class Program
             {
                 await WriteErrorResponseAsync(
                     output,
-                    idNode,
+                    idElement,
                     code: -32602,
                     message: $"Unknown command resource '{uri.AbsoluteUri}'.",
-                    dataNode: null).ConfigureAwait(false);
+                    dataText: null).ConfigureAwait(false);
                 return;
             }
 
@@ -679,10 +811,10 @@ internal static class Program
             {
                 await WriteErrorResponseAsync(
                     output,
-                    idNode,
+                    idElement,
                     code: -32603,
                     message: $"Command '{binding.CommandId}' is unavailable.",
-                    dataNode: null).ConfigureAwait(false);
+                    dataText: null).ConfigureAwait(false);
                 return;
             }
 
@@ -690,26 +822,26 @@ internal static class Program
             {
                 await WriteErrorResponseAsync(
                     output,
-                    idNode,
+                    idElement,
                     code: -32602,
                     message: inputError ?? "Failed to parse command input from resource URI.",
-                    dataNode: null).ConfigureAwait(false);
+                    dataText: null).ConfigureAwait(false);
                 return;
             }
 
             CommandEnvelope envelope = await ExecuteCommandAsync(command, binding.CommandId, input).ConfigureAwait(false);
 
             string text = JsonSerializer.Serialize(envelope, JsonOptions);
-            await WriteResourceTextResultAsync(output, idNode, uri.AbsoluteUri, "application/json", text).ConfigureAwait(false);
+            await WriteResourceTextResultAsync(output, idElement, uri.AbsoluteUri, "application/json", text).ConfigureAwait(false);
             return;
         }
 
         await WriteErrorResponseAsync(
             output,
-            idNode,
+            idElement,
             code: -32601,
             message: $"Unknown resource URI '{uri.AbsoluteUri}'.",
-            dataNode: null).ConfigureAwait(false);
+            dataText: null).ConfigureAwait(false);
     }
 
     private static async Task<CommandEnvelope> ExecuteCommandAsync(
@@ -1209,7 +1341,7 @@ internal static class Program
             return @params;
         }
 
-        return JsonSerializer.SerializeToElement(new { });
+        return EmptyObject;
     }
 
     private static JsonArray ToJsonArray(IReadOnlyList<string> values)
@@ -1227,15 +1359,15 @@ internal static class Program
     {
         if (@params.TryGetProperty("arguments", out JsonElement arguments))
         {
-            return arguments.Clone();
+            return arguments;
         }
 
-        return JsonSerializer.SerializeToElement(new { });
+        return EmptyObject;
     }
 
     private static bool TryBuildResourceCommandInput(Uri resourceUri, out JsonElement input, out string? error)
     {
-        input = JsonSerializer.SerializeToElement(new { });
+        input = EmptyObject;
         error = null;
 
         Dictionary<string, List<string>> query = ParseQuery(resourceUri.Query);
@@ -1287,7 +1419,7 @@ internal static class Program
     private static bool TryParseInputJson(string jsonText, out JsonElement input, out string? error)
     {
         error = null;
-        input = JsonSerializer.SerializeToElement(new { });
+        input = EmptyObject;
         try
         {
             using JsonDocument document = JsonDocument.Parse(jsonText);
@@ -1463,254 +1595,361 @@ internal static class Program
         return false;
     }
 
-    private static JsonNode? TryGetIdNode(JsonElement root)
-    {
-        if (!root.TryGetProperty("id", out JsonElement idElement))
-        {
-            return null;
-        }
-
-        return JsonNode.Parse(idElement.GetRawText());
-    }
-
-    private static JsonNode? ToJsonNode(object? value)
-    {
-        if (value is null)
-        {
-            return null;
-        }
-
-        if (value is JsonElement element)
-        {
-            return JsonNode.Parse(element.GetRawText());
-        }
-
-        return JsonSerializer.SerializeToNode(value, JsonOptions);
-    }
-
-    private static async Task WriteResultResponseAsync(Stream output, JsonNode idNode, JsonNode resultNode)
-    {
-        JsonObject response = new()
-        {
-            ["jsonrpc"] = JsonRpcVersion,
-            ["id"] = idNode,
-            ["result"] = resultNode,
-        };
-
-        await WriteMessageAsync(output, response).ConfigureAwait(false);
-    }
-
-    private static async Task WriteErrorResponseAsync(Stream output, JsonNode? idNode, int code, string message, JsonNode? dataNode)
-    {
-        JsonObject error = new()
-        {
-            ["code"] = code,
-            ["message"] = message,
-        };
-
-        if (dataNode is not null)
-        {
-            error["data"] = dataNode;
-        }
-
-        JsonObject response = new()
-        {
-            ["jsonrpc"] = JsonRpcVersion,
-            ["id"] = idNode,
-            ["error"] = error,
-        };
-
-        await WriteMessageAsync(output, response).ConfigureAwait(false);
-    }
-
-    private static async Task WriteResourceTextResultAsync(
+    private static Task WriteInitializeResponseAsync(
         Stream output,
-        JsonNode idNode,
+        JsonElement idElement,
+        string protocolVersion,
+        string instructions)
+    {
+        string version = GetServerVersion();
+        return WriteUtf8MessageAsync(output, writer =>
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc"u8, JsonRpcVersion);
+            writer.WritePropertyName("id"u8);
+            idElement.WriteTo(writer);
+            writer.WriteStartObject("result"u8);
+            writer.WriteString("protocolVersion"u8, protocolVersion);
+            writer.WriteStartObject("capabilities"u8);
+            writer.WriteStartObject("tools"u8);
+            writer.WriteBoolean("listChanged"u8, false);
+            writer.WriteEndObject();
+            writer.WriteStartObject("resources"u8);
+            writer.WriteBoolean("subscribe"u8, false);
+            writer.WriteBoolean("listChanged"u8, false);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+            writer.WriteStartObject("serverInfo"u8);
+            writer.WriteString("name"u8, "roslynskills-mcp"u8);
+            writer.WriteString("version"u8, version);
+            writer.WriteEndObject();
+            writer.WriteString("instructions"u8, instructions);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        });
+    }
+
+    private static Task WriteRawResultResponseAsync(Stream output, JsonElement idElement, ReadOnlyMemory<byte> rawResultUtf8)
+    {
+        return WriteUtf8MessageAsync(output, writer =>
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc"u8, JsonRpcVersion);
+            writer.WritePropertyName("id"u8);
+            idElement.WriteTo(writer);
+            writer.WritePropertyName("result"u8);
+            writer.WriteRawValue(rawResultUtf8.Span, skipInputValidation: true);
+            writer.WriteEndObject();
+        });
+    }
+
+    private static Task WriteEmptyResultResponseAsync(Stream output, JsonElement idElement)
+    {
+        return WriteUtf8MessageAsync(output, writer =>
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc"u8, JsonRpcVersion);
+            writer.WritePropertyName("id"u8);
+            idElement.WriteTo(writer);
+            writer.WriteStartObject("result"u8);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        });
+    }
+
+    private static Task WriteErrorResponseAsync(Stream output, JsonElement? idElement, int code, string message, string? dataText)
+    {
+        return WriteUtf8MessageAsync(output, writer =>
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc"u8, JsonRpcVersion);
+            if (idElement is { } id)
+            {
+                writer.WritePropertyName("id"u8);
+                id.WriteTo(writer);
+            }
+            else
+            {
+                writer.WriteNull("id"u8);
+            }
+
+            writer.WriteStartObject("error"u8);
+            writer.WriteNumber("code"u8, code);
+            writer.WriteString("message"u8, message);
+            if (dataText is not null)
+            {
+                writer.WriteString("data"u8, dataText);
+            }
+
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        });
+    }
+
+    private static Task WriteResourceTextResultAsync(
+        Stream output,
+        JsonElement idElement,
         string uri,
         string mimeType,
         string text)
     {
-        JsonObject content = new()
+        return WriteUtf8MessageAsync(output, writer =>
         {
-            ["uri"] = uri,
-            ["mimeType"] = mimeType,
-            ["text"] = text,
-        };
-
-        JsonObject result = new()
-        {
-            ["contents"] = new JsonArray
-            {
-                content,
-            },
-        };
-
-        await WriteResultResponseAsync(output, idNode, result).ConfigureAwait(false);
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc"u8, JsonRpcVersion);
+            writer.WritePropertyName("id"u8);
+            idElement.WriteTo(writer);
+            writer.WriteStartObject("result"u8);
+            writer.WriteStartArray("contents"u8);
+            writer.WriteStartObject();
+            writer.WriteString("uri"u8, uri);
+            writer.WriteString("mimeType"u8, mimeType);
+            writer.WriteString("text"u8, text);
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        });
     }
 
-    private static async Task WriteMessageAsync(Stream output, JsonNode payload)
+    private static async Task WriteUtf8MessageAsync(Stream output, Action<Utf8JsonWriter> writePayload)
     {
-        byte[] jsonBytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
-        await output.WriteAsync(jsonBytes, 0, jsonBytes.Length).ConfigureAwait(false);
-        await output.WriteAsync(new byte[] { (byte)'\n' }, 0, 1).ConfigureAwait(false);
-        await output.FlushAsync().ConfigureAwait(false);
-    }
-
-    private static async Task<JsonDocument?> ReadMessageAsync(Stream input, CancellationToken cancellationToken)
-    {
-        string? firstLine = await ReadAsciiLineAsync(input, cancellationToken).ConfigureAwait(false);
-        while (firstLine is not null && firstLine.Length == 0)
-        {
-            firstLine = await ReadAsciiLineAsync(input, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (firstLine is null)
-        {
-            return null;
-        }
-
-        string trimmedFirstLine = firstLine.TrimStart();
-        if (trimmedFirstLine.StartsWith("{", StringComparison.Ordinal) ||
-            trimmedFirstLine.StartsWith("[", StringComparison.Ordinal))
-        {
-            try
-            {
-                return JsonDocument.Parse(trimmedFirstLine);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidDataException("Invalid newline-delimited JSON message.", ex);
-            }
-        }
-
-        List<string> headers = new()
-        {
-            firstLine,
-        };
-
-        while (true)
-        {
-            string? line = await ReadAsciiLineAsync(input, cancellationToken).ConfigureAwait(false);
-            if (line is null)
-            {
-                throw new InvalidDataException("Unexpected EOF while reading headers.");
-            }
-
-            if (line.Length == 0)
-            {
-                break;
-            }
-
-            headers.Add(line);
-        }
-
-        int contentLength = -1;
-        foreach (string header in headers)
-        {
-            int separator = header.IndexOf(':');
-            if (separator <= 0)
-            {
-                continue;
-            }
-
-            string name = header.Substring(0, separator).Trim();
-            if (!name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            string rawValue = header.Substring(separator + 1).Trim();
-            if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out contentLength) || contentLength < 0)
-            {
-                throw new InvalidDataException($"Invalid Content-Length header value '{rawValue}'.");
-            }
-        }
-
-        if (contentLength < 0)
-        {
-            throw new InvalidDataException("Missing Content-Length header.");
-        }
-
-        byte[] body = ArrayPool<byte>.Shared.Rent(contentLength);
+        await OutputGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await ReadExactlyAsync(input, body, contentLength, cancellationToken).ConfigureAwait(false);
-            return JsonDocument.Parse(body.AsMemory(0, contentLength));
+            OutputBuffer.ResetWrittenCount();
+            using (Utf8JsonWriter writer = new(OutputBuffer))
+            {
+                writePayload(writer);
+            }
+
+            Span<byte> newline = OutputBuffer.GetSpan(1);
+            newline[0] = (byte)'\n';
+            OutputBuffer.Advance(1);
+
+            await output.WriteAsync(OutputBuffer.WrittenMemory).ConfigureAwait(false);
+            await output.FlushAsync().ConfigureAwait(false);
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(body);
+            OutputGate.Release();
         }
     }
 
-    private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, int count, CancellationToken cancellationToken)
+    private sealed class BufferedMessageReader
     {
-        int offset = 0;
-        while (offset < count)
+        private const int BufferSize = 65536;
+        private readonly Stream _stream;
+        private readonly byte[] _buffer = new byte[BufferSize];
+        private readonly ArrayBufferWriter<byte> _lineScratch = new(4096);
+        private int _start;
+        private int _end;
+
+        public BufferedMessageReader(Stream stream)
         {
-            int read = await stream.ReadAsync(buffer, offset, count - offset, cancellationToken).ConfigureAwait(false);
-            if (read <= 0)
+            _stream = stream;
+        }
+
+        public async Task<JsonDocument?> ReadMessageAsync(CancellationToken cancellationToken)
+        {
+            ReadOnlyMemory<byte>? firstLine = await ReadRawLineAsync(cancellationToken).ConfigureAwait(false);
+            while (firstLine is { } candidate && candidate.Length == 0)
             {
-                throw new EndOfStreamException("Unexpected EOF while reading message body.");
+                firstLine = await ReadRawLineAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            offset += read;
-        }
-    }
-
-    private static async Task<string?> ReadAsciiLineAsync(Stream stream, CancellationToken cancellationToken)
-    {
-        ArrayBufferWriter<byte> buffer = new();
-        bool sawAnyBytes = false;
-
-        while (true)
-        {
-            int next = await ReadByteAsync(stream, cancellationToken).ConfigureAwait(false);
-            if (next < 0)
+            if (firstLine is null)
             {
-                if (!sawAnyBytes)
+                return null;
+            }
+
+            ReadOnlyMemory<byte> trimmed = TrimStartAsciiWhitespace(firstLine.Value);
+            if (trimmed.Length > 0 && (trimmed.Span[0] == (byte)'{' || trimmed.Span[0] == (byte)'['))
+            {
+                try
                 {
+                    Utf8JsonReader jsonReader = new(trimmed.Span);
+                    return JsonDocument.ParseValue(ref jsonReader);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidDataException("Invalid newline-delimited JSON message.", ex);
+                }
+            }
+
+            int contentLength = -1;
+            ValidateHeaderLength(firstLine.Value.Length);
+            ParseHeaderLine(firstLine.Value.Span, ref contentLength);
+
+            while (true)
+            {
+                ReadOnlyMemory<byte>? line = await ReadRawLineAsync(cancellationToken).ConfigureAwait(false);
+                if (line is null)
+                {
+                    throw new InvalidDataException("Unexpected EOF while reading headers.");
+                }
+
+                if (line.Value.Length == 0)
+                {
+                    break;
+                }
+
+                ValidateHeaderLength(line.Value.Length);
+                ParseHeaderLine(line.Value.Span, ref contentLength);
+            }
+
+            if (contentLength < 0)
+            {
+                throw new InvalidDataException("Missing Content-Length header.");
+            }
+
+            byte[] body = ArrayPool<byte>.Shared.Rent(contentLength);
+            try
+            {
+                await ReadExactAsync(body.AsMemory(0, contentLength), cancellationToken).ConfigureAwait(false);
+                Utf8JsonReader bodyReader = new(body.AsSpan(0, contentLength));
+                return JsonDocument.ParseValue(ref bodyReader);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(body);
+            }
+        }
+
+        private async ValueTask<ReadOnlyMemory<byte>?> ReadRawLineAsync(CancellationToken cancellationToken)
+        {
+            _lineScratch.ResetWrittenCount();
+            bool usingScratch = false;
+            bool sawAnyBytes = false;
+
+            while (true)
+            {
+                if (_start < _end)
+                {
+                    sawAnyBytes = true;
+                    ReadOnlySpan<byte> available = _buffer.AsSpan(_start, _end - _start);
+                    int nl = available.IndexOf((byte)'\n');
+                    if (nl >= 0)
+                    {
+                        int lineLen = nl > 0 && available[nl - 1] == (byte)'\r' ? nl - 1 : nl;
+                        int lineStart = _start;
+                        _start += nl + 1;
+
+                        if (!usingScratch)
+                        {
+                            return _buffer.AsMemory(lineStart, lineLen);
+                        }
+
+                        if (lineLen > 0)
+                        {
+                            available[..lineLen].CopyTo(_lineScratch.GetSpan(lineLen));
+                            _lineScratch.Advance(lineLen);
+                        }
+
+                        ReadOnlyMemory<byte> scratchMem = _lineScratch.WrittenMemory;
+                        if (scratchMem.Length > 0 && scratchMem.Span[^1] == (byte)'\r')
+                        {
+                            scratchMem = scratchMem[..^1];
+                        }
+
+                        return scratchMem;
+                    }
+
+                    usingScratch = true;
+                    available.CopyTo(_lineScratch.GetSpan(available.Length));
+                    _lineScratch.Advance(available.Length);
+                    _start = 0;
+                    _end = 0;
+                }
+
+                _start = 0;
+                _end = await _stream.ReadAsync(_buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (_end == 0)
+                {
+                    if (!sawAnyBytes)
+                    {
+                        return null;
+                    }
+
+                    if (usingScratch)
+                    {
+                        ReadOnlyMemory<byte> tail = _lineScratch.WrittenMemory;
+                        if (tail.Length > 0 && tail.Span[^1] == (byte)'\r')
+                        {
+                            tail = tail[..^1];
+                        }
+
+                        return tail;
+                    }
+
                     return null;
                 }
+            }
+        }
 
-                throw new EndOfStreamException("Unexpected EOF while reading header line.");
+        private async ValueTask ReadExactAsync(Memory<byte> destination, CancellationToken cancellationToken)
+        {
+            int written = 0;
+            if (_start < _end)
+            {
+                int copy = Math.Min(_end - _start, destination.Length);
+                _buffer.AsSpan(_start, copy).CopyTo(destination.Span);
+                _start += copy;
+                written += copy;
             }
 
-            sawAnyBytes = true;
-            byte value = (byte)next;
-            if (value == (byte)'\n')
+            while (written < destination.Length)
             {
-                break;
-            }
-
-            if (value == (byte)'\r')
-            {
-                int lf = await ReadByteAsync(stream, cancellationToken).ConfigureAwait(false);
-                if (lf != (byte)'\n')
+                int read = await _stream.ReadAsync(destination[written..], cancellationToken).ConfigureAwait(false);
+                if (read <= 0)
                 {
-                    throw new InvalidDataException("Header lines must end with CRLF.");
+                    throw new EndOfStreamException("Unexpected EOF while reading message body.");
                 }
 
-                break;
+                written += read;
+            }
+        }
+
+        private static ReadOnlyMemory<byte> TrimStartAsciiWhitespace(ReadOnlyMemory<byte> memory)
+        {
+            ReadOnlySpan<byte> span = memory.Span;
+            int idx = 0;
+            while (idx < span.Length && span[idx] is ((byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n'))
+            {
+                idx++;
             }
 
-            Span<byte> span = buffer.GetSpan(1);
-            span[0] = value;
-            buffer.Advance(1);
-            if (buffer.WrittenCount > MaxHeaderLineLength)
+            return idx == 0 ? memory : memory[idx..];
+        }
+
+        private static void ValidateHeaderLength(int length)
+        {
+            if (length > MaxHeaderLineLength)
             {
                 throw new InvalidDataException("Header line exceeds maximum supported length.");
             }
         }
 
-        return Encoding.ASCII.GetString(buffer.WrittenSpan);
-    }
+        private static void ParseHeaderLine(ReadOnlySpan<byte> line, ref int contentLength)
+        {
+            int separator = line.IndexOf((byte)':');
+            if (separator <= 0)
+            {
+                return;
+            }
 
-    private static async Task<int> ReadByteAsync(Stream stream, CancellationToken cancellationToken)
-    {
-        byte[] one = new byte[1];
-        int read = await stream.ReadAsync(one, 0, 1, cancellationToken).ConfigureAwait(false);
-        return read == 1 ? one[0] : -1;
+            string name = Encoding.ASCII.GetString(line[..separator]).Trim();
+            if (!name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            string rawValue = Encoding.ASCII.GetString(line[(separator + 1)..]).Trim();
+            if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out contentLength) || contentLength < 0)
+            {
+                throw new InvalidDataException($"Invalid Content-Length header value '{rawValue}'.");
+            }
+        }
     }
 
     private sealed record ToolBinding(

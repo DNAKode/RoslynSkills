@@ -1406,8 +1406,87 @@ Workflow:
 
     public static JsonElement ResolveRelativePathsForDaemon(JsonElement element)
     {
+        if (!NeedsDaemonPathTransform(element))
+        {
+            return element;
+        }
+
         object? transformed = TransformPathsForDaemon(element);
         return JsonSerializer.SerializeToElement(transformed);
+    }
+
+    private static bool NeedsDaemonPathTransform(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (IsDaemonPathProperty(property.Name) &&
+                    property.Value.ValueKind == JsonValueKind.String)
+                {
+                    string? raw = property.Value.GetString();
+                    if (!string.IsNullOrWhiteSpace(raw) && !IsAlreadyNormalizedAbsolutePath(raw))
+                    {
+                        return true;
+                    }
+                }
+                else if (string.Equals(property.Name, "expected_file_hashes", StringComparison.Ordinal) &&
+                         property.Value.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (JsonProperty hashEntry in property.Value.EnumerateObject())
+                    {
+                        if (!string.IsNullOrWhiteSpace(hashEntry.Name) && !IsAlreadyNormalizedAbsolutePath(hashEntry.Name))
+                        {
+                            return true;
+                        }
+                    }
+                }
+                else if ((string.Equals(property.Name, "roots", StringComparison.Ordinal) ||
+                          string.Equals(property.Name, "file_paths", StringComparison.Ordinal)) &&
+                         property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement item in property.Value.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String)
+                        {
+                            string? raw = item.GetString();
+                            if (!string.IsNullOrWhiteSpace(raw) && !IsAlreadyNormalizedAbsolutePath(raw))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                else if (NeedsDaemonPathTransform(property.Value))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in element.EnumerateArray())
+            {
+                if (NeedsDaemonPathTransform(item))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAlreadyNormalizedAbsolutePath(string raw)
+    {
+        if (!Path.IsPathFullyQualified(raw))
+        {
+            return false;
+        }
+
+        string normalized = NormalizeCliPathValue(raw);
+        return string.Equals(normalized, raw, StringComparison.Ordinal) &&
+               string.Equals(Path.GetFullPath(normalized), raw, StringComparison.Ordinal);
     }
 
     private static object? TransformPathsForDaemon(JsonElement element)

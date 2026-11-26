@@ -1,4 +1,5 @@
 #nullable enable
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
@@ -23,22 +24,36 @@ namespace RoslynSkills.McpServer;
 internal sealed class HotCommandRouter : IAsyncDisposable
 {
     private const string EnvelopeVersion = "1.0";
+    private const int MaxPooledConnectionsPerRepo = 4;
+    private const long StatCacheTtlMs = 1000;
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ToolCallTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan WorkspacePreloadTimeout = TimeSpan.FromMinutes(5);
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
+    private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
+
+    private static readonly bool RoutingEnabled = ReadIsEnabled();
+    private static readonly bool AutoBindEnabled = ReadIsAutoBindEnabled();
+    private static readonly bool RequiredDaemonMode = ReadIsRequiredDaemonMode();
+    private static readonly string DefaultAlias = Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS") ?? "default";
+    private static readonly string? ConfiguredRefreshPolicy = Environment.GetEnvironmentVariable("ROSCLI_REFRESH_POLICY");
 
     private readonly WorkspaceHostDaemonManager _daemonManager = new();
     private readonly ConcurrentDictionary<string, PersistentRepoSession> _sessions = new(PathComparer);
+    private readonly ConcurrentDictionary<string, string> _repoRootCache = new(PathComparer);
 
     public HotCommandRouter(ICommandRegistry registry)
     {
         _ = registry;
     }
 
-    public static bool IsEnabled()
+    public static bool IsEnabled() => RoutingEnabled;
+
+    public static bool IsAutoBindEnabled() => AutoBindEnabled;
+
+    private static bool ReadIsEnabled()
     {
         string? mcpRouting = Environment.GetEnvironmentVariable("ROSLYNSKILLS_MCP_ROUTING");
         if (string.Equals(mcpRouting?.Trim(), "off", StringComparison.OrdinalIgnoreCase))
@@ -52,7 +67,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
                  string.Equals(daemon, "false", StringComparison.OrdinalIgnoreCase));
     }
 
-    public static bool IsAutoBindEnabled()
+    private static bool ReadIsAutoBindEnabled()
     {
         string? raw = Environment.GetEnvironmentVariable("ROSLYNSKILLS_MCP_AUTOBIND")?.Trim();
         return !(string.Equals(raw, "off", StringComparison.OrdinalIgnoreCase) ||
@@ -61,7 +76,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
     }
 
     public static bool ShouldRoute(IAgentCommand command)
-        => IsEnabled() && (command.Descriptor.RunsOnHotWorkspace || IsWorkspaceLifecycleCommand(command.Descriptor.Id));
+        => RoutingEnabled && (command.Descriptor.RunsOnHotWorkspace || IsWorkspaceLifecycleCommand(command.Descriptor.Id));
 
     public static bool IsWorkspaceLifecycleCommand(string commandId)
         => commandId is "workspace.use" or "workspace.preload" or "workspace.status" or "workspace.refresh" or "workspace.close" or "workspace.list";
@@ -78,7 +93,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         JsonElement input,
         CancellationToken cancellationToken)
     {
-        if (!IsEnabled())
+        if (!RoutingEnabled)
         {
             return null;
         }
@@ -95,16 +110,16 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         Stopwatch totalTimer = Stopwatch.StartNew();
         bool requireHotWorkspace = !command.Descriptor.HotWorkspaceOptional &&
                                    !isWorkspaceLifecycle &&
-                                   IsRequiredDaemonMode();
+                                   RequiredDaemonMode;
 
         JsonElement normalizedInput = NormalizeInputObject(input);
-        string repoRoot = CliApplication.InferDaemonRepoRoot(normalizedInput);
+        string repoRoot = ResolveCachedRepoRoot(normalizedInput);
         PersistentRepoSession session = _sessions.GetOrAdd(repoRoot, root => new PersistentRepoSession(root, _daemonManager));
 
-        await session.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        if (isWorkspaceLifecycle)
         {
-            if (isWorkspaceLifecycle)
+            await session.LifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
                 return await ExecuteWorkspaceLifecycleLockedAsync(
                     session,
@@ -114,20 +129,60 @@ internal sealed class HotCommandRouter : IAsyncDisposable
                     totalTimer,
                     cancellationToken).ConfigureAwait(false);
             }
+            finally
+            {
+                session.LifecycleGate.Release();
+            }
+        }
 
-            return await ExecuteToolCallLockedAsync(
-                session,
-                command,
-                normalizedCommandId,
-                normalizedInput,
-                requireHotWorkspace,
-                totalTimer,
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
+        return await ExecuteToolCallAsync(
+            session,
+            command,
+            normalizedCommandId,
+            normalizedInput,
+            requireHotWorkspace,
+            totalTimer,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private string ResolveCachedRepoRoot(JsonElement input)
+    {
+        string? explicitPath = GetOptionalString(input, "workspace_path")
+            ?? GetOptionalString(input, "file_path")
+            ?? GetOptionalString(input, "directory_path")
+            ?? GetOptionalString(input, "source_file_path");
+
+        if (string.IsNullOrWhiteSpace(explicitPath))
         {
-            session.Gate.Release();
+            // Check if any nested object/array has a path; if not, cache by CurrentDirectory.
+            string cwd = Environment.CurrentDirectory;
+            if (!HasNestedPathProperty(input))
+            {
+                return _repoRootCache.GetOrAdd(cwd, _ => CliApplication.InferDaemonRepoRoot(EmptyObject));
+            }
+
+            return CliApplication.InferDaemonRepoRoot(input);
         }
+
+        string fullPath = Path.GetFullPath(explicitPath);
+        string cacheKey = Directory.Exists(fullPath) ? fullPath : (Path.GetDirectoryName(fullPath) ?? fullPath);
+        return _repoRootCache.GetOrAdd(cacheKey, _ => CliApplication.InferDaemonRepoRoot(input));
+    }
+
+    private static bool HasNestedPathProperty(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty prop in element.EnumerateObject())
+            {
+                if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private async Task<CommandEnvelope?> ExecuteWorkspaceLifecycleLockedAsync(
@@ -197,7 +252,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             Method: method,
             WorkspaceAlias: alias,
             WorkspaceHandle: handle,
-            RefreshPolicy: Environment.GetEnvironmentVariable("ROSCLI_REFRESH_POLICY"),
+            RefreshPolicy: ConfiguredRefreshPolicy,
             CommandId: normalizedCommandId,
             Input: resolvedInput,
             KeepAlive: true);
@@ -234,7 +289,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             totalTimer);
     }
 
-    private async Task<CommandEnvelope?> ExecuteToolCallLockedAsync(
+    private async Task<CommandEnvelope?> ExecuteToolCallAsync(
         PersistentRepoSession session,
         IAgentCommand command,
         string commandId,
@@ -244,38 +299,51 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         WorkspaceHostDaemonEndpoint endpoint = _daemonManager.GetDefaultEndpoint(session.RepoRoot);
-        string alias = GetDefaultAlias();
+        string alias = DefaultAlias;
 
         (bool hasBinding, string? boundAlias, string? boundHandle, string? boundWorkspacePath) = ResolveBinding(session, input, alias);
 
         // If no daemon/alias is bound yet, auto-bind on the first semantic workspace-scoped call when a solution/project exists.
-        bool canAutoBind = !command.Descriptor.HotWorkspaceOptional && IsAutoBindEnabled();
+        bool canAutoBind = !command.Descriptor.HotWorkspaceOptional && AutoBindEnabled;
         if (!hasBinding || !session.HasLiveConnectionOrManifest())
         {
             if (canAutoBind)
             {
-                string? targetWorkspace = DiscoverWorkspaceTarget(session.RepoRoot, input, boundWorkspacePath);
-                if (!string.IsNullOrWhiteSpace(targetWorkspace))
+                await session.LifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
                 {
-                    (bool boundOk, string? autoHandle, CommandEnvelope? bindError) = await AutoBindWorkspaceLockedAsync(
-                        session,
-                        endpoint,
-                        alias,
-                        targetWorkspace,
-                        commandId,
-                        totalTimer,
-                        cancellationToken).ConfigureAwait(false);
-                    if (boundOk && !string.IsNullOrWhiteSpace(autoHandle))
+                    // Re-check after acquiring LifecycleGate in case another concurrent call already bound it.
+                    (hasBinding, boundAlias, boundHandle, boundWorkspacePath) = ResolveBinding(session, input, alias);
+                    if (!hasBinding || !session.HasLiveConnectionOrManifest())
                     {
-                        hasBinding = true;
-                        boundAlias = alias;
-                        boundHandle = autoHandle;
-                        boundWorkspacePath = targetWorkspace;
+                        string? targetWorkspace = DiscoverWorkspaceTarget(session.RepoRoot, input, boundWorkspacePath);
+                        if (!string.IsNullOrWhiteSpace(targetWorkspace))
+                        {
+                            (bool boundOk, string? autoHandle, CommandEnvelope? bindError) = await AutoBindWorkspaceLockedAsync(
+                                session,
+                                endpoint,
+                                alias,
+                                targetWorkspace,
+                                commandId,
+                                totalTimer,
+                                cancellationToken).ConfigureAwait(false);
+                            if (boundOk && !string.IsNullOrWhiteSpace(autoHandle))
+                            {
+                                hasBinding = true;
+                                boundAlias = alias;
+                                boundHandle = autoHandle;
+                                boundWorkspacePath = targetWorkspace;
+                            }
+                            else if (requireHotWorkspace && bindError is not null)
+                            {
+                                return bindError;
+                            }
+                        }
                     }
-                    else if (requireHotWorkspace && bindError is not null)
-                    {
-                        return bindError;
-                    }
+                }
+                finally
+                {
+                    session.LifecycleGate.Release();
                 }
             }
         }
@@ -303,7 +371,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             Method: WorkspaceHostProtocol.Method.ToolCall,
             WorkspaceAlias: boundAlias,
             WorkspaceHandle: boundHandle,
-            RefreshPolicy: Environment.GetEnvironmentVariable("ROSCLI_REFRESH_POLICY"),
+            RefreshPolicy: ConfiguredRefreshPolicy,
             CommandId: commandId,
             Input: preparedInput,
             KeepAlive: true);
@@ -317,15 +385,27 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             string? targetWorkspace = DiscoverWorkspaceTarget(session.RepoRoot, input, boundWorkspacePath);
             if (!string.IsNullOrWhiteSpace(targetWorkspace))
             {
-                await session.ResetConnectionAsync().ConfigureAwait(false);
-                (bool reboundOk, string? reboundHandle, CommandEnvelope? rebindError) = await AutoBindWorkspaceLockedAsync(
-                    session,
-                    endpoint,
-                    alias,
-                    targetWorkspace,
-                    commandId,
-                    totalTimer,
-                    cancellationToken).ConfigureAwait(false);
+                await session.LifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                bool reboundOk;
+                string? reboundHandle;
+                CommandEnvelope? rebindError;
+                try
+                {
+                    await session.ResetConnectionAsync().ConfigureAwait(false);
+                    (reboundOk, reboundHandle, rebindError) = await AutoBindWorkspaceLockedAsync(
+                        session,
+                        endpoint,
+                        alias,
+                        targetWorkspace,
+                        commandId,
+                        totalTimer,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    session.LifecycleGate.Release();
+                }
+
                 if (reboundOk && !string.IsNullOrWhiteSpace(reboundHandle))
                 {
                     boundHandle = reboundHandle;
@@ -482,57 +562,94 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         string? boundWorkspacePath,
         bool requireHotWorkspace)
     {
-        Dictionary<string, object?> augmented = new(StringComparer.Ordinal);
+        bool hasWorkspaceHandle = false;
+        bool hasRequireWorkspace = false;
+        bool hasScope = false;
+
         if (input.ValueKind == JsonValueKind.Object)
         {
-            foreach (JsonProperty property in input.EnumerateObject())
-            {
-                augmented[property.Name] = property.Value.Clone();
-            }
-        }
-
-        if (!augmented.ContainsKey("workspace_handle"))
-        {
-            augmented["workspace_handle"] = workspaceHandle;
-        }
-
-        if (requireHotWorkspace && !augmented.ContainsKey("require_workspace"))
-        {
-            augmented["require_workspace"] = true;
-        }
-
-        // Apply default workspace scope for ctx.search_text / diag.get_solution_snapshot when omitted, matching CLI behavior.
-        if (!string.IsNullOrWhiteSpace(boundWorkspacePath) &&
-            (File.Exists(boundWorkspacePath) || Directory.Exists(boundWorkspacePath)) &&
-            (string.Equals(commandId, "ctx.search_text", StringComparison.Ordinal) ||
-             string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.Ordinal)))
-        {
-            bool hasScope =
+            hasWorkspaceHandle = input.TryGetProperty("workspace_handle", out _);
+            hasRequireWorkspace = input.TryGetProperty("require_workspace", out _);
+            hasScope =
                 HasNonEmptyString(input, "directory_path") ||
                 HasNonEmptyString(input, "workspace_path") ||
                 HasNonEmptyString(input, "file_path") ||
                 HasNonEmptyArray(input, "file_paths") ||
                 HasNonEmptyArray(input, "roots");
-            if (!hasScope)
+        }
+
+        string? defaultWorkspacePath = null;
+        string? defaultDirectoryPath = null;
+        if (!hasScope &&
+            !string.IsNullOrWhiteSpace(boundWorkspacePath) &&
+            (File.Exists(boundWorkspacePath) || Directory.Exists(boundWorkspacePath)))
+        {
+            if (string.Equals(commandId, "ctx.search_text", StringComparison.Ordinal))
             {
-                if (string.Equals(commandId, "ctx.search_text", StringComparison.Ordinal))
+                defaultWorkspacePath = boundWorkspacePath;
+            }
+            else if (string.Equals(commandId, "diag.get_solution_snapshot", StringComparison.Ordinal))
+            {
+                string? directory = Directory.Exists(boundWorkspacePath)
+                    ? boundWorkspacePath
+                    : Path.GetDirectoryName(boundWorkspacePath);
+                if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
                 {
-                    augmented["workspace_path"] = boundWorkspacePath;
-                }
-                else
-                {
-                    string? directory = Directory.Exists(boundWorkspacePath)
-                        ? boundWorkspacePath
-                        : Path.GetDirectoryName(boundWorkspacePath);
-                    if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
-                    {
-                        augmented["directory_path"] = directory;
-                    }
+                    defaultDirectoryPath = directory;
                 }
             }
         }
 
-        return CliApplication.ResolveRelativePathsForDaemon(JsonSerializer.SerializeToElement(augmented));
+        bool needsAugment =
+            !hasWorkspaceHandle ||
+            (requireHotWorkspace && !hasRequireWorkspace) ||
+            defaultWorkspacePath is not null ||
+            defaultDirectoryPath is not null;
+
+        if (!needsAugment)
+        {
+            return CliApplication.ResolveRelativePathsForDaemon(input);
+        }
+
+        // Resolve relative paths first (fast no-op when paths are already absolute), then merge extra fields in one UTF-8 write.
+        JsonElement resolved = CliApplication.ResolveRelativePathsForDaemon(input);
+        ArrayBufferWriter<byte> buffer = new(512);
+        using (Utf8JsonWriter writer = new(buffer))
+        {
+            writer.WriteStartObject();
+            if (resolved.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty property in resolved.EnumerateObject())
+                {
+                    property.WriteTo(writer);
+                }
+            }
+
+            if (!hasWorkspaceHandle)
+            {
+                writer.WriteString("workspace_handle"u8, workspaceHandle);
+            }
+
+            if (requireHotWorkspace && !hasRequireWorkspace)
+            {
+                writer.WriteBoolean("require_workspace"u8, true);
+            }
+
+            if (defaultWorkspacePath is not null)
+            {
+                writer.WriteString("workspace_path"u8, defaultWorkspacePath);
+            }
+
+            if (defaultDirectoryPath is not null)
+            {
+                writer.WriteString("directory_path"u8, defaultDirectoryPath);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        using JsonDocument doc = JsonDocument.Parse(buffer.WrittenMemory);
+        return doc.RootElement.Clone();
     }
 
     private static string? DiscoverWorkspaceTarget(string repoRoot, JsonElement input, string? persistedWorkspacePath)
@@ -745,7 +862,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             RoutedAlias: alias,
             WorkspaceHandle: workspaceHandle,
             CacheMode: dataCacheMode,
-            RefreshPolicy: request.RefreshPolicy ?? Environment.GetEnvironmentVariable("ROSCLI_REFRESH_POLICY"),
+            RefreshPolicy: request.RefreshPolicy ?? ConfiguredRefreshPolicy,
             RefreshAction: refreshAction,
             DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
             Timings: new CommandTransportTimings(
@@ -837,7 +954,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         => errors is not null &&
            errors.Any(error => string.Equals(error.Code, code, StringComparison.OrdinalIgnoreCase));
 
-    private static bool IsRequiredDaemonMode()
+    private static bool ReadIsRequiredDaemonMode()
     {
         string? raw = Environment.GetEnvironmentVariable("ROSCLI_DAEMON")?.Trim();
         if (string.Equals(raw, "required", StringComparison.OrdinalIgnoreCase) ||
@@ -854,13 +971,12 @@ internal sealed class HotCommandRouter : IAsyncDisposable
                string.Equals(requireHot, "true", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string GetDefaultAlias()
-        => Environment.GetEnvironmentVariable("ROSCLI_WORKSPACE_ALIAS") ?? "default";
+    private static string GetDefaultAlias() => DefaultAlias;
 
     private static JsonElement NormalizeInputObject(JsonElement input)
         => input.ValueKind == JsonValueKind.Object
             ? input
-            : JsonSerializer.SerializeToElement(new { });
+            : EmptyObject;
 
     private static string? GetOptionalString(JsonElement element, string propertyName)
         => element.ValueKind == JsonValueKind.Object &&
@@ -907,8 +1023,15 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         private readonly WorkspaceHostDaemonManager _daemonManager;
         private readonly WorkspaceHostDaemonEndpoint _endpoint;
         private readonly WorkspaceAliasStore _aliasStore;
-        private WorkspaceHostClient? _client;
+        private readonly ConcurrentQueue<WorkspaceHostClient> _pool = new();
+        private readonly SemaphoreSlim _concurrencyGate = new(MaxPooledConnectionsPerRepo, MaxPooledConnectionsPerRepo);
+        private readonly object _cacheLock = new();
+
         private WorkspaceHostConnectionInfo? _connectionInfo;
+        private long _manifestCheckedTickMs;
+        private DateTime _cachedManifestMtime = DateTime.MinValue;
+
+        private long _aliasCheckedTickMs;
         private DateTime _aliasCacheLastWriteUtc = DateTime.MinValue;
         private IReadOnlyDictionary<string, WorkspaceAliasRecord>? _cachedAliases;
 
@@ -921,42 +1044,75 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         }
 
         public string RepoRoot { get; }
-        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public SemaphoreSlim LifecycleGate { get; } = new(1, 1);
 
         public void RefreshConnectionInfo()
         {
-            _connectionInfo = _daemonManager.TryGetConnectionInfo(RepoRoot);
+            WorkspaceHostConnectionInfo? latest = _daemonManager.TryGetConnectionInfo(RepoRoot);
+            lock (_cacheLock)
+            {
+                _connectionInfo = latest;
+                _cachedManifestMtime = latest?.ManifestLastWriteUtc ?? DateTime.MinValue;
+                _manifestCheckedTickMs = Environment.TickCount64;
+            }
         }
 
         public void InvalidateAliasCache()
         {
-            _cachedAliases = null;
-            _aliasCacheLastWriteUtc = DateTime.MinValue;
+            lock (_cacheLock)
+            {
+                _cachedAliases = null;
+                _aliasCacheLastWriteUtc = DateTime.MinValue;
+                _aliasCheckedTickMs = 0;
+            }
         }
 
         public bool HasLiveConnectionOrManifest()
         {
-            if (_client is not null &&
-                _connectionInfo is not null &&
-                GetFileLastWriteTimeUtcSafe(_endpoint.ManifestPath) == _connectionInfo.ManifestLastWriteUtc &&
-                _connectionInfo.ManifestLastWriteUtc != DateTime.MinValue)
+            long now = Environment.TickCount64;
+            lock (_cacheLock)
             {
-                return true;
+                if (_connectionInfo is not null &&
+                    _cachedManifestMtime != DateTime.MinValue &&
+                    _cachedManifestMtime == _connectionInfo.ManifestLastWriteUtc &&
+                    now - _manifestCheckedTickMs < StatCacheTtlMs)
+                {
+                    return true;
+                }
             }
 
-            return File.Exists(_endpoint.ManifestPath);
+            DateTime mtime = GetFileLastWriteTimeUtcSafe(_endpoint.ManifestPath);
+            lock (_cacheLock)
+            {
+                _cachedManifestMtime = mtime;
+                _manifestCheckedTickMs = now;
+                return mtime != DateTime.MinValue;
+            }
         }
 
         public WorkspaceAliasRecord? GetCachedAliasRecord(string alias)
         {
-            DateTime currentMtime = GetFileLastWriteTimeUtcSafe(_aliasStore.Path);
-            if (_cachedAliases is null || currentMtime != _aliasCacheLastWriteUtc)
+            long now = Environment.TickCount64;
+            lock (_cacheLock)
             {
-                _cachedAliases = _aliasStore.List();
-                _aliasCacheLastWriteUtc = currentMtime;
+                if (_cachedAliases is not null && now - _aliasCheckedTickMs < StatCacheTtlMs)
+                {
+                    return _cachedAliases.TryGetValue(alias, out WorkspaceAliasRecord? cached) ? cached : null;
+                }
             }
 
-            return _cachedAliases.TryGetValue(alias, out WorkspaceAliasRecord? record) ? record : null;
+            DateTime currentMtime = GetFileLastWriteTimeUtcSafe(_aliasStore.Path);
+            lock (_cacheLock)
+            {
+                _aliasCheckedTickMs = now;
+                if (_cachedAliases is null || currentMtime != _aliasCacheLastWriteUtc)
+                {
+                    _cachedAliases = _aliasStore.List();
+                    _aliasCacheLastWriteUtc = currentMtime;
+                }
+
+                return _cachedAliases.TryGetValue(alias, out WorkspaceAliasRecord? record) ? record : null;
+            }
         }
 
         public async Task<WorkspaceHostResponse?> SendPersistentAsync(
@@ -964,130 +1120,205 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
-            for (int attempt = 0; attempt < 2; attempt++)
+            await _concurrencyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                if (!await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false))
+                for (int attempt = 0; attempt < 2; attempt++)
                 {
-                    return null;
-                }
-
-                WorkspaceHostRequest authorized = string.IsNullOrWhiteSpace(_connectionInfo?.AuthToken)
-                    ? request
-                    : request with { AuthToken = _connectionInfo.AuthToken };
-
-                using CancellationTokenSource requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                requestTimeout.CancelAfter(timeout);
-
-                try
-                {
-                    WorkspaceHostResponse response = await _client!.SendAsync(authorized, requestTimeout.Token).ConfigureAwait(false);
-                    if (!string.Equals(response.ProtocolVersion, WorkspaceHostProtocol.ProtocolVersion, StringComparison.Ordinal))
+                    (WorkspaceHostClient? client, string? authToken) = await RentClientAsync(cancellationToken).ConfigureAwait(false);
+                    if (client is null)
                     {
-                        return new WorkspaceHostResponse(
-                            Id: request.Id,
-                            Ok: false,
-                            ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
-                            Method: request.Method,
-                            ElapsedMs: 0,
-                            CommandId: request.CommandId,
-                            Version: EnvelopeVersion,
-                            Errors: new[]
-                            {
-                                new CommandError(
-                                    WorkspaceHostProtocol.ErrorCode.ProtocolMismatch,
-                                    $"Workspace host protocol version '{response.ProtocolVersion}' does not match client protocol '{WorkspaceHostProtocol.ProtocolVersion}'."),
-                            });
+                        return null;
                     }
 
-                    return response;
+                    WorkspaceHostRequest authorized = string.IsNullOrWhiteSpace(authToken)
+                        ? request
+                        : request with { AuthToken = authToken };
+
+                    using CancellationTokenSource requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    requestTimeout.CancelAfter(timeout);
+
+                    bool returnToPool = false;
+                    try
+                    {
+                        WorkspaceHostResponse response = await client.SendAsync(authorized, requestTimeout.Token).ConfigureAwait(false);
+                        returnToPool = true;
+                        if (!string.Equals(response.ProtocolVersion, WorkspaceHostProtocol.ProtocolVersion, StringComparison.Ordinal))
+                        {
+                            return new WorkspaceHostResponse(
+                                Id: request.Id,
+                                Ok: false,
+                                ProtocolVersion: WorkspaceHostProtocol.ProtocolVersion,
+                                Method: request.Method,
+                                ElapsedMs: 0,
+                                CommandId: request.CommandId,
+                                Version: EnvelopeVersion,
+                                Errors: new[]
+                                {
+                                    new CommandError(
+                                        WorkspaceHostProtocol.ErrorCode.ProtocolMismatch,
+                                        $"Workspace host protocol version '{response.ProtocolVersion}' does not match client protocol '{WorkspaceHostProtocol.ProtocolVersion}'."),
+                                });
+                        }
+
+                        return response;
+                    }
+                    catch (Exception ex) when (attempt == 0 &&
+                                               (ex is IOException or SocketException or ObjectDisposedException or JsonException))
+                    {
+                        // Pipe dropped (e.g., daemon restarted or idle-timed-out); dispose and reconnect once.
+                        await DisposeClientSafeAsync(client).ConfigureAwait(false);
+                        await ResetConnectionAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or TimeoutException or JsonException ||
+                                               (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+                    {
+                        await DisposeClientSafeAsync(client).ConfigureAwait(false);
+                        await ResetConnectionAsync().ConfigureAwait(false);
+                        return null;
+                    }
+                    finally
+                    {
+                        if (returnToPool)
+                        {
+                            _pool.Enqueue(client);
+                        }
+                    }
                 }
-                catch (Exception ex) when (attempt == 0 &&
-                                           (ex is IOException or SocketException or ObjectDisposedException or JsonException))
+
+                return null;
+            }
+            finally
+            {
+                _concurrencyGate.Release();
+            }
+        }
+
+        private async Task<(WorkspaceHostClient? Client, string? AuthToken)> RentClientAsync(CancellationToken cancellationToken)
+        {
+            WorkspaceHostConnectionInfo? connInfo = await EnsureConnectionInfoAsync(cancellationToken).ConfigureAwait(false);
+            if (connInfo is null)
+            {
+                return (null, null);
+            }
+
+            if (_pool.TryDequeue(out WorkspaceHostClient? pooled))
+            {
+                return (pooled, connInfo.AuthToken);
+            }
+
+            WorkspaceHostClientOptions options = connInfo.Endpoint.Transport == "named-pipe"
+                ? WorkspaceHostClientOptions.NamedPipe(connInfo.Endpoint.PipeName!)
+                : WorkspaceHostClientOptions.UnixSocket(connInfo.Endpoint.SocketPath!);
+
+            try
+            {
+                WorkspaceHostClient client = await WorkspaceHostClient.ConnectAsync(options, ConnectTimeout, cancellationToken).ConfigureAwait(false);
+                return (client, connInfo.AuthToken);
+            }
+            catch (Exception ex) when (ex is TimeoutException or IOException or SocketException or UnauthorizedAccessException ||
+                                       (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+            {
+                return (null, null);
+            }
+        }
+
+        private async Task<WorkspaceHostConnectionInfo?> EnsureConnectionInfoAsync(CancellationToken cancellationToken)
+        {
+            _ = cancellationToken;
+            long now = Environment.TickCount64;
+            WorkspaceHostConnectionInfo? current;
+            lock (_cacheLock)
+            {
+                current = _connectionInfo;
+                if (current is not null &&
+                    _cachedManifestMtime != DateTime.MinValue &&
+                    _cachedManifestMtime == current.ManifestLastWriteUtc &&
+                    now - _manifestCheckedTickMs < StatCacheTtlMs)
                 {
-                    // Pipe dropped (e.g., daemon restarted or idle-timed-out); reconnect once.
-                    await ResetConnectionAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or TimeoutException or JsonException ||
-                                           (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
-                {
-                    await ResetConnectionAsync().ConfigureAwait(false);
-                    return null;
+                    return current;
                 }
             }
 
-            return null;
-        }
-
-        private async Task<bool> EnsureConnectedAsync(CancellationToken cancellationToken)
-        {
             DateTime currentManifestMtime = GetFileLastWriteTimeUtcSafe(_endpoint.ManifestPath);
-            if (_client is not null &&
-                _connectionInfo is not null &&
-                currentManifestMtime != DateTime.MinValue &&
-                currentManifestMtime == _connectionInfo.ManifestLastWriteUtc)
+            lock (_cacheLock)
             {
-                return true;
+                _cachedManifestMtime = currentManifestMtime;
+                _manifestCheckedTickMs = now;
+                if (_connectionInfo is not null &&
+                    currentManifestMtime != DateTime.MinValue &&
+                    currentManifestMtime == _connectionInfo.ManifestLastWriteUtc)
+                {
+                    return _connectionInfo;
+                }
             }
 
             WorkspaceHostConnectionInfo? latest = _daemonManager.TryGetConnectionInfo(RepoRoot);
             if (latest is null)
             {
                 await ResetConnectionAsync().ConfigureAwait(false);
-                return false;
+                return null;
             }
 
-            if (_client is not null &&
-                _connectionInfo is not null &&
-                _connectionInfo.ManifestLastWriteUtc == latest.ManifestLastWriteUtc &&
-                _connectionInfo.DaemonPid == latest.DaemonPid &&
-                string.Equals(_connectionInfo.AuthToken, latest.AuthToken, StringComparison.Ordinal))
+            bool sameDaemon;
+            lock (_cacheLock)
             {
-                return true;
+                sameDaemon = _connectionInfo is not null &&
+                    _connectionInfo.ManifestLastWriteUtc == latest.ManifestLastWriteUtc &&
+                    _connectionInfo.DaemonPid == latest.DaemonPid &&
+                    string.Equals(_connectionInfo.AuthToken, latest.AuthToken, StringComparison.Ordinal);
+                if (sameDaemon)
+                {
+                    return _connectionInfo;
+                }
             }
 
-            await ResetConnectionAsync().ConfigureAwait(false);
-
-            WorkspaceHostClientOptions options = latest.Endpoint.Transport == "named-pipe"
-                ? WorkspaceHostClientOptions.NamedPipe(latest.Endpoint.PipeName!)
-                : WorkspaceHostClientOptions.UnixSocket(latest.Endpoint.SocketPath!);
-
-            try
+            await DrainPoolAsync().ConfigureAwait(false);
+            lock (_cacheLock)
             {
-                _client = await WorkspaceHostClient.ConnectAsync(options, ConnectTimeout, cancellationToken).ConfigureAwait(false);
                 _connectionInfo = latest;
-                return true;
+                _cachedManifestMtime = latest.ManifestLastWriteUtc;
+                _manifestCheckedTickMs = Environment.TickCount64;
             }
-            catch (Exception ex) when (ex is TimeoutException or IOException or SocketException or UnauthorizedAccessException ||
-                                       (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
-            {
-                _client = null;
-                _connectionInfo = null;
-                return false;
-            }
+
+            return latest;
         }
 
         public async Task ResetConnectionAsync()
         {
-            if (_client is not null)
+            await DrainPoolAsync().ConfigureAwait(false);
+            lock (_cacheLock)
             {
-                try
-                {
-                    await _client.DisposeAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                }
-
-                _client = null;
+                _connectionInfo = null;
+                _cachedManifestMtime = DateTime.MinValue;
+                _manifestCheckedTickMs = 0;
             }
+        }
 
-            _connectionInfo = null;
+        private async Task DrainPoolAsync()
+        {
+            while (_pool.TryDequeue(out WorkspaceHostClient? client))
+            {
+                await DisposeClientSafeAsync(client).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task DisposeClientSafeAsync(WorkspaceHostClient client)
+        {
+            try
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
         }
 
         public async ValueTask DisposeAsync()
         {
             await ResetConnectionAsync().ConfigureAwait(false);
-            Gate.Dispose();
+            LifecycleGate.Dispose();
+            _concurrencyGate.Dispose();
         }
 
         private static DateTime GetFileLastWriteTimeUtcSafe(string path)

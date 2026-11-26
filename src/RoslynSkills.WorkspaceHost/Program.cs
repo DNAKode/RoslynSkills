@@ -16,10 +16,7 @@ namespace RoslynSkills.WorkspaceHost;
 internal static class Program
 {
     private const string EnvelopeVersion = "1.0";
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = false,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = ContractsJsonContext.CreateDefaultOptions();
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static string CurrentTransportName = "stdio-jsonl";
     private static string? ExpectedAuthToken;
@@ -268,8 +265,8 @@ internal static class Program
         {
             await using (pipe.ConfigureAwait(false))
             {
-                using StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-                using StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+                using StreamReader reader = new(pipe, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 16384, leaveOpen: true);
+                using StreamWriter writer = new(pipe, Utf8NoBom, bufferSize: 16384, leaveOpen: true)
                 {
                     AutoFlush = true,
                 };
@@ -509,8 +506,8 @@ internal static class Program
             using (connection)
             await using (NetworkStream stream = new(connection, ownsSocket: false))
             {
-                using StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-                using StreamWriter writer = new(stream, Utf8NoBom, bufferSize: 1024, leaveOpen: true)
+                using StreamReader reader = new(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: 16384, leaveOpen: true);
+                using StreamWriter writer = new(stream, Utf8NoBom, bufferSize: 16384, leaveOpen: true)
                 {
                     AutoFlush = true,
                 };
