@@ -8,7 +8,7 @@ public sealed class FindOverridesCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "nav.find_overrides",
-        Summary: "Find overrides for a virtual/abstract member anchored by line/column.",
+        Summary: "Find overrides for a virtual/abstract member anchored by line/column or --symbol across the loaded solution.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -17,6 +17,14 @@ public sealed class FindOverridesCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
+            InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+            return errors;
+        }
+
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
         {
             return errors;
@@ -38,6 +46,24 @@ public sealed class FindOverridesCommand : IAgentCommand
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
+        int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 200, minValue: 1, maxValue: 2_000);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            return await ExecuteBySymbolNameAsync(
+                input,
+                symbolQuery,
+                workspacePath,
+                workspaceHandle,
+                requireWorkspace,
+                maxResults,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         List<CommandError> errors = new();
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
             !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
@@ -53,11 +79,7 @@ public sealed class FindOverridesCommand : IAgentCommand
                 new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
         }
 
-        int maxResults = InputParsing.GetOptionalInt(input, "max_results", defaultValue: 200, minValue: 1, maxValue: 2_000);
-        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
-        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
-
-        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input)).ConfigureAwait(false);
+        CommandFileAnalysis analysis = await CommandFileAnalysis.LoadAsync(filePath, cancellationToken, workspacePath, workspaceHandle).ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
         {
@@ -78,6 +100,8 @@ public sealed class FindOverridesCommand : IAgentCommand
                 null,
                 new[] { new CommandError("symbol_not_found", "Unable to resolve a semantic symbol at the provided location.") });
         }
+
+        anchorSymbol = SolutionSearchScope.NormalizePositionalRecordProperty(anchorSymbol);
 
         string searchScope = SolutionSearchScope.CompilationKind;
         List<OverrideMatch> matches = new();
@@ -127,6 +151,71 @@ public sealed class FindOverridesCommand : IAgentCommand
                 symbol_id = CommandTextFormatting.GetStableSymbolId(anchorSymbol),
             },
             search_scope = searchScope,
+            total_matches = matches.Count,
+            matches,
+        };
+
+        return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static async Task<CommandExecutionResult> ExecuteBySymbolNameAsync(
+        JsonElement input,
+        string symbolQuery,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        (SymbolQueryResult? resolved, CommandExecutionResult? errorResult) = await SymbolQueryResolution.ResolveAsync(
+            input,
+            symbolQuery,
+            workspacePath,
+            targetPredicate: s => s is IMethodSymbol or IPropertySymbol or IEventSymbol,
+            invalidTargetMessageFormat: "Symbol '{0}' ({1}) does not support override lookup.",
+            allowSameTypeOverloads: false,
+            cancellationToken).ConfigureAwait(false);
+        if (errorResult is not null || resolved is null)
+        {
+            return errorResult!;
+        }
+
+        StaticAnalysisWorkspace workspace = resolved.Workspace;
+        ISymbol targetSymbol = SolutionSearchScope.NormalizePositionalRecordProperty(resolved.Symbols[0]);
+        IReadOnlyList<RelatedDeclaration> related = await SolutionSymbolRelations
+            .FindOverridesAsync(workspace.Solution!, targetSymbol, cancellationToken)
+            .ConfigureAwait(false);
+        List<OverrideMatch> matches = related
+            .Take(maxResults)
+            .Select(declaration => new OverrideMatch(
+                declaration.Kind,
+                declaration.Line,
+                declaration.Column,
+                declaration.SymbolDisplay,
+                declaration.FilePath))
+            .ToList();
+
+        (string? declarationFilePath, int? declarationLine, int? declarationColumn) = SymbolQueryResolution.GetPrimaryDeclarationLocation(targetSymbol);
+        object data = new
+        {
+            file_path = declarationFilePath ?? workspace.ResolvedWorkspacePath,
+            query = new
+            {
+                symbol = symbolQuery,
+                line = declarationLine,
+                column = declarationColumn,
+                max_results = maxResults,
+                workspace_path = workspacePath ?? workspace.ResolvedWorkspacePath,
+                workspace_handle = workspaceHandle,
+                require_workspace = requireWorkspace,
+            },
+            symbol = new
+            {
+                symbol_display = targetSymbol.ToDisplayString(),
+                symbol_kind = targetSymbol.Kind.ToString(),
+                symbol_id = CommandTextFormatting.GetStableSymbolId(targetSymbol),
+            },
+            search_scope = SolutionSearchScope.SolutionKind,
             total_matches = matches.Count,
             matches,
         };

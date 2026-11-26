@@ -55,7 +55,26 @@ internal static class SolutionSearchScope
             return BuildCompilationScope(analysis, includeGenerated, cancellationToken);
         }
 
-        List<Project> projects = SelectProjects(solution, analysis.Document!.Project, target);
+        return await ResolveForSolutionAsync(
+            solution,
+            analysis.Document!.Project,
+            target,
+            includeGenerated,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the search scope directly from a loaded <see cref="Solution"/> (for <c>--symbol</c> queries
+    /// that do not start from an explicit file anchor).
+    /// </summary>
+    public static async Task<SearchScope> ResolveForSolutionAsync(
+        Solution solution,
+        Project? anchorProject,
+        ISymbol? target,
+        bool includeGenerated,
+        CancellationToken cancellationToken)
+    {
+        List<Project> projects = SelectProjects(solution, anchorProject, target);
         List<SearchUnit> units = new();
         HashSet<string> seenPaths = new(PathComparer);
         int searchedProjects = 0;
@@ -199,8 +218,9 @@ internal static class SolutionSearchScope
 
     /// <summary>
     /// Whether a <c>SymbolFinder.FindReferencesAsync</c> group belongs to <paramref name="target"/>:
-    /// the target itself, or any constructor of <paramref name="target"/> when the target is a named type
-    /// (so <c>new Type(...)</c> and target-typed <c>new(...)</c> object creations are included).
+    /// the target itself, its positional-record counterpart (primary constructor parameter &lt;-&gt; synthesized
+    /// property declared on the same parameter token), or any constructor of <paramref name="target"/> when the
+    /// target is a named type (so <c>new Type(...)</c> and target-typed <c>new(...)</c> object creations are included).
     /// </summary>
     public static bool MatchesReferenceDefinition(ISymbol? definition, ISymbol target, out bool isConstructorOfTargetType)
     {
@@ -215,12 +235,104 @@ internal static class SolutionSearchScope
             return true;
         }
 
+        ISymbol? positionalCounterpart = TryGetPositionalRecordCounterpart(target);
+        if (positionalCounterpart is not null && IsSameSymbol(definition, positionalCounterpart))
+        {
+            return true;
+        }
+
         if (target is INamedTypeSymbol targetType &&
             definition is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor &&
             IsSameSymbol(ctor.ContainingType, targetType))
         {
             isConstructorOfTargetType = true;
             return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// For a positional record parameter (e.g. <c>record R(int Kind)</c>), returns its synthesized
+    /// <see cref="IPropertySymbol"/>; for the synthesized property, returns its primary constructor
+    /// <see cref="IParameterSymbol"/>. Only pairs symbols sharing the same source declaration token, so an
+    /// explicit property with the same name is never falsely linked.
+    /// </summary>
+    public static ISymbol? TryGetPositionalRecordCounterpart(ISymbol? symbol)
+    {
+        if (symbol is IParameterSymbol parameter &&
+            parameter.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor, ContainingType: { IsRecord: true } recordType })
+        {
+            foreach (IPropertySymbol prop in recordType.GetMembers(parameter.Name).OfType<IPropertySymbol>())
+            {
+                if (ShareSourceDeclarationLocation(parameter, prop))
+                {
+                    return prop;
+                }
+            }
+
+            return null;
+        }
+
+        if (symbol is IPropertySymbol property &&
+            property.ContainingType is { IsRecord: true } owningRecord)
+        {
+            foreach (IMethodSymbol ctor in owningRecord.InstanceConstructors)
+            {
+                foreach (IParameterSymbol param in ctor.Parameters)
+                {
+                    if (string.Equals(param.Name, property.Name, StringComparison.Ordinal) &&
+                        ShareSourceDeclarationLocation(property, param))
+                    {
+                        return param;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// If <paramref name="symbol"/> is a positional record parameter backed by a synthesized property at the same
+    /// declaration token, returns that <see cref="IPropertySymbol"/>; otherwise returns <paramref name="symbol"/>.
+    /// </summary>
+    public static ISymbol NormalizePositionalRecordProperty(ISymbol symbol)
+    {
+        if (symbol is IParameterSymbol &&
+            TryGetPositionalRecordCounterpart(symbol) is IPropertySymbol synthesizedProperty)
+        {
+            return synthesizedProperty;
+        }
+
+        return symbol;
+    }
+
+    private static bool ShareSourceDeclarationLocation(ISymbol first, ISymbol second)
+    {
+        foreach (Location firstLoc in first.Locations)
+        {
+            if (!firstLoc.IsInSource || firstLoc.SourceTree is null)
+            {
+                continue;
+            }
+
+            foreach (Location secondLoc in second.Locations)
+            {
+                if (!secondLoc.IsInSource || secondLoc.SourceTree is null)
+                {
+                    continue;
+                }
+
+                if (firstLoc.SourceSpan.IntersectsWith(secondLoc.SourceSpan) &&
+                    (firstLoc.SourceTree == secondLoc.SourceTree ||
+                     (!string.IsNullOrWhiteSpace(firstLoc.SourceTree.FilePath) &&
+                      !string.IsNullOrWhiteSpace(secondLoc.SourceTree.FilePath) &&
+                      PathComparer.Equals(Path.GetFullPath(firstLoc.SourceTree.FilePath), Path.GetFullPath(secondLoc.SourceTree.FilePath)))))
+                {
+                    return true;
+                }
+            }
         }
 
         return false;
@@ -254,7 +366,7 @@ internal static class SolutionSearchScope
     }
 
 
-    private static List<Project> SelectProjects(Solution solution, Project anchorProject, ISymbol? target)
+    private static List<Project> SelectProjects(Solution solution, Project? anchorProject, ISymbol? target)
     {
         Project? definingProject = target?.ContainingAssembly is { } assembly
             ? solution.GetProject(assembly)
@@ -277,9 +389,10 @@ internal static class SolutionSearchScope
             selected = solution.Projects.Where(project => ids.Contains(project.Id));
         }
 
-        // Anchor project first so its own trees win when a file is linked into several projects.
+        // Anchor project (or defining project) first so its own trees win when a file is linked into several projects.
+        ProjectId? preferredId = anchorProject?.Id ?? definingProject?.Id;
         return selected
-            .OrderBy(project => project.Id == anchorProject.Id ? 0 : 1)
+            .OrderBy(project => preferredId is not null && project.Id == preferredId ? 0 : 1)
             .ThenBy(project => project.FilePath ?? project.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }

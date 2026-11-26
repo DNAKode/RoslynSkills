@@ -425,6 +425,15 @@ internal static class IdentifierIndex
         return identifiers.HasUnicodeEscape || identifiers.Names.Contains(name);
     }
 
+    /// <summary>Populates the identifier set for <paramref name="tree"/> ahead of the first query.</summary>
+    public static void Warm(SyntaxTree tree)
+    {
+        _ = Cache.GetValue(tree, static t => TreeIdentifiers.Build(t.GetText().ToString()));
+    }
+
+    /// <summary>Whether <paramref name="tree"/> already has a cached identifier set (diagnostics and tests).</summary>
+    internal static bool IsCached(SyntaxTree tree) => Cache.TryGetValue(tree, out _);
+
     private sealed class TreeIdentifiers
     {
         private TreeIdentifiers(HashSet<string> names, bool hasUnicodeEscape)

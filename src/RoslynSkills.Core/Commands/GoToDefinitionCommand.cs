@@ -10,7 +10,7 @@ public sealed class GoToDefinitionCommand : IAgentCommand
 {
     public CommandDescriptor Descriptor { get; } = new(
         Id: "nav.go_to_definition",
-        Summary: "Resolve the symbol at line/column to its declaration(s) in source or metadata.",
+        Summary: "Resolve the symbol at line/column or --symbol to its declaration(s) in source or metadata.",
         InputSchemaVersion: "1.0",
         OutputSchemaVersion: "1.0",
         MutatesState: false,
@@ -19,6 +19,15 @@ public sealed class GoToDefinitionCommand : IAgentCommand
     public IReadOnlyList<CommandError> Validate(JsonElement input)
     {
         List<CommandError> errors = new();
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            WorkspaceInput.TryGetRequiredWorkspaceTarget(input, errors, out _, out _);
+            InputParsing.ValidateOptionalBool(input, "require_workspace", errors);
+            InputParsing.ValidateOptionalBool(input, "brief", errors);
+            return errors;
+        }
+
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath))
         {
             return errors;
@@ -41,6 +50,26 @@ public sealed class GoToDefinitionCommand : IAgentCommand
 
     public async Task<CommandExecutionResult> ExecuteAsync(JsonElement input, CancellationToken cancellationToken)
     {
+        bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
+        int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 1, minValue: 0, maxValue: 20);
+        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
+        string? workspaceHandle = WorkspaceInput.GetOptionalWorkspaceHandle(input);
+        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
+
+        string? symbolQuery = SymbolQueryResolution.GetOptionalSymbolQuery(input);
+        if (!string.IsNullOrWhiteSpace(symbolQuery))
+        {
+            return await ExecuteBySymbolNameAsync(
+                input,
+                symbolQuery,
+                workspacePath,
+                workspaceHandle,
+                requireWorkspace,
+                brief,
+                contextLines,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         List<CommandError> errors = new();
         if (!InputParsing.TryGetRequiredString(input, "file_path", errors, out string filePath) ||
             !InputParsing.TryGetRequiredInt(input, "line", errors, out int line, minValue: 1, maxValue: 1_000_000) ||
@@ -56,13 +85,8 @@ public sealed class GoToDefinitionCommand : IAgentCommand
                 new[] { new CommandError("file_not_found", $"Input file '{filePath}' does not exist.") });
         }
 
-        bool brief = InputParsing.GetOptionalBool(input, "brief", defaultValue: false);
-        int contextLines = InputParsing.GetOptionalInt(input, "context_lines", defaultValue: 1, minValue: 0, maxValue: 20);
-        string? workspacePath = WorkspaceInput.GetOptionalWorkspacePath(input);
-        bool requireWorkspace = InputParsing.GetOptionalBool(input, "require_workspace", defaultValue: false);
-
         CommandFileAnalysis analysis = await CommandFileAnalysis
-            .LoadAsync(filePath, cancellationToken, workspacePath, WorkspaceInput.GetOptionalWorkspaceHandle(input))
+            .LoadAsync(filePath, cancellationToken, workspacePath, workspaceHandle)
             .ConfigureAwait(false);
         CommandExecutionResult? workspaceError = WorkspaceGuard.RequireWorkspaceIfRequested(Descriptor.Id, requireWorkspace, analysis);
         if (workspaceError is not null)
@@ -157,6 +181,99 @@ public sealed class GoToDefinitionCommand : IAgentCommand
                 is_from_metadata = metadataCount > 0,
             },
             search_scope = searchScope,
+            total_definitions = definitions.Count,
+            source_definition_count = sourceCount,
+            metadata_definition_count = metadataCount,
+            definitions,
+        };
+
+        return new CommandExecutionResult(data, Array.Empty<CommandError>());
+    }
+
+    private static async Task<CommandExecutionResult> ExecuteBySymbolNameAsync(
+        JsonElement input,
+        string symbolQuery,
+        string? workspacePath,
+        string? workspaceHandle,
+        bool requireWorkspace,
+        bool brief,
+        int contextLines,
+        CancellationToken cancellationToken)
+    {
+        (SymbolQueryResult? resolved, CommandExecutionResult? errorResult) = await SymbolQueryResolution.ResolveAsync(
+            input,
+            symbolQuery,
+            workspacePath,
+            targetPredicate: null,
+            invalidTargetMessageFormat: string.Empty,
+            allowSameTypeOverloads: true,
+            cancellationToken).ConfigureAwait(false);
+        if (errorResult is not null || resolved is null)
+        {
+            return errorResult!;
+        }
+
+        StaticAnalysisWorkspace workspace = resolved.Workspace;
+        Solution solution = workspace.Solution!;
+        List<ISymbol> targetSymbols = new();
+        foreach (ISymbol candidate in resolved.Symbols)
+        {
+            ISymbol normalized = NormalizeDefinitionSymbol(SolutionSearchScope.NormalizePositionalRecordProperty(candidate));
+            ISymbol? sourceDef = await SymbolFinder
+                .FindSourceDefinitionAsync(normalized, solution, cancellationToken)
+                .ConfigureAwait(false);
+            if (sourceDef is not null)
+            {
+                normalized = NormalizeDefinitionSymbol(sourceDef);
+            }
+
+            foreach (ISymbol partial in CollectPartialDefinitionSymbols(normalized))
+            {
+                if (!targetSymbols.Any(s => SymbolEqualityComparer.Default.Equals(s, partial)))
+                {
+                    targetSymbols.Add(partial);
+                }
+            }
+        }
+
+        ISymbol primarySymbol = targetSymbols[0];
+        List<DefinitionLocation> definitions = await BuildDefinitionLocationsAsync(
+                targetSymbols,
+                solution,
+                brief,
+                contextLines,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        int sourceCount = definitions.Count(d => string.Equals(d.location_kind, "source", StringComparison.Ordinal));
+        int metadataCount = definitions.Count(d => string.Equals(d.location_kind, "metadata", StringComparison.Ordinal));
+        (string? declarationFilePath, int? declarationLine, int? declarationColumn) = SymbolQueryResolution.GetPrimaryDeclarationLocation(primarySymbol);
+
+        object data = new
+        {
+            file_path = declarationFilePath ?? workspace.ResolvedWorkspacePath,
+            query = new
+            {
+                symbol = symbolQuery,
+                line = declarationLine,
+                column = declarationColumn,
+                brief,
+                context_lines = contextLines,
+                workspace_path = workspacePath ?? workspace.ResolvedWorkspacePath,
+                workspace_handle = workspaceHandle,
+                require_workspace = requireWorkspace,
+            },
+            symbol = new
+            {
+                symbol_display = primarySymbol.ToDisplayString(),
+                symbol_kind = primarySymbol.Kind.ToString(),
+                symbol_id = CommandTextFormatting.GetStableSymbolId(primarySymbol),
+                assembly_name = primarySymbol.ContainingAssembly?.Name,
+                metadata_name = GetMetadataName(primarySymbol),
+                is_from_source = sourceCount > 0,
+                is_from_metadata = metadataCount > 0,
+            },
+            search_scope = SolutionSearchScope.SolutionKind,
             total_definitions = definitions.Count,
             source_definition_count = sourceCount,
             metadata_definition_count = metadataCount,
