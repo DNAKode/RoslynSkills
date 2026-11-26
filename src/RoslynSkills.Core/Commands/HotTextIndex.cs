@@ -421,14 +421,37 @@ internal static class IdentifierIndex
     /// </summary>
     public static bool MightMention(SyntaxTree tree, string name)
     {
-        TreeIdentifiers identifiers = Cache.GetValue(tree, static t => TreeIdentifiers.Build(t.GetText().ToString()));
+        TreeIdentifiers identifiers = GetIdentifiers(tree);
         return identifiers.HasUnicodeEscape || identifiers.Names.Contains(name);
     }
+
+    /// <summary>
+    /// False only when <paramref name="tree"/> cannot contain a target-typed <c>new(...)</c> (an object creation that
+    /// does not spell its type). A tree with unicode escapes is always a candidate.
+    /// </summary>
+    public static bool MightHaveImplicitObjectCreation(SyntaxTree tree)
+    {
+        TreeIdentifiers identifiers = GetIdentifiers(tree);
+        return identifiers.HasUnicodeEscape || identifiers.HasNewParen;
+    }
+
+    /// <summary>
+    /// False only when <paramref name="tree"/> cannot contain a <c>: base(...)</c> / <c>: this(...)</c> constructor
+    /// initializer (a constructor call that does not spell the called type).
+    /// </summary>
+    public static bool MightHaveConstructorInitializer(SyntaxTree tree)
+    {
+        TreeIdentifiers identifiers = GetIdentifiers(tree);
+        return identifiers.HasUnicodeEscape || identifiers.HasConstructorInitializer;
+    }
+
+    private static TreeIdentifiers GetIdentifiers(SyntaxTree tree)
+        => Cache.GetValue(tree, static t => TreeIdentifiers.Build(t.GetText().ToString()));
 
     /// <summary>Populates the identifier set for <paramref name="tree"/> ahead of the first query.</summary>
     public static void Warm(SyntaxTree tree)
     {
-        _ = Cache.GetValue(tree, static t => TreeIdentifiers.Build(t.GetText().ToString()));
+        _ = GetIdentifiers(tree);
     }
 
     /// <summary>Whether <paramref name="tree"/> already has a cached identifier set (diagnostics and tests).</summary>
@@ -436,20 +459,30 @@ internal static class IdentifierIndex
 
     private sealed class TreeIdentifiers
     {
-        private TreeIdentifiers(HashSet<string> names, bool hasUnicodeEscape)
+        private TreeIdentifiers(HashSet<string> names, bool hasUnicodeEscape, bool hasNewParen, bool hasConstructorInitializer)
         {
             Names = names;
             HasUnicodeEscape = hasUnicodeEscape;
+            HasNewParen = hasNewParen;
+            HasConstructorInitializer = hasConstructorInitializer;
         }
 
         public HashSet<string> Names { get; }
 
         public bool HasUnicodeEscape { get; }
 
+        /// <summary>A <c>new</c> keyword followed by <c>(</c> (or a comment): a possible target-typed creation.</summary>
+        public bool HasNewParen { get; }
+
+        /// <summary>A <c>base</c> or <c>this</c> keyword followed by <c>(</c> (or a comment): a possible constructor initializer.</summary>
+        public bool HasConstructorInitializer { get; }
+
         public static TreeIdentifiers Build(string text)
         {
             HashSet<string> names = new(StringComparer.Ordinal);
             bool hasEscape = false;
+            bool hasNewParen = false;
+            bool hasCtorInitializer = false;
             int index = 0;
             while (index < text.Length)
             {
@@ -469,14 +502,37 @@ internal static class IdentifierIndex
                         index++;
                     }
 
-                    names.Add(text.Substring(start, index - start));
+                    int length = index - start;
+                    string word = text.Substring(start, length);
+                    names.Add(word);
+                    if (length == 3 && string.Equals(word, "new", StringComparison.Ordinal))
+                    {
+                        hasNewParen |= NextSignificantCharStartsCall(text, index);
+                    }
+                    else if (length == 4 && string.Equals(word, "base", StringComparison.Ordinal) ||
+                             length == 4 && string.Equals(word, "this", StringComparison.Ordinal))
+                    {
+                        hasCtorInitializer |= NextSignificantCharStartsCall(text, index);
+                    }
+
                     continue;
                 }
 
                 index++;
             }
 
-            return new TreeIdentifiers(names, hasEscape);
+            return new TreeIdentifiers(names, hasEscape, hasNewParen, hasCtorInitializer);
+        }
+
+        // '(' starts a call; '/' could start a comment before it, so it stays a candidate.
+        private static bool NextSignificantCharStartsCall(string text, int index)
+        {
+            while (index < text.Length && char.IsWhiteSpace(text[index]))
+            {
+                index++;
+            }
+
+            return index < text.Length && (text[index] == '(' || text[index] == '/');
         }
 
         private static bool IsIdentifierStart(char c)

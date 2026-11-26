@@ -268,25 +268,27 @@ public sealed class FindInvocationsCommand : IAgentCommand
         int maxResults,
         CancellationToken cancellationToken)
     {
-        string? searchName = SolutionSearchScope.GetSearchName(targetSymbols[0]);
+        // Narrow by what the target can be called as (spelled name, type alias, target-typed new, ctor initializer) and
+        // keep every tree that might hold a call; see CallSiteLookup for the completeness rules.
+        CallSiteLookup lookup = CallSiteLookup.ForTargets(targetSymbols, CallSiteLookup.GetCompilations(scope.Units));
         List<SearchUnit> candidateUnits = new();
         foreach (SearchUnit unit in scope.Units)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (SolutionSearchScope.MightMention(unit, searchName))
+            if (lookup.MightMention(unit))
             {
                 candidateUnits.Add(unit);
             }
         }
 
         // If several candidate trees are still cold (e.g. a query arriving before background warmup finishes),
-        // populate their call-site caches in parallel before assembling matches in deterministic order.
+        // bind them selectively in parallel before assembling matches in deterministic order.
         if (candidateUnits.Count > 1)
         {
             List<SearchUnit>? coldUnits = null;
             foreach (SearchUnit unit in candidateUnits)
             {
-                if (!CallSiteAnalysis.IsCached(unit.Compilation, unit.Tree))
+                if (!CallSiteAnalysis.IsLookupCached(unit.Compilation, unit.Tree, lookup))
                 {
                     coldUnits ??= new List<SearchUnit>();
                     coldUnits.Add(unit);
@@ -302,7 +304,7 @@ public sealed class FindInvocationsCommand : IAgentCommand
                 };
                 Parallel.ForEach(coldUnits, options, unit =>
                 {
-                    _ = CallSiteAnalysis.GetCallSites(unit.Compilation, unit.Tree, includeObjectCreations: true, cancellationToken);
+                    _ = CallSiteAnalysis.GetCallSitesForLookup(unit.Compilation, unit.Tree, lookup, includeObjectCreations: true, cancellationToken);
                 });
             }
         }
@@ -317,9 +319,12 @@ public sealed class FindInvocationsCommand : IAgentCommand
             cancellationToken.ThrowIfCancellationRequested();
             searchedSyntaxTreeCount++;
 
-            IReadOnlyList<CallSiteAnalysis.CallSite> sites = searchName is not null
-                ? CallSiteAnalysis.GetCallSitesByName(unit.Compilation, unit.Tree, searchName, includeObjectCreations, cancellationToken)
-                : CallSiteAnalysis.GetCallSites(unit.Compilation, unit.Tree, includeObjectCreations, cancellationToken);
+            IReadOnlyList<CallSiteAnalysis.CallSite> sites = CallSiteAnalysis.GetCallSitesForLookup(
+                unit.Compilation,
+                unit.Tree,
+                lookup,
+                includeObjectCreations,
+                cancellationToken);
 
             if (sites.Count == 0)
             {

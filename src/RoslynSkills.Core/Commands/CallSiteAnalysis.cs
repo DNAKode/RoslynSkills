@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 
 namespace RoslynSkills.Core.Commands;
 
-internal static class CallSiteAnalysis
+internal static partial class CallSiteAnalysis
 {
     private static readonly ConditionalWeakTable<Compilation, ConcurrentDictionary<SyntaxTree, Lazy<TreeCallSites>>> CallSiteCache = new();
 
@@ -129,9 +129,19 @@ internal static class CallSiteAnalysis
         bool includeObjectCreations,
         CancellationToken cancellationToken)
     {
-        HashSet<string> yielded = new(StringComparer.Ordinal);
         List<IOperation> operationRoots = new();
         CollectCSharpOperationRoots(semanticModel, unit, operationRoots, cancellationToken);
+        return EnumerateRootCallSites(semanticModel, operationRoots, includeObjectCreations, cancellationToken);
+    }
+
+    /// <summary>Call sites in the descendants of already collected operation roots.</summary>
+    private static IEnumerable<CallSite> EnumerateRootCallSites(
+        SemanticModel semanticModel,
+        IReadOnlyList<IOperation> operationRoots,
+        bool includeObjectCreations,
+        CancellationToken cancellationToken)
+    {
+        HashSet<string> yielded = new(StringComparer.Ordinal);
 
         foreach (IOperation rootOp in operationRoots)
         {

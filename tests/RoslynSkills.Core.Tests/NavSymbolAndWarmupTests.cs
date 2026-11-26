@@ -389,6 +389,7 @@ public sealed class NavSymbolAndWarmupTests
 
                     Assert.True(IdentifierIndex.IsCached(tree), $"IdentifierIndex was not warmed for {tree.FilePath}");
                     Assert.True(CallSiteAnalysis.IsCached(compilation, tree), $"CallSiteAnalysis was not warmed for {tree.FilePath}");
+                    Assert.True(SymbolNameIndex.IsCached(compilation), $"SymbolNameIndex was not warmed for {project.Name}");
                     verifiedTrees++;
                 }
             }

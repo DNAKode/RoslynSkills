@@ -130,6 +130,13 @@ internal static class HotWorkspaceWarmup
                 }
             }
 
+            // 1b. Build the per-compilation SymbolNameIndex (type/member names, positional-record properties) so
+            //     `--symbol Type.Member` resolves by dictionary lookup instead of a declaration scan.
+            Parallel.ForEach(
+                compiled,
+                new ParallelOptions { MaxDegreeOfParallelism = maxParallelism, CancellationToken = cancellationToken },
+                pair => _ = SymbolNameIndex.GetOrCreate(pair.Compilation, cancellationToken));
+
             // 2. Warm Roslyn's internal SymbolFinder declaration index and per-document SyntaxTreeIndex so the first
             //    `nav.find_references` (positional or --symbol) does not pay the cold multi-second index build.
             using (SemaphoreSlim declGate = new(maxParallelism, maxParallelism))

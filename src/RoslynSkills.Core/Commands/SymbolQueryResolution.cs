@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.FindSymbols;
 using RoslynSkills.Contracts;
 using System.Text.Json;
 
@@ -153,53 +152,42 @@ internal static class SymbolQueryResolution
 
         Project[] projects = solution.Projects.ToArray();
 
-        // 1. Standard declaration lookup across all projects in parallel via Roslyn's SymbolFinder declaration index.
-        Task<IEnumerable<ISymbol>>[] directTasks = projects
-            .Select(project => SymbolFinder.FindDeclarationsAsync(
-                project,
-                parsed.LookupName,
-                ignoreCase: false,
-                SymbolFilter.TypeAndMember,
-                cancellationToken))
-            .ToArray();
-
-        // 2. Member lookup via the containing type (also in parallel). Roslyn's declaration index omits synthesized
-        //    properties generated from positional record parameters (e.g. `record DeferredCatalogCommit(..., Kind = ...)`),
-        //    primary constructor members, and constructors referenced via `.ctor`.
-        string? parentLookupName = parsed.Segments.Length >= 2 ? StripGenericSuffix(parsed.Segments[^2]) : null;
-        string? parentQualified = parsed.Segments.Length >= 2
-            ? string.Join(".", parsed.Segments[..^1].Select(StripGenericSuffix))
-            : null;
-        Task<IEnumerable<ISymbol>>[] parentTasks = parentLookupName is not null
-            ? projects
-                .Select(project => SymbolFinder.FindDeclarationsAsync(
-                    project,
-                    parentLookupName,
-                    ignoreCase: false,
-                    SymbolFilter.Type,
-                    cancellationToken))
-                .ToArray()
-            : Array.Empty<Task<IEnumerable<ISymbol>>>();
-
-        IEnumerable<ISymbol>[] directResults = await Task.WhenAll(directTasks).ConfigureAwait(false);
-        foreach (IEnumerable<ISymbol> declared in directResults)
+        // Per-compilation SymbolNameIndex: dictionary lookups instead of scanning SymbolFinder.FindDeclarationsAsync
+        // (~110-290 ms on a 33-project solution). Compilations of untouched projects are cached by the solution, so a
+        // warm call builds nothing; a changed project has a new compilation and therefore a fresh index.
+        Compilation[] compilations = await GetCompilationsAsync(projects, cancellationToken).ConfigureAwait(false);
+        SymbolNameIndex[] indexes = new SymbolNameIndex[compilations.Length];
+        for (int i = 0; i < compilations.Length; i++)
         {
-            foreach (ISymbol candidate in declared)
+            indexes[i] = SymbolNameIndex.GetOrCreate(compilations[i], cancellationToken);
+        }
+
+        // 1. Type and explicitly declared member lookup by leaf name.
+        foreach (SymbolNameIndex index in indexes)
+        {
+            foreach (ISymbol candidate in index.FindDeclared(parsed.LookupName))
             {
                 TryAddCandidate(candidate);
             }
         }
 
-        if (parentTasks.Length > 0 && parentQualified is not null)
+        // 2. Member lookup via the containing type. The declaration index omits synthesized properties generated from
+        //    positional record parameters (e.g. `record DeferredCatalogCommit(..., Kind = ...)`), primary constructor
+        //    members, and constructors referenced via `.ctor`.
+        string? parentLookupName = parsed.Segments.Length >= 2 ? StripGenericSuffix(parsed.Segments[^2]) : null;
+        string? parentQualified = parsed.Segments.Length >= 2
+            ? string.Join(".", parsed.Segments[..^1].Select(StripGenericSuffix))
+            : null;
+
+        if (parentLookupName is not null && parentQualified is not null)
         {
             bool lookupCtor = string.Equals(parsed.LookupName, ".ctor", StringComparison.Ordinal) ||
                               string.Equals(parsed.LookupName, "ctor", StringComparison.OrdinalIgnoreCase);
-            IEnumerable<ISymbol>[] parentResults = await Task.WhenAll(parentTasks).ConfigureAwait(false);
-            foreach (IEnumerable<ISymbol> parentTypes in parentResults)
+            foreach (SymbolNameIndex index in indexes)
             {
-                foreach (INamedTypeSymbol parentType in parentTypes.OfType<INamedTypeSymbol>())
+                foreach (ISymbol parentSymbol in index.FindTypes(parentLookupName))
                 {
-                    if (!parentType.Locations.Any(loc => loc.IsInSource))
+                    if (parentSymbol is not INamedTypeSymbol parentType)
                     {
                         continue;
                     }
@@ -221,20 +209,10 @@ internal static class SymbolQueryResolution
         }
         else if (byKey.Count == 0)
         {
-            // Unqualified lookup fallback for synthesized positional record properties (not in FindDeclarationsAsync).
-            foreach (Project project in projects)
+            // Unqualified lookup fallback for synthesized positional record properties and other implicit members.
+            foreach (SymbolNameIndex index in indexes)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                Compilation? compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
-                if (compilation is null)
-                {
-                    continue;
-                }
-
-                foreach (ISymbol symbol in compilation.GetSymbolsWithName(
-                             name => string.Equals(name, parsed.LookupName, StringComparison.Ordinal),
-                             SymbolFilter.Member,
-                             cancellationToken))
+                foreach (ISymbol symbol in index.FindAnyMember(parsed.LookupName))
                 {
                     TryAddCandidate(symbol);
                 }
@@ -245,6 +223,33 @@ internal static class SymbolQueryResolution
             .OrderBy(s => BuildDottedSymbolName(s), StringComparer.Ordinal)
             .ThenBy(s => s.ToDisplayString(), StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// The compilation of every project. On a warm hot workspace each task is already complete; on a cold one the
+    /// compilations are created in parallel.
+    /// </summary>
+    internal static async Task<Compilation[]> GetCompilationsAsync(
+        IReadOnlyList<Project> projects,
+        CancellationToken cancellationToken)
+    {
+        Task<Compilation?>[] tasks = new Task<Compilation?>[projects.Count];
+        for (int i = 0; i < tasks.Length; i++)
+        {
+            tasks[i] = projects[i].GetCompilationAsync(cancellationToken);
+        }
+
+        Compilation?[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        List<Compilation> compilations = new(results.Length);
+        foreach (Compilation? compilation in results)
+        {
+            if (compilation is not null)
+            {
+                compilations.Add(compilation);
+            }
+        }
+
+        return compilations.ToArray();
     }
 
     public static (string? FilePath, int? Line, int? Column) GetPrimaryDeclarationLocation(ISymbol symbol)
