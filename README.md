@@ -21,9 +21,10 @@ Text-first workflows are fast at first, then degrade on:
 - semantic navigation (`nav.*`)
 - structured edits (`edit.*`)
 - diagnostics/repair loops (`diag.*`, `repair.*`)
-- low-churn calls for agents (`--brief true`, `query.batch`, `nav.find_symbol_batch`)
+- low-churn calls for agents (`--brief true`, `--symbol Type.Member`, `query.batch`, `nav.find_symbol_batch`)
 
-Canonical pit-of-success guide: `docs/PIT_OF_SUCCESS.md`
+Canonical pit-of-success guide: [docs/PIT_OF_SUCCESS.md](docs/PIT_OF_SUCCESS.md)  
+Empirical harness & benchmark study (`0.1.6-preview.31`): [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md) (CLI + NativeAOT `roscli-fast.exe` + `WorkspaceHost` vs. LSP vs. MCP vs. `rg` on the 33-project `CalcDb.slnx` codebase)
 
 ## Start in 5 Minutes
 
@@ -59,13 +60,13 @@ roscli daemon.run --repo-root .
 
 2. **Self-managed detached host (`roscli workspace.use` / `roscli daemon.start`):** reuses any live host for the workspace key (guarded by a per-key lock), otherwise launches detached (`CREATE_BREAKAWAY_FROM_JOB` on Windows when allowed; when breakaway is refused, logs a warning with the caller's job flags and process chain to both the response and `<hash>.log` and uses WMI `Win32_Process.Create`, unless `ROSCLI_DAEMON_LAUNCH=nodetach` or `--nodetach` keeps it inside the caller job with `daemon_lifetime: "caller_job"`). Detached hosts are bounded by an idle timeout (default 30 min; `ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_MINUTES` / `--idle-timeout-minutes`) and a per-user host cap (default 8; `ROSLYNSKILLS_MAX_DAEMON_HOSTS`). Inspect active hosts with `roscli daemon.list` and clean up missing-worktree or all hosts with `roscli daemon.prune [--all]`.
 
-First semantic flow (runs on the preloaded hot workspace, refreshed from disk before each call):
+First semantic flow (runs on the preloaded hot workspace, refreshed from disk before each call; use `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) for `~50–75 ms` warm wall times instead of `~365–465 ms` managed CLI startup):
 
 ```powershell
-roscli nav.find_symbol src/MyProject/File.cs MySymbol --brief true --first-declaration true --max-results 20
-roscli nav.find_references src/MyProject/File.cs 42 17 --brief true --max-results 50
-roscli edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true
-roscli diag.get_file_diagnostics src/MyProject/File.cs
+roscli-fast nav.find_references --symbol MyNamespace.MyType.Process --max-results 50
+roscli-fast nav.call_hierarchy --symbol MyNamespace.MyImpl.Handle --direction incoming --max-depth 1 --brief true
+roscli-fast edit.rename_symbol src/MyProject/File.cs 42 17 NewName --apply true --require-workspace true
+roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
 ## Best-Results Playbook (For Agents)
@@ -150,13 +151,13 @@ Use roscli for C#/.NET repo edits and diagnostics.
 
 Current catalog snapshot:
 
-- `roscli list-commands --ids-only` -> `65` commands
-- maturity counts: `stable=51`, `advanced=11`, `experimental=3`
+- `roscli list-commands --ids-only` -> `68` commands
+- maturity counts: `stable=54`, `advanced=11`, `experimental=3`
 - `roscli llmstxt` defaults to stable-only startup guidance (`--full` for complete catalog)
 
 Command families:
 
-- `nav.*`: solution-wide go-to-definition (source & metadata), symbol, references, implementations, overrides, invocations (including method groups, primary constructors, and explicit/target-typed `new` sites), and call-hierarchy/call-path (through lambdas and method groups)
+- `nav.*`: solution-wide go-to-definition (source & metadata), symbol, references, implementations, overrides, invocations (including method groups, primary constructors, and explicit/target-typed `new` sites), and call-hierarchy/call-path (through lambdas, method groups, and implemented interface members via `edges[].implemented_member`). All 6 primary navigation commands (`go_to_definition`, `find_references`, `find_implementations`, `find_overrides`, `find_invocations`, `call_hierarchy`) accept `--symbol Type.Member` (with optional parameter-type overload disambiguation) in addition to file/line/column.
 - `ctx.*`: file/member/search/changed-files context retrieval
 - `analyze.*`: analysis slices (control flow, dataflow, impact slice) and risk scans
 - `diag.*`: file, multi-project workspace/directory, and solution diagnostics snapshots and diffs
@@ -285,7 +286,7 @@ Example `claude-mcp.json`:
 }
 ```
 
-Best results for Claude: MCP server + `roslynskills-tight` skill.
+**CLI vs. MCP trade-off (`0.1.6-preview.31`):** `RoslynSkills.McpServer` delegates hot commands to `WorkspaceHost` (`15–30 ms` warm steady state), but its current `tools/list` registers all `59` core commands upfront (`53,851 bytes` / `~13,463` tokens per turn, with `~38` tools lacking parameter hints). For multi-turn agent loops, prefer **`roscli-fast.exe` + `WorkspaceHost` + `roslynskills-tight` skill** (`0` per-turn schema tax, `~50–75 ms` warm); see [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md).
 
 ## Gemini CLI Compatibility (Early Support)
 
