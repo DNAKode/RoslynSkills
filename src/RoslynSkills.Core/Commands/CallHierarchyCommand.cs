@@ -171,13 +171,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
 
         ISymbol normalizedAnchor = NormalizeGraphSymbol(anchorSymbol);
         SearchScope scope = await SolutionSearchScope.ResolveAsync(analysis, target: null, includeGenerated, cancellationToken).ConfigureAwait(false);
-        CallGraph graph = await BuildCallGraphAsync(
-            scope,
-            includeObjectCreations,
-            includeExternal,
-            contextLines,
-            brief,
-            cancellationToken).ConfigureAwait(false);
+        CallGraph graph = CallGraph.Create(scope, includeObjectCreations, includeExternal, contextLines, brief);
 
         return BuildHierarchyResult(
             normalizedAnchor,
@@ -241,13 +235,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
             target: null,
             includeGenerated,
             cancellationToken).ConfigureAwait(false);
-        CallGraph graph = await BuildCallGraphAsync(
-            scope,
-            includeObjectCreations,
-            includeExternal,
-            contextLines,
-            brief,
-            cancellationToken).ConfigureAwait(false);
+        CallGraph graph = CallGraph.Create(scope, includeObjectCreations, includeExternal, contextLines, brief);
 
         (string? declarationFilePath, int? declarationLine, int? declarationColumn) = SymbolQueryResolution.GetPrimaryDeclarationLocation(normalizedAnchor);
         return BuildHierarchyResult(
@@ -320,7 +308,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 continue;
             }
 
-            foreach (CallHierarchyEdge edge in EnumerateTraversalEdges(graph, currentNodeId, direction))
+            foreach (CallHierarchyEdge edge in EnumerateTraversalEdges(graph, currentNodeId, direction, cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -394,6 +382,7 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 edge.to_symbol_id,
                 edge.call_kind,
                 edge.via_lambda,
+                edge.implemented_member,
                 edge.file_path,
                 edge.line,
                 edge.column,
@@ -471,27 +460,21 @@ public sealed class CallHierarchyCommand : IAgentCommand
         return new CommandExecutionResult(data, Array.Empty<CommandError>());
     }
 
-    private static IEnumerable<CallHierarchyEdge> EnumerateTraversalEdges(CallGraph graph, string nodeId, CallHierarchyDirection direction)
+    private static IEnumerable<CallHierarchyEdge> EnumerateTraversalEdges(CallGraph graph, string nodeId, CallHierarchyDirection direction, CancellationToken cancellationToken)
     {
         if (direction is CallHierarchyDirection.Outgoing or CallHierarchyDirection.Both)
         {
-            if (graph.outgoingEdgesByNodeId.TryGetValue(nodeId, out List<CallHierarchyEdge>? outgoing))
+            foreach (CallHierarchyEdge edge in graph.GetOutgoingEdges(nodeId, cancellationToken))
             {
-                foreach (CallHierarchyEdge edge in outgoing)
-                {
-                    yield return edge;
-                }
+                yield return edge;
             }
         }
 
         if (direction is CallHierarchyDirection.Incoming or CallHierarchyDirection.Both)
         {
-            if (graph.incomingEdgesByNodeId.TryGetValue(nodeId, out List<CallHierarchyEdge>? incoming))
+            foreach (CallHierarchyEdge edge in graph.GetIncomingEdges(nodeId, cancellationToken))
             {
-                foreach (CallHierarchyEdge edge in incoming)
-                {
-                    yield return edge;
-                }
+                yield return edge;
             }
         }
     }
@@ -513,68 +496,6 @@ public sealed class CallHierarchyCommand : IAgentCommand
             : edge.from_symbol_id;
     }
 
-    private static async Task<CallGraph> BuildCallGraphAsync(
-        SearchScope scope,
-        bool includeObjectCreations,
-        bool includeExternal,
-        int contextLines,
-        bool brief,
-        CancellationToken cancellationToken)
-    {
-        Dictionary<string, CallHierarchyNode> nodesById = new(StringComparer.Ordinal);
-        Dictionary<string, List<CallHierarchyEdge>> outgoingEdgesByNodeId = new(StringComparer.Ordinal);
-        Dictionary<string, List<CallHierarchyEdge>> incomingEdgesByNodeId = new(StringComparer.Ordinal);
-        HashSet<string> edgeKeys = new(StringComparer.Ordinal);
-        int scannedSyntaxTreeCount = 0;
-
-        foreach (SearchUnit unit in scope.Units)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            string treeFilePath = unit.FilePath;
-            SourceText sourceText = await unit.Tree.GetTextAsync(cancellationToken).ConfigureAwait(false);
-            scannedSyntaxTreeCount++;
-
-            foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.GetCallSites(
-                         unit.Compilation,
-                         unit.Tree,
-                         includeObjectCreations,
-                         cancellationToken))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (callSite.caller is null)
-                {
-                    continue;
-                }
-
-                ISymbol caller = NormalizeGraphSymbol(callSite.caller);
-                IMethodSymbol callee = (IMethodSymbol)NormalizeGraphSymbol(callSite.callee);
-
-                if (!includeExternal && (!IsInSource(caller) || !IsInSource(callee)))
-                {
-                    continue;
-                }
-
-                AddEdge(
-                    nodesById,
-                    outgoingEdgesByNodeId,
-                    incomingEdgesByNodeId,
-                    edgeKeys,
-                    caller,
-                    callee,
-                    callKind: callSite.call_kind,
-                    viaLambda: callSite.via_lambda,
-                    callSite.node.Span,
-                    sourceText,
-                    treeFilePath,
-                    contextLines,
-                    brief);
-            }
-        }
-
-        return new CallGraph(nodesById, outgoingEdgesByNodeId, incomingEdgesByNodeId, scannedSyntaxTreeCount);
-    }
-
     private static ISymbol NormalizeGraphSymbol(ISymbol symbol)
     {
         if (symbol is IMethodSymbol method)
@@ -588,24 +509,19 @@ public sealed class CallHierarchyCommand : IAgentCommand
     private static bool IsInSource(ISymbol symbol)
         => symbol.Locations.Any(location => location.IsInSource);
 
-    private static void AddEdge(
-        Dictionary<string, CallHierarchyNode> nodesById,
-        Dictionary<string, List<CallHierarchyEdge>> outgoingEdgesByNodeId,
-        Dictionary<string, List<CallHierarchyEdge>> incomingEdgesByNodeId,
+    private static CallHierarchyEdge? CreateEdge(
         HashSet<string> edgeKeys,
-        ISymbol caller,
-        IMethodSymbol callee,
+        CallHierarchyNode callerNode,
+        CallHierarchyNode calleeNode,
         string callKind,
         bool viaLambda,
         TextSpan callSpan,
         SourceText sourceText,
         string filePath,
         int contextLines,
-        bool brief)
+        bool brief,
+        string? implementedMember)
     {
-        CallHierarchyNode callerNode = GetOrAddNode(nodesById, caller);
-        CallHierarchyNode calleeNode = GetOrAddNode(nodesById, callee);
-
         LinePositionSpan lineSpan = sourceText.Lines.GetLinePositionSpan(callSpan);
         int line = lineSpan.Start.Line + 1;
         int column = lineSpan.Start.Character + 1;
@@ -614,10 +530,10 @@ public sealed class CallHierarchyCommand : IAgentCommand
         string edgeKey = $"{callerNode.symbol_id}|{calleeNode.symbol_id}|{filePath}|{line}|{column}|{callKind}";
         if (!edgeKeys.Add(edgeKey))
         {
-            return;
+            return null;
         }
 
-        CallHierarchyEdge edge = new(
+        return new CallHierarchyEdge(
             edge_key: edgeKey,
             from_symbol_id: callerNode.symbol_id,
             to_symbol_id: calleeNode.symbol_id,
@@ -626,24 +542,49 @@ public sealed class CallHierarchyCommand : IAgentCommand
             file_path: filePath,
             line: line,
             column: column,
-            snippet: snippet);
-
-        AddAdjacency(outgoingEdgesByNodeId, callerNode.symbol_id, edge);
-        AddAdjacency(incomingEdgesByNodeId, calleeNode.symbol_id, edge);
+            snippet: snippet,
+            implemented_member: implementedMember);
     }
 
-    private static void AddAdjacency(
-        Dictionary<string, List<CallHierarchyEdge>> map,
-        string key,
-        CallHierarchyEdge edge)
+    /// <summary>
+    /// The interface methods <paramref name="method"/> implements (explicitly or implicitly) in its containing type.
+    /// A call through such an interface member reaches the implementation, so it is an incoming call of the
+    /// implementation (<c>854z</c>).
+    /// </summary>
+    private static IReadOnlyList<IMethodSymbol> GetImplementedInterfaceMethods(IMethodSymbol method)
     {
-        if (!map.TryGetValue(key, out List<CallHierarchyEdge>? list))
+        INamedTypeSymbol? containingType = method.ContainingType;
+        if (containingType is null ||
+            method.MethodKind is not (MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation) ||
+            method.IsStatic)
         {
-            list = new List<CallHierarchyEdge>();
-            map[key] = list;
+            return Array.Empty<IMethodSymbol>();
         }
 
-        list.Add(edge);
+        List<IMethodSymbol> implemented = new();
+        foreach (IMethodSymbol explicitImplementation in method.ExplicitInterfaceImplementations)
+        {
+            implemented.Add(explicitImplementation);
+        }
+
+        if (method.MethodKind == MethodKind.ExplicitInterfaceImplementation)
+        {
+            return implemented;
+        }
+
+        foreach (INamedTypeSymbol iface in containingType.AllInterfaces)
+        {
+            foreach (ISymbol member in iface.GetMembers(method.Name))
+            {
+                if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } interfaceMethod &&
+                    SymbolEqualityComparer.Default.Equals(containingType.FindImplementationForInterfaceMember(interfaceMethod), method))
+                {
+                    implemented.Add(interfaceMethod);
+                }
+            }
+        }
+
+        return implemented;
     }
 
     private static CallHierarchyNode GetOrAddNode(Dictionary<string, CallHierarchyNode> nodesById, ISymbol symbol)
@@ -731,27 +672,271 @@ public sealed class CallHierarchyCommand : IAgentCommand
         Both = 2,
     }
 
+    /// <summary>
+    /// A call graph discovered lazily, one frontier node at a time, instead of materialising every call site of the
+    /// solution. Incoming edges of a node look only at trees whose text can call it (<see cref="CallSiteLookup"/>);
+    /// outgoing edges of a node look only at the trees that declare it. Discovery of a node's edges is deterministic and
+    /// yields the same edges, in the same per-node order, as filtering a whole-solution graph.
+    /// </summary>
     private sealed class CallGraph
     {
-        public Dictionary<string, CallHierarchyNode> nodesById { get; }
-        public Dictionary<string, List<CallHierarchyEdge>> outgoingEdgesByNodeId { get; }
-        public Dictionary<string, List<CallHierarchyEdge>> incomingEdgesByNodeId { get; }
-        public int scannedSyntaxTreeCount { get; }
+        private readonly SearchScope scope;
+        private readonly bool includeObjectCreations;
+        private readonly bool includeExternal;
+        private readonly int contextLines;
+        private readonly bool brief;
+        private readonly Dictionary<string, ISymbol> symbolsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<CallHierarchyEdge>> incomingCache = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<CallHierarchyEdge>> outgoingCache = new(StringComparer.Ordinal);
+        private readonly Dictionary<SyntaxTree, SourceText> sourceTexts = new();
+        private readonly HashSet<SyntaxTree> scannedTrees = new();
+        private IReadOnlyList<Compilation>? aliasScope;
 
-        public CallGraph(
-            Dictionary<string, CallHierarchyNode> nodesById,
-            Dictionary<string, List<CallHierarchyEdge>> outgoingEdgesByNodeId,
-            Dictionary<string, List<CallHierarchyEdge>> incomingEdgesByNodeId,
-            int scannedSyntaxTreeCount)
+        private CallGraph(SearchScope scope, bool includeObjectCreations, bool includeExternal, int contextLines, bool brief)
         {
-            this.nodesById = nodesById;
-            this.outgoingEdgesByNodeId = outgoingEdgesByNodeId;
-            this.incomingEdgesByNodeId = incomingEdgesByNodeId;
-            this.scannedSyntaxTreeCount = scannedSyntaxTreeCount;
+            this.scope = scope;
+            this.includeObjectCreations = includeObjectCreations;
+            this.includeExternal = includeExternal;
+            this.contextLines = contextLines;
+            this.brief = brief;
         }
 
+        public Dictionary<string, CallHierarchyNode> nodesById { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Number of distinct syntax trees looked at so far.</summary>
+        public int scannedSyntaxTreeCount => scannedTrees.Count;
+
+        public static CallGraph Create(SearchScope scope, bool includeObjectCreations, bool includeExternal, int contextLines, bool brief)
+            => new(scope, includeObjectCreations, includeExternal, contextLines, brief);
+
         public CallHierarchyNode GetOrAddNode(ISymbol symbol)
-            => CallHierarchyCommand.GetOrAddNode(nodesById, symbol);
+        {
+            CallHierarchyNode node = CallHierarchyCommand.GetOrAddNode(nodesById, symbol);
+            symbolsById.TryAdd(node.symbol_id, symbol);
+            return node;
+        }
+
+        /// <summary>Calls made by the code of the node: edges whose caller is the node.</summary>
+        public IReadOnlyList<CallHierarchyEdge> GetOutgoingEdges(string nodeId, CancellationToken cancellationToken)
+        {
+            if (outgoingCache.TryGetValue(nodeId, out List<CallHierarchyEdge>? cached))
+            {
+                return cached;
+            }
+
+            List<CallHierarchyEdge> edges = new();
+            outgoingCache[nodeId] = edges;
+            if (!symbolsById.TryGetValue(nodeId, out ISymbol? symbol))
+            {
+                return edges;
+            }
+
+            HashSet<SyntaxTree> declaringTrees = GetDeclaringTrees(symbol);
+            if (declaringTrees.Count == 0)
+            {
+                return edges;
+            }
+
+            HashSet<string> edgeKeys = new(StringComparer.Ordinal);
+            foreach (SearchUnit unit in scope.Units)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!declaringTrees.Contains(unit.Tree))
+                {
+                    continue;
+                }
+
+                scannedTrees.Add(unit.Tree);
+                SourceText? sourceText = null;
+                foreach (CallSiteAnalysis.CallSite callSite in GetOutgoingCandidateSites(symbol, unit, cancellationToken))
+                {
+                    if (callSite.caller is null)
+                    {
+                        continue;
+                    }
+
+                    ISymbol caller = NormalizeGraphSymbol(callSite.caller);
+                    if (!string.Equals(SymbolResolution.GetUniqueGraphSymbolId(caller), nodeId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    IMethodSymbol callee = (IMethodSymbol)NormalizeGraphSymbol(callSite.callee);
+                    if (!includeExternal && (!IsInSource(caller) || !IsInSource(callee)))
+                    {
+                        continue;
+                    }
+
+                    sourceText ??= GetSourceText(unit.Tree, cancellationToken);
+                    CallHierarchyEdge? edge = CreateEdge(
+                        edgeKeys,
+                        GetNode(caller),
+                        GetNode(callee),
+                        callSite.call_kind,
+                        callSite.via_lambda,
+                        callSite.node.Span,
+                        sourceText,
+                        unit.FilePath,
+                        contextLines,
+                        brief,
+                        implementedMember: null);
+                    if (edge is not null)
+                    {
+                        edges.Add(edge);
+                    }
+                }
+            }
+
+            return edges;
+        }
+
+        /// <summary>
+        /// Calls of the node: edges whose callee is the node, or (for an interface implementation) an interface member
+        /// the node implements. Only trees that can spell a call to one of those methods are examined.
+        /// </summary>
+        public IReadOnlyList<CallHierarchyEdge> GetIncomingEdges(string nodeId, CancellationToken cancellationToken)
+        {
+            if (incomingCache.TryGetValue(nodeId, out List<CallHierarchyEdge>? cached))
+            {
+                return cached;
+            }
+
+            List<CallHierarchyEdge> edges = new();
+            incomingCache[nodeId] = edges;
+
+            // Only methods are callees of a call site; a property/field/event node has no incoming calls.
+            if (!symbolsById.TryGetValue(nodeId, out ISymbol? symbol) || symbol is not IMethodSymbol method)
+            {
+                return edges;
+            }
+
+            // Callee id -> the interface member it was called as (null for a direct call of the node itself).
+            Dictionary<string, IMethodSymbol?> acceptedCalleeIds = new(StringComparer.Ordinal) { [nodeId] = null };
+            List<ISymbol> targets = new() { method };
+            foreach (IMethodSymbol interfaceMethod in GetImplementedInterfaceMethods(method))
+            {
+                string interfaceId = SymbolResolution.GetUniqueGraphSymbolId(NormalizeGraphSymbol(interfaceMethod));
+                if (acceptedCalleeIds.TryAdd(interfaceId, interfaceMethod))
+                {
+                    targets.Add(interfaceMethod);
+                }
+            }
+
+            aliasScope ??= CallSiteLookup.GetCompilations(scope.Units);
+            CallSiteLookup lookup = CallSiteLookup.ForTargets(targets, aliasScope);
+            HashSet<string> edgeKeys = new(StringComparer.Ordinal);
+
+            foreach (SearchUnit unit in scope.Units)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!lookup.MightMention(unit))
+                {
+                    continue;
+                }
+
+                scannedTrees.Add(unit.Tree);
+                SourceText? sourceText = null;
+                foreach (CallSiteAnalysis.CallSite callSite in CallSiteAnalysis.GetCallSitesForLookup(
+                             unit.Compilation,
+                             unit.Tree,
+                             lookup,
+                             includeObjectCreations,
+                             cancellationToken))
+                {
+                    if (callSite.caller is null)
+                    {
+                        continue;
+                    }
+
+                    IMethodSymbol callee = (IMethodSymbol)NormalizeGraphSymbol(callSite.callee);
+                    string calleeId = SymbolResolution.GetUniqueGraphSymbolId(callee);
+                    if (!acceptedCalleeIds.TryGetValue(calleeId, out IMethodSymbol? viaInterface))
+                    {
+                        continue;
+                    }
+
+                    ISymbol caller = NormalizeGraphSymbol(callSite.caller);
+                    if (!includeExternal && (!IsInSource(caller) || !IsInSource(method)))
+                    {
+                        continue;
+                    }
+
+                    sourceText ??= GetSourceText(unit.Tree, cancellationToken);
+                    CallHierarchyEdge? edge = CreateEdge(
+                        edgeKeys,
+                        GetNode(caller),
+                        GetNode(method),
+                        callSite.call_kind,
+                        callSite.via_lambda,
+                        callSite.node.Span,
+                        sourceText,
+                        unit.FilePath,
+                        contextLines,
+                        brief,
+                        implementedMember: viaInterface?.ToDisplayString());
+                    if (edge is not null)
+                    {
+                        edges.Add(edge);
+                    }
+                }
+            }
+
+            return edges;
+        }
+
+        /// <summary>
+        /// The call sites of <paramref name="unit"/> that can belong to <paramref name="symbol"/>'s own code. A warm tree
+        /// answers from its cache; a cold tree binds just the symbol's declaration (method, constructor, accessor, local
+        /// function) when every declaration of the symbol in that tree is one, and the whole tree otherwise.
+        /// </summary>
+        private IReadOnlyList<CallSiteAnalysis.CallSite> GetOutgoingCandidateSites(
+            ISymbol symbol,
+            SearchUnit unit,
+            CancellationToken cancellationToken)
+        {
+            if (symbol is IMethodSymbol method && !CallSiteAnalysis.IsCached(unit.Compilation, unit.Tree))
+            {
+                List<SyntaxNode> declarations = new();
+                bool selfContained = true;
+                foreach (ISymbol? part in new ISymbol?[] { method, method.PartialImplementationPart, method.PartialDefinitionPart })
+                {
+                    if (part is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (SyntaxReference reference in part.DeclaringSyntaxReferences)
+                    {
+                        if (reference.SyntaxTree != unit.Tree)
+                        {
+                            continue;
+                        }
+
+                        SyntaxNode node = reference.GetSyntax(cancellationToken);
+                        if (CallSiteAnalysis.IsSelfContainedDeclaration(node))
+                        {
+                            declarations.Add(node);
+                        }
+                        else
+                        {
+                            selfContained = false;
+                        }
+                    }
+                }
+
+                if (selfContained && declarations.Count > 0)
+                {
+                    return CallSiteAnalysis.GetCallSitesInDeclarations(
+                        unit.Compilation,
+                        unit.Tree,
+                        declarations,
+                        includeObjectCreations,
+                        cancellationToken);
+                }
+            }
+
+            return CallSiteAnalysis.GetCallSites(unit.Compilation, unit.Tree, includeObjectCreations, cancellationToken);
+        }
 
         public void TryUpdateNodeSourceLocation(string nodeId, string filePath, int line, int column)
         {
@@ -771,6 +956,46 @@ public sealed class CallHierarchyCommand : IAgentCommand
                 line = line,
                 column = column,
             };
+        }
+
+        private CallHierarchyNode GetNode(ISymbol symbol) => GetOrAddNode(symbol);
+
+        private SourceText GetSourceText(SyntaxTree tree, CancellationToken cancellationToken)
+        {
+            if (!sourceTexts.TryGetValue(tree, out SourceText? text))
+            {
+                text = tree.GetText(cancellationToken);
+                sourceTexts[tree] = text;
+            }
+
+            return text;
+        }
+
+        /// <summary>The trees holding the code of <paramref name="symbol"/> (all parts of a partial method).</summary>
+        private static HashSet<SyntaxTree> GetDeclaringTrees(ISymbol symbol)
+        {
+            HashSet<SyntaxTree> trees = new();
+            void AddFrom(ISymbol? candidate)
+            {
+                if (candidate is null)
+                {
+                    return;
+                }
+
+                foreach (SyntaxReference reference in candidate.DeclaringSyntaxReferences)
+                {
+                    trees.Add(reference.SyntaxTree);
+                }
+            }
+
+            AddFrom(symbol);
+            if (symbol is IMethodSymbol method)
+            {
+                AddFrom(method.PartialImplementationPart);
+                AddFrom(method.PartialDefinitionPart);
+            }
+
+            return trees;
         }
     }
 
@@ -794,5 +1019,6 @@ public sealed class CallHierarchyCommand : IAgentCommand
         string file_path,
         int line,
         int column,
-        string snippet);
+        string snippet,
+        string? implemented_member);
 }
