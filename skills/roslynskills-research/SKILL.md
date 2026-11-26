@@ -11,7 +11,14 @@ allowed-tools: "Bash Read Write Edit Grep Glob"
 
 # RoslynSkills Research
 
-Goal: use Roslyn semantics as the truth source (not regex) when correctness matters.
+Goal: combine text speed with Roslyn compiler truth (**text first, semantic second, scoped diag third**) via `roscli-fast.exe` + `WorkspaceHost`.
+
+## Channel & Tool Decision Rules (`0.1.6-preview.31`)
+
+- **Built-in `rg` + `read_file`:** Use for string literals, docs, error codes, non-C# files (`.slnx`, `.csproj`, `.json`), and reading a known 50–150 line slice (`~66–116 ms`, `0` tax). Do **not** rely on `rg` for overloaded/common symbols (`Execute` `47K` tokens, `Kind` `23K` tokens) or interface implementations/callers.
+- **`roscli-fast.exe` + `WorkspaceHost` (Preferred semantic lane):** Bind once (`roscli workspace.use MySolution.slnx --require-solution true`), set `ROSCLI_DAEMON=required`, and call `%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe` (`~50–75 ms` warm vs `~365–465 ms` `.NET` CLI spawn and `~70 s` `--no-daemon`).
+- **`RoslynSkills.McpServer`:** Daemon-routed steady state is `~15–30 ms`, but `tools/list` injects `53.85 KB` (`~13.5K` tokens/turn across `59` tools, ~`38` missing property schemas). Prefer CLI + skill over full MCP unless only MCP is available.
+- **External C# LSP (`csharp-ls`, `Roslyn LSP`):** Do not treat as equivalent to `roscli-fast`: `csharp-ls` fails `.NET 11` `ProjectReference`s and emits false errors; `Roslyn LSP` answers incomplete `1` match during async load, `~515 ms` on refs, `0` interface callers (`854z`), and `0` items on `workspace/diagnostic`.
 
 ## What Roscli Is / Is Not
 
@@ -47,14 +54,16 @@ bash scripts/roscli quickstart
 
 Pit-of-success contract:
 
-- Discover: `list-commands --ids-only`
+- Bind hot workspace once: `roscli workspace.use <solution.sln|.slnx> --require-solution true` (set `ROSCLI_DAEMON=required`, prefer `roscli-fast` for warm `~50–75 ms` calls; stop only your own daemon with `roscli daemon.stop` at exit).
+- Discover: `list-commands --ids-only` (68 commands: `54` stable / `11` advanced / `3` experimental)
 - Disambiguate args: `describe-command <command-id>`
-- Execute semantic-first: `nav.*`, `ctx.*`, `diag.*` before text fallback
+- Target directly via `--symbol Type.Member` on all 6 `nav.*` commands (`go_to_definition`, `find_references`, `find_implementations`, `find_overrides`, `find_invocations`, `call_hierarchy`); start `nav.call_hierarchy` with `--max-depth 1 --brief true` (captures interface callers via `edges[].implemented_member`)
+- Avoid `ctx.file_outline` on giant files (`>2,000` lines); it falls back out of `roscli-fast` (`~1.2 s` on 8K-line files)
 - Start stable-first: use `list-commands --stable-only --ids-only`; only step into `advanced`/`experimental` commands when needed
 - Verify workspace binding: use `--workspace-path ... --require-workspace true` on project code
 - Prefer `.sln`/`.slnx` for repo-wide or hot-workspace context; use `.csproj` only when intentionally project-scoped
 - Read payloads directly from top-level `Data` in both daemon and in-process runs (`Transport.mode` reports `daemon` vs `in_process`)
-- Verify before finalize: diagnostics + build/tests
+- Verify before finalize: scoped `diag.get_workspace_snapshot --directory-path <dir> --brief true --include-diagnostics true --require-workspace true` (`~104–240 ms`), then `dotnet build` / `dotnet test`
 
 Cached invocation guidance (throughput vs freshness):
 
@@ -66,40 +75,49 @@ Mandatory policy: if you use non-Roslyn tooling to read/edit `.cs`, say so in yo
 
 ## Canonical Workflow (Find -> Edit -> Verify)
 
-1) Find declaration coordinates (workspace-bound for project code):
+1) Find declaration / references / interface callers directly via `--symbol` (with `WorkspaceHost` bound):
 
 ```powershell
-roscli nav.find_symbol src/MyFile.cs MySymbol --brief true --max-results 50 --workspace-path MySolution.slnx --require-workspace true
+roscli workspace.use MySolution.slnx --require-solution true
+roscli-fast nav.find_references --symbol MyNamespace.DeferredCatalogCommit.Kind --max-results 100
+roscli-fast nav.find_invocations --symbol MyNamespace.SchemaWriter.CreateTable --brief true --max-results 100
+roscli-fast nav.call_hierarchy --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --direction incoming --max-depth 1 --brief true
+```
+
+Or anchor from a file when symbol path is unknown:
+
+```powershell
+roscli-fast nav.find_symbol src/MyFile.cs MySymbol --brief true --max-results 50 --workspace-path MySolution.slnx --require-workspace true
 ```
 
 2) Apply a structured edit:
 
 ```powershell
-roscli edit.rename_symbol src/MyFile.cs 42 17 NewName --apply true --max-diagnostics 50 --workspace-path MySolution.slnx --require-workspace true
+roscli-fast edit.rename_symbol src/MyFile.cs 42 17 NewName --apply true --max-diagnostics 50 --workspace-path MySolution.slnx --require-workspace true
 ```
 
-3) If the edit response does not include post-edit diagnostics (or reports errors/warnings), verify:
+3) Verify folder/project compilation fast before running full test suites:
 
 ```powershell
-roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MySolution.slnx --require-workspace true
+roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
 Investigative tracing (when target is unclear across many files):
 
 ```powershell
-roscli ctx.search_text "RemoteUserAction" src --mode literal --max-results 120 --brief true
-roscli nav.find_invocations src/MyFile.cs 42 17 --brief true --max-results 100 --workspace-path MySolution.slnx --require-workspace true
-roscli nav.call_hierarchy src/MyFile.cs 42 17 --direction both --max-depth 2 --brief true --workspace-path MySolution.slnx --require-workspace true
-roscli analyze.control_flow_graph src/MyFile.cs 42 17 --brief true --max-blocks 120 --max-edges 260 --workspace-path MySolution.slnx --require-workspace true
-roscli analyze.dataflow_slice src/MyFile.cs 42 17 --brief true --max-symbols 120 --workspace-path MySolution.slnx --require-workspace true
-roscli analyze.unused_private_symbols src --brief true --max-symbols 120
-roscli analyze.dependency_violations src MyApp.Web MyApp.Application MyApp.Domain --direction toward_end --brief true
-roscli analyze.impact_slice src/MyFile.cs 42 17 --brief true --include-callers true --include-callees true
-roscli analyze.override_coverage src --coverage-threshold 0.6 --brief true
-roscli analyze.async_risk_scan src --brief true --max-findings 120 --severity-filter warning --severity-filter info
+roscli-fast ctx.search_text "RemoteUserAction" src --mode literal --max-results 120 --brief true
+roscli-fast nav.find_invocations --symbol MyNamespace.MyType.Method --brief true --max-results 100
+roscli-fast nav.call_hierarchy --symbol MyNamespace.MyType.Method --direction both --max-depth 1 --brief true
+roscli-fast analyze.control_flow_graph src/MyFile.cs 42 17 --brief true --max-blocks 120 --max-edges 260 --workspace-path MySolution.slnx --require-workspace true
+roscli-fast analyze.dataflow_slice src/MyFile.cs 42 17 --brief true --max-symbols 120 --workspace-path MySolution.slnx --require-workspace true
+roscli-fast analyze.unused_private_symbols src --brief true --max-symbols 120
+roscli-fast analyze.dependency_violations src MyApp.Web MyApp.Application MyApp.Domain --direction toward_end --brief true
+roscli-fast analyze.impact_slice src/MyFile.cs 42 17 --brief true --include-callers true --include-callees true
+roscli-fast analyze.override_coverage src --coverage-threshold 0.6 --brief true
+roscli-fast analyze.async_risk_scan src --brief true --max-findings 120 --severity-filter warning --severity-filter info
 ```
 
-Bundle multiple read-only probes in one call when useful:
+Bundle multiple read-only probes in one call when useful (`query.batch` supports `ctx.search_text`, `nav.find_symbol*`, `nav.go_to_definition`, `nav.find_references`, `nav.find_invocations`, `nav.call_hierarchy`, `analyze.*`, `diag.get_file_diagnostics`; invoke `nav.find_implementations` and `diag.get_workspace_snapshot` directly):
 
 ```powershell
 roscli run query.batch --input "{`"queries`":[{`"command_id`":`"ctx.search_text`",`"input`":{`"patterns`":[`"RemoteUserAction`",`"ReplicationUpdate`"],`"roots`":[`"src`"],`"mode`":`"literal`"}},{`"command_id`":`"nav.find_invocations`",`"input`":{`"file_path`":`"src/MyFile.cs`",`"line`":42,`"column`":17,`"brief`":true,`"workspace_path`":`"MySolution.slnx`",`"require_workspace`":true}}],`"continue_on_error`":true}"
@@ -118,5 +136,5 @@ Keep this SKILL.md small. Use these references only when needed:
 
 - `references/diagnostics.md`: workspace vs solution snapshots, common failure modes
 - `references/sessions.md`: non-destructive sessions, apply-and-commit
-- `references/performance.md`: published-mode speed knobs (`ROSCLI_USE_PUBLISHED`)
+- `references/performance.md`: `roscli-fast.exe` + `WorkspaceHost` daemon and published-mode speed knobs (`ROSCLI_USE_PUBLISHED`)
 - `references/dependency-intel.md`: when to combine with `dotnet-inspect`

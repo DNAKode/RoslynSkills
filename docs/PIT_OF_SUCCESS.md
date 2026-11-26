@@ -1,18 +1,31 @@
 # RoslynSkills Pit Of Success
 
-Date: 2026-02-11  
-Status: active onboarding contract
+Date: 2026-11-26  
+Status: active onboarding contract (`0.1.6-preview.31`; empirical comparison in [ROSLYN_HARNESS_INTEGRATION_REPORT.md](ROSLYN_HARNESS_INTEGRATION_REPORT.md))
 
 ## Principle
 
 RoslynSkills should make the safest high-value workflow the easiest workflow for agents:
 
-1. discover commands quickly,
-2. choose semantic operations before text fallback,
-3. keep context brief-first,
-4. verify before finalizing.
+1. use the right lane (**text first, semantic second, scoped diag third**),
+2. bind the hot solution once and use `roscli-fast` (`ROSCLI_DAEMON=required`),
+3. target directly with `--symbol Type.Member` and keep payloads bounded (`--brief true`, `--max-depth 1`),
+4. verify with scoped `diag.get_workspace_snapshot --directory-path` before full `dotnet build`/`test`.
 
 If an agent has to guess argument shapes or fumble through file types, this contract is not being met.
+
+## Channel & Tool Selection (`0.1.6-preview.31`)
+
+Measured against the 33-project `CalcDb.slnx` solution (`0.1.6-preview.31`; see [ROSLYN_HARNESS_INTEGRATION_REPORT.md](ROSLYN_HARNESS_INTEGRATION_REPORT.md)):
+
+| Channel / Tool | When To Use | Warm Speed & Cost Profile | Guardrail |
+|---|---|---|---|
+| **Built-in `rg` + `read_file`** | String literals, error codes, docs, non-C# files (`.slnx`, `.csproj`, `.json`), or reading a known 50–150 line slice | `~66–116 ms`; `0` schema/warmup tax | Do not grep common/overloaded C# names (`Execute` `47K` tok, `Kind` `23K` tok) or infer interface callers by text. |
+| **`roscli-fast.exe` + `WorkspaceHost`** | **Default C# semantic lane:** `--symbol` lookup, references, invocations, implementations, `nav.call_hierarchy` (`854z`), `edit.*`, scoped `diag.get_workspace_snapshot` | `~50–75 ms` wall (`3–10 ms` host exec); `0` per-turn schema tax | Bind once (`workspace.use <slnx> --require-solution true`), set `ROSCLI_DAEMON=required`, and stop your own daemon (`daemon.stop`) at closeout. |
+| **`roscli` (.NET CLI) + `WorkspaceHost`** | Fallback when `roscli-fast.exe` is unavailable (or for CLI-only verbs / `--input-stdin`) | `~365–465 ms` warm (`~330 ms` CLR spawn) | Prefer `roscli-fast.exe` for multi-call loops. Note `ctx.file_outline` currently falls back out of `roscli-fast.exe`. |
+| **`RoslynSkills.McpServer`** | Environments requiring stdio MCP only | `~15–30 ms` warm (with daemon); **`~13.5K` tokens/turn** `tools/list` (`59` tools) | Avoid loading all 59 tools into general multi-turn loops when `roscli-fast` + skill is available. Without daemon, first call stalls (`~48 s`). |
+| **External C# LSP (`csharp-ls`, `Roslyn LSP`)** | Interactive IDE viewports only | `Roslyn LSP`: `~515 ms` refs, `0` interface callers (`854z`); `csharp-ls`: `.NET 11` reference breaks & false diagnostics | Never trust LSP results before `projectInitializationComplete`, and do not treat `csharp-ls` diagnostics/refs as truth on multi-TFM `.slnx` repos. |
+| **`dotnet build` / `dotnet test`** | Final verification gate | `~47–233 s` on large solutions | Run `diag.get_workspace_snapshot --directory-path <dir>` (`~104–240 ms`) first so broken compiles fail fast. |
 
 ## First Minute Workflow
 
@@ -75,22 +88,36 @@ dotnet test tests/MyTests.csproj --no-restore --filter FullyQualifiedName~Target
 roscli edit.claim release <claim_id>
 ```
 
-### 2) Safe symbol rename
+### 2) Direct `--symbol` navigation & interface call hierarchy (`0.1.6-preview.31`)
+
+All 6 primary `nav.*` commands (`go_to_definition`, `find_references`, `find_implementations`, `find_overrides`, `find_invocations`, `call_hierarchy`) accept `--symbol Type.Member` (including synthesized positional-record properties and optional parameter types like `Type.Method(ArgType)`), skipping intermediate coordinate-lookup calls:
 
 ```text
-roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
-roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true
-roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true
+roscli-fast nav.go_to_definition --symbol MyNamespace.SchemaWriter.CreateTable --brief true
+roscli-fast nav.find_references --symbol MyNamespace.DeferredCatalogCommit.Kind --max-results 100
+roscli-fast nav.find_invocations --symbol MyNamespace.SchemaWriter.CreateTable --brief true --max-results 100
+roscli-fast nav.find_implementations --symbol MyNamespace.ISqlDatabase --max-results 50
+roscli-fast nav.call_hierarchy --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --direction incoming --max-depth 1 --brief true
 ```
 
-### 3) Create new file in one shot
+Always start `nav.call_hierarchy` with `--max-depth 1 --brief true` (`--max-depth 2` on high-fan-in methods can return >100 KB / ~31K tokens); interface-dispatched edges surface `edges[].implemented_member`.
+
+### 3) Safe symbol rename
+
+```text
+roscli-fast nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
+roscli-fast edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true
+roscli-fast diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true
+```
+
+### 4) Create new file in one shot
 
 ```text
 roscli edit.create_file src/MyProject/NewType.cs --content "public class NewType { }"
 roscli diag.get_file_diagnostics src/MyProject/NewType.cs
 ```
 
-### 4) Session-based edit loop
+### 5) Session-based edit loop
 
 ```text
 roscli session.open src/MyProject/Program.cs demo-session
@@ -101,7 +128,7 @@ roscli session.commit demo-session --keep-session false --require-disk-unchanged
 
 Note: `session.*` diagnostics are file-only (`ad_hoc`). For project-backed errors/warnings, prefer `diag.get_file_diagnostics` or `diag.get_after_edit` with `--require-workspace true` and pass `--workspace-path` if needed.
 
-### 5) Multi-agent claim-first edit loop
+### 6) Multi-agent claim-first edit loop
 
 ```text
 roscli edit.claim list
@@ -116,15 +143,20 @@ For multiple subagents, use distinct stable `--owner` names and disjoint file cl
 
 Mutation command responses include `claim_status` (using shared Git worktree-aware repository-root discovery). If a write summary says `unclaimed`, stop further C# mutation, run `edit.claim claim <file> --owner <owner> --reason <slice>`, then continue with guarded edits.
 
-### 6) Workspace-backed directory triage
+### 7) Workspace-backed directory triage (before `dotnet build`)
 
 ```text
-roscli diag.get_workspace_snapshot src --brief true --require-workspace true
-roscli diag.get_workspace_snapshot src --require-workspace true --max-files 500
-roscli diag.get_workspace_snapshot src --require-workspace true --workspace-path MySolution.sln
+roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
+roscli-fast diag.get_workspace_snapshot --directory-path src --brief true --require-workspace true --max-files 500
+roscli-fast diag.get_workspace_snapshot --directory-path src --require-workspace true --workspace-path MySolution.slnx
 ```
 
+Note: `diag.get_workspace_snapshot --directory-path` compiles every project rooted under that directory in `~104–240 ms` warm on a bound solution, catching compiler errors across multiple files/projects before a slower `dotnet build`/`test` run.
+
 ## Guardrails (Must Be Explicit)
+
+- **Bind once & fail closed:** In multi-call sessions, bind `roscli workspace.use <MySolution.slnx> --require-solution true` once, set `ROSCLI_DAEMON=required`, and use `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) for hot queries. Stop **only your own** worktree daemon at closeout (`roscli daemon.stop --repo-root <path>`); never run `daemon.prune --all` when sibling agents share the host.
+- **Avoid `ctx.file_outline` on huge files (>2,000 lines):** `ctx.file_outline` currently falls back out of `roscli-fast.exe` to a full `.NET` CLI spawn (`~1.2 s` on 8,147-line files). Prefer `--symbol Type.Member` or `rg` + `read_file` / `ctx.member_source --member-name` instead.
 
 - `session.open` supports only `.cs` and `.csx`.
 - `session.*` diagnostics are `ad_hoc` (file-only). Missing type/reference errors may be false negatives until verified with workspace-backed diagnostics (`diag.get_file_diagnostics`).
@@ -134,9 +166,7 @@ roscli diag.get_workspace_snapshot src --require-workspace true --workspace-path
 - Check `workspace_context.resolved_workspace_path`, `workspace_context.workspace_kind`, and `workspace_context.project_count` when full solution context matters.
 - If `workspace_context.mode` is `ad_hoc` for project code, rerun with `--workspace-path <.sln|.slnx|.csproj|dir>` and prefer `--require-workspace true`.
 - For complex payloads, prefer `--input-stdin` over shell-escaped JSON.
-- Do not use `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads for `.cs` orientation until a roscli `ctx.*` or `nav.*` command has been tried. In dirty repos, `ctx.changed_files` is the roscli-native first check for changed path scope.
-- Do not use `rg`/`git diff`/file reads merely to report the line number of a changed `.cs` assertion; use `ctx.search_text` or `ctx.member_source`.
-- If RoslynSkills cannot answer a C# query, agent must state why before fallback.
+- **Production hybrid split vs. supervised benchmark trials:** In production harnesses, use `rg`/`read_file` for string literals, docs, non-C# files, and known slices, and `roscli-fast` (`nav.*`/`edit.*`/`diag.*`) for semantic symbol navigation, overloads, interface call hierarchies, refactors, and folder diagnostics. In strict supervised Roslyn-only benchmark trials (`csharp-start --supervised`), follow `ctx.changed_files`, `ctx.member_source`, and `ctx.search_text` before `git diff`/`rg`/`Get-Content`, and report any fallback explicitly.
 
 ## Complementary Tool Split
 
@@ -149,29 +179,29 @@ Combined migration pattern:
 2. execute local semantic changes with `roscli`,
 3. verify via diagnostics/build/tests.
 
-## Agent Prompt Block
+## Agent Prompt Block (Production Hybrid)
 
 ```text
-
-Use roscli for C# work in this session.
+Use roscli-fast (or roscli) + WorkspaceHost for semantic C# work in this session.
 Workflow:
-1) before reading or editing .cs files, run "roscli --version" and "roscli csharp-start".
-2) in dirty repos, run "roscli ctx.changed_files" for changed C# path scope instead of "git diff --stat".
-3) preload the solution with "roscli workspace.preload <solution.sln|.slnx> --alias default --require-solution true".
-4) orient with "roscli ctx.file_outline" and "roscli ctx.member_source"; avoid git diff/rg/Get-Content/sed/cat for .cs orientation unless roscli cannot answer.
-4a) keep broad search capped; if "ctx.search_text" returns many matches, narrow with "ctx.file_outline --member-name-contains" or "ctx.member_source --focus-text" instead of repeating broad searches.
-5) if argument shape is unclear, run "roscli describe-command <command-id>".
-6) claim before .cs mutation with "roscli edit.claim claim <file> --reason <reason>".
-7) for small member-local edits, prefer "roscli edit.replace_in_member"; if ctx.member_source returns focus=not-found, rerun with a better literal, smaller context window, or include_source_text=false before reading larger source; for large member edits, use ctx.member_source include_edit_target_text=true then edit.batch_exact replace_span from edit_target.exact_span_text.text.
-8) if an edit command reports claim_status.claimed=false or summary "unclaimed", claim before further C# mutation.
-9) if multiple edits touch the same member, re-read ctx.member_source once and combine them into one guarded edit; do not issue parallel same-member edit commands.
-10) run diagnostics/build/tests and release claims before finalizing; final responses with active claims are non-compliant, so run `edit.claim list` after release and report active claim count 0.
+1) Bind the hot solution once: "roscli workspace.use <solution.sln|.slnx> --require-solution true", then set ROSCLI_DAEMON=required.
+2) Text first for literals/docs/non-C#/known slices ("rg -n -w", targeted "read_file"); semantic second via "roscli-fast" for overloaded/ambiguous symbols, cross-project callers, and edits.
+3) Prefer direct "--symbol Type.Member" on nav.* (go_to_definition, find_references, find_implementations, find_overrides, find_invocations, call_hierarchy); start call_hierarchy with "--max-depth 1 --brief true" (captures interface dispatch via implemented_member).
+4) Avoid "ctx.file_outline" on >2,000-line files until hot-routed; use "--symbol" or "rg" + "read_file" / "ctx.member_source".
+5) Keep "query.batch" / "nav.find_symbol_batch" sequential per worktree; for multi-file edits use "edit.rename_symbol", "edit.change_signature", "edit.apply_code_fix", or "edit.transaction" with expected_text.
+6) Scoped diag third: check edited folders with "roscli-fast diag.get_workspace_snapshot --directory-path <dir> --brief true --include-diagnostics true --require-workspace true" before running "dotnet build" / "dotnet test".
+7) Stop only your own daemon at closeout ("roscli daemon.stop --repo-root <path>") and release any active claims.
 ```
+
+(For strict supervised Roslyn-only benchmark panes, generate the gated two-turn prompt with `roscli agent-start --solution <solution.sln|.slnx>` or `roscli csharp-start --supervised`.)
 
 ## Anti-Patterns
 
-- Starting with full-solution diagnostics when file-level diagnostics are enough.
-- Starting `.cs` orientation with `git diff`, `rg`, `Get-Content`, `sed`, `cat`, or patch-editor reads before trying roscli `ctx.*`/`nav.*`.
+- Starting with full-solution diagnostics or `dotnet build` when `diag.get_workspace_snapshot --directory-path <dir>` or file diagnostics suffice.
+- Querying `nav.call_hierarchy` with unbounded `--max-depth` on high-fan-in methods (start with `--max-depth 1 --brief true`).
+- Loading 59-tool MCP (`~13.5K` tokens/turn) or using external C# LSP (`csharp-ls` / `Roslyn LSP`) when `roscli-fast.exe` + `WorkspaceHost` is available.
+- Using `rg` to enumerate callers/references of common or overloaded C# symbols (`Execute`, `OpenRecordset`, `Kind`) instead of `nav.find_references` / `nav.find_invocations --symbol`.
+- Starting `.cs` semantic/structural edits without checking `workspace_context.mode`.
 - Repeated command retries without schema discovery (`describe-command`).
 - Text edits for multi-file semantic changes before trying Roslyn primitives.
 - Treating an LSP lane as valid evidence when tools were not actually available.

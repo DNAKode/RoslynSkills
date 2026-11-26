@@ -13,7 +13,7 @@ RoslynSkills provides Roslyn-native CLI (`roscli`) and MCP tooling for coding ag
 Roslyn workspace management, command implementations, and the command registry.
 
 - **Workspace binding & resolution**: `WorkspaceSemanticLoader` and `StaticAnalysisWorkspace` handle solution/project discovery, `MSBuildLocator` registration (preferring the latest installed .NET SDK MSBuild), auto-restore (`WorkspaceAutoRestore`), and project resolution checks (`WorkspaceProjectResolution`).
-- **Commands**: 65 commands across families (`nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, `daemon.*`, plus `agent-begin`/`csharp-start`/`text.measure`).
+- **Commands**: 68 discoverable commands (59 core registry commands across `nav.*`, `ctx.*`, `edit.*`, `diag.*`, `analyze.*`, `repair.*`, `session.*`, `workspace.*`, plus 9 CLI-only lifecycle/onboarding verbs: `agent-begin`, `csharp-start`, `text.measure`, `daemon.*`).
 - **Registry**: `DefaultRegistryFactory` wires commands with descriptors (including `RunsOnHotWorkspace`, maturity tags, and traits).
 
 ### `src/RoslynSkills.Cli`
@@ -48,10 +48,10 @@ In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monor
 
 | Family | Purpose | Maturity |
 |---|---|---|
-| `nav.*` | Solution-wide go-to-definition, symbol, references, implementations, overrides, invocations, call hierarchy/path | 51 stable |
+| `nav.*` | Solution-wide go-to-definition, symbol, references, implementations, overrides, invocations, call hierarchy/path | 54 stable |
 | `ctx.*` | File outline, member source, text search, changed files, symbol envelope | + 11 advanced |
 | `edit.*` | Semantic renames/signature changes, Roslyn code fixes (`edit.apply_code_fix`), batch-exact edits, replace-in-member, insert/claim/create | + 3 experimental |
-| `diag.*` | File, multi-project workspace/directory, and solution diagnostics snapshots and diffs | = 65 total |
+| `diag.*` | File, multi-project workspace/directory, and solution diagnostics snapshots and diffs | = 68 total |
 | `analyze.*` | Control flow, dataflow, impact slice, async risk, dependency violations, unused symbols | |
 | `repair.*` | Hot-workspace Roslyn code-fix planning (`repair.propose_from_diagnostics`) and execution (`repair.apply_plan`), never TODO stubs | |
 | `session.*` | Non-destructive .cs/.csx edit loop with diff/commit | |
@@ -62,9 +62,10 @@ In-repo XML/XAML-focused CLI lane (`xmlcli`). Separate product boundary in monor
 
 | Mode | Use case | Latency profile |
 |---|---|---|
+| `roscli-fast` + Daemon (`cli/run`) | High-frequency agent loops (NativeAOT client) | ~50–75 ms steady state |
 | `dotnet run` | Dev correctness | ~2.9s startup |
-| Published cache (`ROSCLI_USE_PUBLISHED=1`) | Agent loops | ~150ms startup |
-| MCP server (stdio JSON-RPC) | Claude/Codex MCP integration | Warm sub-ms steady-state |
+| Published cache (`ROSCLI_USE_PUBLISHED=1`) | Agent loops without AOT client | ~150ms startup (~365–465 ms w/ daemon) |
+| MCP server (stdio JSON-RPC) | Claude/Codex MCP integration | Warm 15–30 ms (53.85 KB `tools/list` schema tax) |
 | Transport server | Experimental warm-state | Cold spikes, sub-5ms steady |
 | Hot workspace daemon | Solution reuse across calls | Eliminates per-call MSBuild bind |
 
@@ -127,6 +128,7 @@ Key rules:
 - `ROSLYN_AGENTIC_CODING_RESEARCH_PROPOSAL.md` — canonical research design, RQs, hypotheses, evaluation.
 - `HANDOVER.md` — session-start reference: current state, harness commands, near-term actions.
 - `docs/PIT_OF_SUCCESS.md` — canonical pit-of-success guidance.
+- `docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md` — empirical benchmark & architecture study (`0.1.6-preview.31`: CLI+NativeAOT+Daemon vs. LSP vs. MCP vs. `rg`).
 - `docs/META_LEARNING_ARCHIVE.md` — historical meta-learning entries (2026-02-08 through 2026-02-25).
 - `docs/research-findings.md` — empirical findings log with artifact references.
 - `docs/archive/` — initial planning docs (design spec, research plan, implementation plan).
