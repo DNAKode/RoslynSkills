@@ -266,10 +266,10 @@ dotnet tool install --global DNAKode.RoslynSkills.Cli --version <version> --add-
 
 ## Optional: MCP Mode
 
-Example MCP server wiring:
+Example MCP server wiring (`--mode slim` exposes 10 high-leverage tools with complete schemas at ~4.9 KB `tools/list`, a >90% context reduction vs. `--mode full`, and connects directly to `WorkspaceHost` over a persistent pipe with auto-bind):
 
 - command: `dotnet`
-- args: `"<unzipped>/mcp/RoslynSkills.McpServer.dll"`
+- args: `"<unzipped>/mcp/RoslynSkills.McpServer.dll"`, `"--mode"`, `"slim"`
 
 Example `claude-mcp.json`:
 
@@ -279,14 +279,14 @@ Example `claude-mcp.json`:
     "roslyn": {
       "type": "stdio",
       "command": "dotnet",
-      "args": ["<unzipped>/mcp/RoslynSkills.McpServer.dll"],
+      "args": ["<unzipped>/mcp/RoslynSkills.McpServer.dll", "--mode", "slim"],
       "env": {}
     }
   }
 }
 ```
 
-**CLI vs. MCP trade-off (`0.1.6-preview.31`):** `RoslynSkills.McpServer` delegates hot commands to `WorkspaceHost` (`15–30 ms` warm steady state), but its current `tools/list` registers all `59` core commands upfront (`53,851 bytes` / `~13,463` tokens per turn, with `~38` tools lacking parameter hints). For multi-turn agent loops, prefer **`roscli-fast.exe` + `WorkspaceHost` + `roslynskills-tight` skill** (`0` per-turn schema tax, `~50–75 ms` warm); see [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md).
+**CLI vs. MCP trade-off (`0.1.6-preview.32`):** With `--mode slim`, `RoslynSkills.McpServer` registers 10 focused tools (`roslyn_nav_symbol`, `roslyn_nav_references`, `roslyn_nav_invocations`, `roslyn_nav_call_hierarchy`, `roslyn_nav_implementations`, `roslyn_diag_snapshot`, `roslyn_edit_rename`, `roslyn_edit_transaction`, `roslyn_edit_code_fix`, `roslyn_run`) at `~4.9 KB` (`~1.2K` tokens/turn) over a direct persistent `WorkspaceHost` pipe (auto-binding on first workspace call). `--mode full` remains available for backward compatibility (`59` tools, `53.85 KB`). In CLI loops, **`roscli-fast.exe` + `WorkspaceHost` + `roslynskills-tight` skill** (`0` per-turn schema tax, compact JSON on redirected stdout, `~50–75 ms` warm) remains the default; see [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md).
 
 ## Gemini CLI Compatibility (Early Support)
 

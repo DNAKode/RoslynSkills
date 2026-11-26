@@ -2,6 +2,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -12,6 +13,12 @@ namespace RoslynSkills.McpServer;
 
 internal static class Program
 {
+    private enum McpToolMode
+    {
+        Full = 0,
+        Slim = 1,
+    }
+
     private const string JsonRpcVersion = "2.0";
     private const string McpProtocolVersion = "2025-06-18";
     private const string CommandEnvelopeVersion = "1.0";
@@ -31,10 +38,23 @@ internal static class Program
     };
 
     private static HotCommandRouter? Router;
+    private static McpToolMode ActiveMode = McpToolMode.Full;
 
     public static async Task<int> Main(string[] args)
     {
-        _ = args;
+        if (!TryParseOptions(args, out McpToolMode mode, out bool showHelp, out string? parseError))
+        {
+            await Console.Error.WriteLineAsync(parseError).ConfigureAwait(false);
+            return 2;
+        }
+
+        if (showHelp)
+        {
+            await Console.Error.WriteLineAsync("Usage: RoslynSkills.McpServer [--mode full|slim]").ConfigureAwait(false);
+            return 0;
+        }
+
+        ActiveMode = mode;
         ICommandRegistry registry = DefaultRegistryFactory.Create();
         Router = HotCommandRouter.IsEnabled() ? new HotCommandRouter(registry) : null;
         ToolMap toolMap = BuildToolMap(registry.ListCommands());
@@ -42,203 +62,311 @@ internal static class Program
         Stream input = Console.OpenStandardInput();
         Stream output = Console.OpenStandardOutput();
 
-        while (true)
+        try
         {
-            JsonDocument? request;
-            try
+            while (true)
             {
-                request = await ReadMessageAsync(input, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                await WriteErrorResponseAsync(
-                    output,
-                    idNode: null,
-                    code: -32700,
-                    message: "Parse error.",
-                    dataNode: JsonValue.Create(ex.Message)).ConfigureAwait(false);
-                continue;
-            }
-
-            if (request is null)
-            {
-                break;
-            }
-
-            using (request)
-            {
-                JsonElement root = request.RootElement;
-                if (root.ValueKind != JsonValueKind.Object)
+                JsonDocument? request;
+                try
+                {
+                    request = await ReadMessageAsync(input, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
                 {
                     await WriteErrorResponseAsync(
                         output,
                         idNode: null,
-                        code: -32600,
-                        message: "Invalid request: top-level JSON must be an object.",
-                        dataNode: null).ConfigureAwait(false);
+                        code: -32700,
+                        message: "Parse error.",
+                        dataNode: JsonValue.Create(ex.Message)).ConfigureAwait(false);
                     continue;
                 }
 
-                JsonNode? idNode = TryGetIdNode(root);
-                bool hasResponseId = idNode is not null;
-
-                if (!TryGetStringProperty(root, "method", out string? method) || string.IsNullOrWhiteSpace(method))
+                if (request is null)
                 {
-                    if (hasResponseId)
+                    break;
+                }
+
+                using (request)
+                {
+                    JsonElement root = request.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object)
                     {
                         await WriteErrorResponseAsync(
                             output,
-                            idNode,
+                            idNode: null,
                             code: -32600,
-                            message: "Invalid request: missing method.",
+                            message: "Invalid request: top-level JSON must be an object.",
                             dataNode: null).ConfigureAwait(false);
+                        continue;
                     }
 
-                    continue;
-                }
+                    JsonNode? idNode = TryGetIdNode(root);
+                    bool hasResponseId = idNode is not null;
 
-                JsonElement @params = GetParams(root);
-                switch (method)
-                {
-                    case "initialize":
+                    if (!TryGetStringProperty(root, "method", out string? method) || string.IsNullOrWhiteSpace(method))
                     {
-                        if (!hasResponseId)
+                        if (hasResponseId)
                         {
-                            break;
+                            await WriteErrorResponseAsync(
+                                output,
+                                idNode,
+                                code: -32600,
+                                message: "Invalid request: missing method.",
+                                dataNode: null).ConfigureAwait(false);
                         }
 
-                        string protocolVersion = ResolveProtocolVersion(@params);
-                        JsonObject result = new()
+                        continue;
+                    }
+
+                    JsonElement @params = GetParams(root);
+                    switch (method)
+                    {
+                        case "initialize":
                         {
-                            ["protocolVersion"] = protocolVersion,
-                            ["capabilities"] = new JsonObject
+                            if (!hasResponseId)
                             {
-                                ["tools"] = new JsonObject
-                                {
-                                    ["listChanged"] = false,
-                                },
-                                ["resources"] = new JsonObject
-                                {
-                                    ["subscribe"] = false,
-                                    ["listChanged"] = false,
-                                },
-                            },
-                            ["serverInfo"] = new JsonObject
+                                break;
+                            }
+
+                            string protocolVersion = ResolveProtocolVersion(@params);
+                            string instructions = ActiveMode == McpToolMode.Slim
+                                ? "Roslyn-backed C# navigation, diagnostics, and edits (slim mode: 10 tools). Use roslyn_nav_* with symbol ('Type.Member') or file_path/line/column, roslyn_diag_snapshot for multi-project diagnostics, roslyn_edit_* for semantic/atomic edits, and roslyn_run for any other RoslynSkills command (ctx.file_outline, ctx.member_source, ctx.search_text, nav.find_overrides, query.batch, workspace.status)."
+                                : "Roslyn-backed C# navigation, diagnostics, and edits. Tool names map from command ids via roslyn_<command_id_with_underscores>. Resource template invocation is available via roslyn://command/{commandId}.";
+                            JsonObject result = new()
                             {
-                                ["name"] = "roslynskills-mcp",
-                                ["version"] = "0.1.0",
-                            },
-                            ["instructions"] = "Roslyn-backed C# navigation, diagnostics, and edits. Tool names map from command ids via roslyn_<command_id_with_underscores>. Resource template invocation is available via roslyn://command/{commandId}.",
-                        };
+                                ["protocolVersion"] = protocolVersion,
+                                ["capabilities"] = new JsonObject
+                                {
+                                    ["tools"] = new JsonObject
+                                    {
+                                        ["listChanged"] = false,
+                                    },
+                                    ["resources"] = new JsonObject
+                                    {
+                                        ["subscribe"] = false,
+                                        ["listChanged"] = false,
+                                    },
+                                },
+                                ["serverInfo"] = new JsonObject
+                                {
+                                    ["name"] = "roslynskills-mcp",
+                                    ["version"] = GetServerVersion(),
+                                },
+                                ["instructions"] = instructions,
+                            };
 
-                        await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
-                        break;
-                    }
-
-                    case "notifications/initialized":
-                        break;
-
-                    case "tools/list":
-                    {
-                        if (!hasResponseId)
-                        {
+                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
                             break;
                         }
 
-                        JsonObject result = new()
-                        {
-                            ["tools"] = BuildToolList(toolMap),
-                        };
+                        case "notifications/initialized":
+                            break;
 
-                        await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
-                        break;
-                    }
-
-                    case "tools/call":
-                    {
-                        if (!hasResponseId)
+                        case "tools/list":
                         {
+                            if (!hasResponseId)
+                            {
+                                break;
+                            }
+
+                            JsonObject result = new()
+                            {
+                                ["tools"] = ActiveMode == McpToolMode.Slim
+                                    ? BuildSlimToolList()
+                                    : BuildToolList(toolMap),
+                            };
+
+                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
                             break;
                         }
 
-                        await HandleToolCallAsync(output, idNode!, @params, registry, toolMap).ConfigureAwait(false);
-                        break;
-                    }
-
-                    case "resources/list":
-                    {
-                        if (!hasResponseId)
+                        case "tools/call":
                         {
+                            if (!hasResponseId)
+                            {
+                                break;
+                            }
+
+                            await HandleToolCallAsync(output, idNode!, @params, registry, toolMap).ConfigureAwait(false);
                             break;
                         }
 
-                        JsonObject result = new()
+                        case "resources/list":
                         {
-                            ["resources"] = BuildResourceList(toolMap),
-                        };
+                            if (!hasResponseId)
+                            {
+                                break;
+                            }
 
-                        await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
-                        break;
-                    }
+                            JsonObject result = new()
+                            {
+                                ["resources"] = BuildResourceList(toolMap),
+                            };
 
-                    case "resources/templates/list":
-                    {
-                        if (!hasResponseId)
-                        {
+                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
                             break;
                         }
 
-                        JsonObject result = new()
+                        case "resources/templates/list":
                         {
-                            ["resourceTemplates"] = BuildResourceTemplateList(),
-                        };
+                            if (!hasResponseId)
+                            {
+                                break;
+                            }
 
-                        await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
-                        break;
-                    }
+                            JsonObject result = new()
+                            {
+                                ["resourceTemplates"] = BuildResourceTemplateList(),
+                            };
 
-                    case "resources/read":
-                    {
-                        if (!hasResponseId)
-                        {
+                            await WriteResultResponseAsync(output, idNode!, result).ConfigureAwait(false);
                             break;
                         }
 
-                        await HandleResourceReadAsync(output, idNode!, @params, registry, toolMap).ConfigureAwait(false);
-                        break;
-                    }
-
-                    case "ping":
-                    {
-                        if (!hasResponseId)
+                        case "resources/read":
                         {
+                            if (!hasResponseId)
+                            {
+                                break;
+                            }
+
+                            await HandleResourceReadAsync(output, idNode!, @params, registry, toolMap).ConfigureAwait(false);
                             break;
                         }
 
-                        await WriteResultResponseAsync(output, idNode!, new JsonObject()).ConfigureAwait(false);
-                        break;
-                    }
-
-                    default:
-                    {
-                        if (!hasResponseId)
+                        case "ping":
                         {
+                            if (!hasResponseId)
+                            {
+                                break;
+                            }
+
+                            await WriteResultResponseAsync(output, idNode!, new JsonObject()).ConfigureAwait(false);
                             break;
                         }
 
-                        await WriteErrorResponseAsync(
-                            output,
-                            idNode,
-                            code: -32601,
-                            message: $"Method not found: {method}",
-                            dataNode: null).ConfigureAwait(false);
-                        break;
+                        default:
+                        {
+                            if (!hasResponseId)
+                            {
+                                break;
+                            }
+
+                            await WriteErrorResponseAsync(
+                                output,
+                                idNode,
+                                code: -32601,
+                                message: $"Method not found: {method}",
+                                dataNode: null).ConfigureAwait(false);
+                            break;
+                        }
                     }
                 }
             }
         }
+        finally
+        {
+            if (Router is not null)
+            {
+                await Router.DisposeAsync().ConfigureAwait(false);
+                Router = null;
+            }
+        }
 
         return 0;
+    }
+
+    private static bool TryParseOptions(string[] args, out McpToolMode mode, out bool showHelp, out string? error)
+    {
+        mode = ParseModeFromEnvironment();
+        showHelp = false;
+        error = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            if (arg is "--help" or "-h")
+            {
+                showHelp = true;
+                return true;
+            }
+
+            string? value = null;
+            int eq = arg.IndexOf('=', StringComparison.Ordinal);
+            if (eq >= 0)
+            {
+                value = arg[(eq + 1)..];
+                arg = arg[..eq];
+            }
+
+            if (string.Equals(arg, "--mode", StringComparison.OrdinalIgnoreCase))
+            {
+                if (value is null)
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        error = "Option '--mode' requires a value ('full' or 'slim').";
+                        return false;
+                    }
+
+                    value = args[++i];
+                }
+
+                if (!TryParseModeValue(value, out mode))
+                {
+                    error = $"Unsupported --mode value '{value}'. Supported values: full, slim.";
+                    return false;
+                }
+
+                continue;
+            }
+
+            error = $"Unknown option '{args[i]}'. Usage: RoslynSkills.McpServer [--mode full|slim]";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static McpToolMode ParseModeFromEnvironment()
+    {
+        string? raw = Environment.GetEnvironmentVariable("ROSLYNSKILLS_MCP_MODE");
+        return !string.IsNullOrWhiteSpace(raw) && TryParseModeValue(raw, out McpToolMode parsed)
+            ? parsed
+            : McpToolMode.Full;
+    }
+
+    private static bool TryParseModeValue(string raw, out McpToolMode mode)
+    {
+        string trimmed = raw.Trim();
+        if (string.Equals(trimmed, "slim", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = McpToolMode.Slim;
+            return true;
+        }
+
+        if (string.Equals(trimmed, "full", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = McpToolMode.Full;
+            return true;
+        }
+
+        mode = McpToolMode.Full;
+        return false;
+    }
+
+    private static string GetServerVersion()
+    {
+        Assembly assembly = typeof(Program).Assembly;
+        string? info = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(info))
+        {
+            int plus = info.IndexOf('+', StringComparison.Ordinal);
+            return plus > 0 ? info[..plus] : info;
+        }
+
+        return assembly.GetName().Version?.ToString(3) ?? "0.1.6";
     }
 
     private static async Task HandleToolCallAsync(
@@ -270,31 +398,97 @@ internal static class Program
             return;
         }
 
-        if (!toolMap.ByToolName.TryGetValue(toolName, out ToolBinding? binding))
+        JsonElement arguments = GetArguments(@params);
+        string resolvedCommandId;
+        JsonElement commandInput;
+
+        if (string.Equals(toolName, "roslyn_run", StringComparison.OrdinalIgnoreCase))
         {
+            if (arguments.ValueKind != JsonValueKind.Object ||
+                !TryGetStringProperty(arguments, "command_id", out string? requestedCommandId) ||
+                string.IsNullOrWhiteSpace(requestedCommandId))
+            {
+                await WriteErrorResponseAsync(
+                    output,
+                    idNode,
+                    code: -32602,
+                    message: "Invalid params: roslyn_run requires a non-empty string 'command_id'.",
+                    dataNode: null).ConfigureAwait(false);
+                return;
+            }
+
+            resolvedCommandId = requestedCommandId.Trim();
+            if (arguments.TryGetProperty("input", out JsonElement nestedInput))
+            {
+                if (nestedInput.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null or JsonValueKind.Undefined))
+                {
+                    await WriteErrorResponseAsync(
+                        output,
+                        idNode,
+                        code: -32602,
+                        message: "Invalid params: roslyn_run 'input' must be an object.",
+                        dataNode: null).ConfigureAwait(false);
+                    return;
+                }
+
+                commandInput = nestedInput.ValueKind == JsonValueKind.Object
+                    ? nestedInput.Clone()
+                    : JsonSerializer.SerializeToElement(new { });
+            }
+            else
+            {
+                commandInput = JsonSerializer.SerializeToElement(new { });
+            }
+        }
+        else if (TryResolveSlimToolCommandId(toolName, arguments, out string? slimCommandId))
+        {
+            resolvedCommandId = slimCommandId!;
+            commandInput = arguments;
+        }
+        else if (ActiveMode == McpToolMode.Full && toolMap.ByToolName.TryGetValue(toolName, out ToolBinding? binding))
+        {
+            resolvedCommandId = binding.CommandId;
+            commandInput = arguments;
+        }
+        else
+        {
+            string hint = ActiveMode == McpToolMode.Slim
+                ? $"Unknown tool '{toolName}'. In slim mode call one of the 10 exposed tools or use 'roslyn_run' with command_id."
+                : $"Unknown tool '{toolName}'.";
             await WriteErrorResponseAsync(
                 output,
                 idNode,
                 code: -32602,
-                message: $"Unknown tool '{toolName}'.",
+                message: hint,
                 dataNode: null).ConfigureAwait(false);
             return;
         }
 
-        if (!registry.TryGet(binding.CommandId, out IAgentCommand? command) || command is null)
+        string lookupCommandId = string.Equals(resolvedCommandId, "workspace.use", StringComparison.OrdinalIgnoreCase)
+            ? "workspace.preload"
+            : resolvedCommandId;
+        if (!registry.TryGet(lookupCommandId, out IAgentCommand? command) || command is null)
         {
-            await WriteErrorResponseAsync(
-                output,
-                idNode,
-                code: -32603,
-                message: $"Command '{binding.CommandId}' is unavailable.",
-                dataNode: null).ConfigureAwait(false);
+            CommandEnvelope notFoundEnvelope = new(
+                Ok: false,
+                CommandId: resolvedCommandId,
+                Version: CommandEnvelopeVersion,
+                Data: null,
+                Errors: new[] { new CommandError("command_not_found", $"Command '{resolvedCommandId}' was not found.") },
+                TraceId: null,
+                Preview: $"{resolvedCommandId} failed",
+                Summary: $"Command '{resolvedCommandId}' was not found.",
+                Transport: new CommandTransportMetadata(Mode: "mcp"));
+            await WriteToolEnvelopeResultAsync(output, idNode, notFoundEnvelope).ConfigureAwait(false);
             return;
         }
 
-        JsonElement input = GetArguments(@params);
-        CommandEnvelope envelope = await ExecuteCommandAsync(command, binding.CommandId, input).ConfigureAwait(false);
+        CommandEnvelope envelope = await ExecuteCommandAsync(command, resolvedCommandId, commandInput).ConfigureAwait(false);
+        await WriteToolEnvelopeResultAsync(output, idNode, envelope).ConfigureAwait(false);
+    }
 
+    private static async Task WriteToolEnvelopeResultAsync(Stream output, JsonNode idNode, CommandEnvelope envelope)
+    {
         JsonObject toolResult = new()
         {
             ["content"] = new JsonArray
@@ -310,6 +504,59 @@ internal static class Program
         };
 
         await WriteResultResponseAsync(output, idNode, toolResult).ConfigureAwait(false);
+    }
+
+    private static bool TryResolveSlimToolCommandId(string toolName, JsonElement arguments, out string? commandId)
+    {
+        switch (toolName.ToLowerInvariant())
+        {
+            case "roslyn_nav_symbol":
+                // Support both solution-wide declaration jump (nav.go_to_definition via symbol or file/line/col)
+                // and file-scoped identifier lookup (nav.find_symbol via file_path + symbol_name without line).
+                bool hasFilePath = TryGetStringProperty(arguments, "file_path", out string? fp) && !string.IsNullOrWhiteSpace(fp);
+                bool hasSymbolName = TryGetStringProperty(arguments, "symbol_name", out string? sn) && !string.IsNullOrWhiteSpace(sn);
+                bool hasLine = arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty("line", out _);
+                commandId = hasFilePath && hasSymbolName && !hasLine
+                    ? "nav.find_symbol"
+                    : "nav.go_to_definition";
+                return true;
+
+            case "roslyn_nav_references":
+                commandId = "nav.find_references";
+                return true;
+
+            case "roslyn_nav_invocations":
+                commandId = "nav.find_invocations";
+                return true;
+
+            case "roslyn_nav_call_hierarchy":
+                commandId = "nav.call_hierarchy";
+                return true;
+
+            case "roslyn_nav_implementations":
+                commandId = "nav.find_implementations";
+                return true;
+
+            case "roslyn_diag_snapshot":
+                commandId = "diag.get_workspace_snapshot";
+                return true;
+
+            case "roslyn_edit_rename":
+                commandId = "edit.rename_symbol";
+                return true;
+
+            case "roslyn_edit_transaction":
+                commandId = "edit.transaction";
+                return true;
+
+            case "roslyn_edit_code_fix":
+                commandId = "edit.apply_code_fix";
+                return true;
+
+            default:
+                commandId = null;
+                return false;
+        }
     }
 
     private static async Task HandleResourceReadAsync(
@@ -463,13 +710,12 @@ internal static class Program
         JsonElement input)
     {
         Stopwatch totalTimer = Stopwatch.StartNew();
-        if (Router is not null && command.Descriptor.RunsOnHotWorkspace)
+        if (Router is not null && HotCommandRouter.ShouldRoute(command))
         {
-            // Hot-workspace commands take the shell CLI's route to the warm daemon (sub-50 ms steady state) instead of
-            // loading the solution inside this process.
+            // Route hot-workspace and workspace-lifecycle commands directly over the persistent WorkspaceHost pipe.
             try
             {
-                CommandEnvelope? routed = await Router.TryRunAsync(commandId, input, CancellationToken.None).ConfigureAwait(false);
+                CommandEnvelope? routed = await Router.TryRunAsync(command, commandId, input, CancellationToken.None).ConfigureAwait(false);
                 if (routed is not null)
                 {
                     return routed;
@@ -566,6 +812,177 @@ internal static class Program
         }
 
         return $"{envelope.CommandId}: failed";
+    }
+
+    private static JsonArray BuildSlimToolList()
+    {
+        static JsonObject Str(string? desc = null) => desc is null
+            ? new() { ["type"] = "string" }
+            : new() { ["type"] = "string", ["description"] = desc };
+        static JsonObject Int(string? desc = null) => desc is null
+            ? new() { ["type"] = "integer" }
+            : new() { ["type"] = "integer", ["description"] = desc };
+        static JsonObject Bool() => new() { ["type"] = "boolean" };
+        static JsonObject StrEnum(params string[] values)
+        {
+            JsonArray arr = new();
+            foreach (string v in values) arr.Add(v);
+            return new JsonObject { ["type"] = "string", ["enum"] = arr };
+        }
+        static JsonObject StrArray() => new()
+        {
+            ["type"] = "array",
+            ["items"] = new JsonObject { ["type"] = "string" },
+        };
+        static JsonObject Tool(string name, string desc, bool readOnly, JsonObject props, params string[] req)
+        {
+            JsonObject schema = new()
+            {
+                ["type"] = "object",
+                ["properties"] = props,
+            };
+            if (req.Length > 0)
+            {
+                JsonArray required = new();
+                foreach (string r in req) required.Add(r);
+                schema["required"] = required;
+            }
+
+            return new JsonObject
+            {
+                ["name"] = name,
+                ["description"] = desc,
+                ["inputSchema"] = schema,
+                ["annotations"] = new JsonObject { ["readOnlyHint"] = readOnly },
+            };
+        }
+
+        static void AddNavTarget(JsonObject p)
+        {
+            p["symbol"] = Str("Type.Member");
+            p["file_path"] = Str();
+            p["line"] = Int();
+            p["column"] = Int();
+        }
+
+        JsonObject navSymbol = new();
+        AddNavTarget(navSymbol);
+        navSymbol["symbol_name"] = Str("File lookup");
+        navSymbol["brief"] = Bool();
+        navSymbol["max_results"] = Int();
+
+        JsonObject navRefs = new();
+        AddNavTarget(navRefs);
+        navRefs["include_declaration"] = Bool();
+        navRefs["max_results"] = Int();
+        navRefs["context_lines"] = Int();
+
+        JsonObject navInvoc = new();
+        AddNavTarget(navInvoc);
+        navInvoc["brief"] = Bool();
+        navInvoc["max_results"] = Int();
+        navInvoc["include_object_creations"] = Bool();
+
+        JsonObject navHier = new();
+        AddNavTarget(navHier);
+        navHier["direction"] = StrEnum("incoming", "outgoing", "both");
+        navHier["max_depth"] = Int("Default 1 (1..8)");
+        navHier["max_nodes"] = Int();
+        navHier["max_edges"] = Int();
+        navHier["brief"] = Bool();
+
+        JsonObject navImpl = new();
+        AddNavTarget(navImpl);
+        navImpl["max_results"] = Int();
+
+        JsonObject diagSnap = new()
+        {
+            ["directory_path"] = Str(),
+            ["workspace_path"] = Str(),
+            ["file_paths"] = StrArray(),
+            ["mode"] = StrEnum("compact", "raw", "guided"),
+            ["brief"] = Bool(),
+            ["include_diagnostics"] = Bool(),
+            ["severity_filter"] = StrArray(),
+            ["max_diagnostics"] = Int(),
+            ["require_workspace"] = Bool(),
+        };
+
+        JsonObject editRename = new()
+        {
+            ["file_path"] = Str(),
+            ["line"] = Int(),
+            ["column"] = Int(),
+            ["new_name"] = Str(),
+            ["apply"] = Bool(),
+            ["max_diagnostics"] = Int(),
+        };
+
+        JsonObject editTxOpProps = new()
+        {
+            ["kind"] = StrEnum("replace_text", "insert_text", "replace_span", "set_content"),
+            ["file_path"] = Str(),
+            ["old_text"] = Str(),
+            ["new_text"] = Str(),
+            ["expected_text"] = Str(),
+            ["anchor_text"] = Str(),
+            ["position"] = StrEnum("before", "after"),
+            ["start_line"] = Int(),
+            ["start_column"] = Int(),
+            ["end_line"] = Int(),
+            ["end_column"] = Int(),
+            ["new_content"] = Str(),
+            ["replace_all"] = Bool(),
+        };
+        JsonObject editTx = new()
+        {
+            ["operations"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = editTxOpProps,
+                    ["required"] = new JsonArray { "kind" },
+                },
+            },
+            ["file_path"] = Str(),
+            ["apply"] = Bool(),
+            ["atomic"] = Bool(),
+            ["include_diagnostics"] = Bool(),
+            ["max_diagnostics"] = Int(),
+        };
+
+        JsonObject editFix = new()
+        {
+            ["file_path"] = Str(),
+            ["diagnostic_id"] = Str("e.g. CS0246"),
+            ["line"] = Int(),
+            ["column"] = Int(),
+            ["fix_title"] = Str(),
+            ["apply"] = Bool(),
+            ["max_diagnostics"] = Int(),
+        };
+
+        JsonObject runGeneric = new()
+        {
+            ["command_id"] = Str("ctx.*, nav.*, analyze.*, edit.*, repair.*, query.batch, workspace.*"),
+            ["input"] = new JsonObject { ["type"] = "object" },
+        };
+
+        return new JsonArray
+        {
+            Tool("roslyn_nav_symbol", "Go to definition (symbol or file/line/col) or find symbol_name in file.", readOnly: true, navSymbol),
+            Tool("roslyn_nav_references", "Find solution-wide semantic references.", readOnly: true, navRefs),
+            Tool("roslyn_nav_invocations", "Find call sites and object creations.", readOnly: true, navInvoc),
+            Tool("roslyn_nav_call_hierarchy", "Call graph (default max_depth=1; includes interface callers).", readOnly: true, navHier),
+            Tool("roslyn_nav_implementations", "Find implementing types/members and derived interfaces.", readOnly: true, navImpl),
+            Tool("roslyn_diag_snapshot", "Multi-project Roslyn compiler diagnostics snapshot.", readOnly: true, diagSnap),
+            Tool("roslyn_edit_rename", "Solution-wide Roslyn symbol rename (with XML crefs).", readOnly: false, editRename, "file_path", "line", "column", "new_name"),
+            Tool("roslyn_edit_transaction", "Atomic multi-file edits with post-edit diagnostics.", readOnly: false, editTx, "operations"),
+            Tool("roslyn_edit_code_fix", "Discover or apply Roslyn CodeFixProvider fixes.", readOnly: false, editFix, "file_path"),
+            Tool("roslyn_run", "Run any RoslynSkills command by command_id (ctx.*, nav.*, query.batch, workspace.*).", readOnly: false, runGeneric, "command_id"),
+        };
     }
 
     private static JsonArray BuildToolList(ToolMap toolMap)
@@ -840,7 +1257,7 @@ internal static class Program
             properties["column"] = IntProperty("1-based column number for method anchor.", 1);
             properties["symbol"] = StringProperty("Optional Type.Member symbol name (with optional parameter types) resolved across the loaded workspace instead of file_path/line/column.");
             properties["direction"] = StringProperty("Hierarchy direction: incoming, outgoing, or both.");
-            properties["max_depth"] = IntProperty("Maximum recursive depth.", 1);
+            properties["max_depth"] = IntProperty("Maximum recursive depth (default 1, range 1..8).", 1);
             properties["max_nodes"] = IntProperty("Maximum nodes returned.", 1);
             properties["max_edges"] = IntProperty("Maximum edges returned.", 1);
             properties["brief"] = BoolProperty("Return compact node/edge payload.");
@@ -1038,6 +1455,7 @@ internal static class Program
             properties["max_members"] = IntProperty("Maximum member declarations returned.", 1);
             properties["type_name_contains"] = StringProperty("Optional case-insensitive type-name substring filter.");
             properties["member_name_contains"] = StringProperty("Optional case-insensitive member-name/signature substring filter; useful for huge test files.");
+            properties["workspace_handle"] = StringProperty("Optional hot workspace handle for cached syntax tree lookup.");
             required.Add("file_path");
             return;
         }
@@ -1100,6 +1518,51 @@ internal static class Program
             properties["workspace_handle"] = StringProperty("Optional handle returned by workspace.preload. Prefer this for repeated hot-workspace diagnostic calls.");
             properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
             required.Add("file_path");
+            return;
+        }
+
+        if (string.Equals(commandId, "diag.get_workspace_snapshot", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["directory_path"] = StringProperty("Optional directory scope to filter diagnostics.");
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj/.vbproj path.");
+            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
+            properties["file_paths"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Optional explicit file paths.",
+            };
+            properties["mode"] = StringProperty("Output mode: compact, raw, or guided.");
+            properties["brief"] = BoolProperty("Return compact summary payload.");
+            properties["include_diagnostics"] = BoolProperty("Include diagnostic entries in response.");
+            properties["severity_filter"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Optional severity filter (Error, Warning, Info, Hidden).",
+            };
+            properties["max_diagnostics"] = IntProperty("Maximum diagnostics returned.", 1);
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            return;
+        }
+
+        if (string.Equals(commandId, "edit.transaction", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(commandId, "edit.batch_exact", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["operations"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["description"] = "Atomic edit operations (replace_text, insert_text, replace_span, set_content).",
+            };
+            properties["file_path"] = StringProperty("Optional default file path inherited by operations omitting file_path.");
+            properties["apply"] = BoolProperty("When false, run as dry-run.");
+            properties["atomic"] = BoolProperty("When true, skip writing files if any operation fails.");
+            properties["include_diagnostics"] = BoolProperty("Include post-edit diagnostics.");
+            properties["max_diagnostics"] = IntProperty("Maximum post-edit diagnostics returned.", 1);
+            properties["workspace_path"] = StringProperty("Optional .sln/.slnx/.csproj path.");
+            properties["workspace_handle"] = StringProperty("Optional hot workspace handle.");
+            properties["require_workspace"] = BoolProperty("When true, fail closed if workspace resolution falls back to ad_hoc.");
+            required.Add("operations");
             return;
         }
 
@@ -1249,7 +1712,7 @@ internal static class Program
                 "roslyn://command/ctx.member_source?file_path=Target.vb&line=22&column=17&mode=body&brief=true",
                 "roslyn://command/nav.go_to_definition?file_path=Target.cs&line=12&column=15&brief=true",
                 "roslyn://command/nav.find_invocations?file_path=Target.cs&line=12&column=15&brief=true",
-                "roslyn://command/nav.call_hierarchy?file_path=Target.cs&line=12&column=15&direction=both&max_depth=2&brief=true",
+                "roslyn://command/nav.call_hierarchy?file_path=Target.cs&line=12&column=15&direction=both&max_depth=1&brief=true",
                 "roslyn://command/nav.call_path?source_file_path=Caller.cs&source_line=12&source_column=15&target_file_path=Target.cs&target_line=48&target_column=18&max_depth=8&brief=true",
                 "roslyn://command/analyze.unused_private_symbols?workspace_path=src&brief=true&max_symbols=100",
                 "roslyn://command/analyze.control_flow_graph?file_path=Target.cs&line=12&column=15&brief=true&max_blocks=120&max_edges=260",

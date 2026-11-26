@@ -25,14 +25,24 @@ internal static class CliBridge
     private static readonly object LoadLock = new();
     private static object? _application;
     private static MethodInfo? _runAsync;
+    private static MethodInfo? _runAsyncWithFormat;
     private static string? _loadFailure;
     private static bool _loadAttempted;
+
+    public static Task<CliBridgeResult> RunAsync(
+        ICommandRegistry registry,
+        IReadOnlyList<string> args,
+        string workingDirectory,
+        IReadOnlyDictionary<string, string> environment,
+        CancellationToken cancellationToken)
+        => RunAsync(registry, args, workingDirectory, environment, defaultCompactJson: true, cancellationToken);
 
     public static async Task<CliBridgeResult> RunAsync(
         ICommandRegistry registry,
         IReadOnlyList<string> args,
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,
+        bool defaultCompactJson,
         CancellationToken cancellationToken)
     {
         string? ineligible = CheckEligibility(registry, args, workingDirectory);
@@ -41,7 +51,7 @@ internal static class CliBridge
             return new CliBridgeResult(false, 0, string.Empty, string.Empty, ineligible);
         }
 
-        if (!TryLoad(registry, out object? application, out MethodInfo? runAsync, out string? loadFailure))
+        if (!TryLoad(registry, out object? application, out MethodInfo? runAsync, out MethodInfo? runAsyncWithFormat, out string? loadFailure))
         {
             return new CliBridgeResult(false, 0, string.Empty, string.Empty, loadFailure);
         }
@@ -56,9 +66,13 @@ internal static class CliBridge
 
             using StringWriter stdout = new();
             using StringWriter stderr = new();
-            Task<int> run = (Task<int>)runAsync!.Invoke(
-                application,
-                new object?[] { args.ToArray(), stdout, stderr, cancellationToken, TextReader.Null })!;
+            Task<int> run = runAsyncWithFormat is not null
+                ? (Task<int>)runAsyncWithFormat.Invoke(
+                    application,
+                    new object?[] { args.ToArray(), stdout, stderr, cancellationToken, TextReader.Null, (bool?)defaultCompactJson })!
+                : (Task<int>)runAsync!.Invoke(
+                    application,
+                    new object?[] { args.ToArray(), stdout, stderr, cancellationToken, TextReader.Null })!;
             int exitCode = await run.ConfigureAwait(false);
             return new CliBridgeResult(true, exitCode, stdout.ToString(), stderr.ToString(), null);
         }
@@ -94,8 +108,28 @@ internal static class CliBridge
             return "working directory does not exist on the host";
         }
 
-        string verb = args[0];
-        int commandIndex = string.Equals(verb, "run", StringComparison.Ordinal) ? 1 : 0;
+        int verbIndex = 0;
+        while (verbIndex < args.Count &&
+               (string.Equals(args[verbIndex], "--compact-json", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[verbIndex], "--pretty-json", StringComparison.OrdinalIgnoreCase)))
+        {
+            verbIndex++;
+        }
+
+        if (verbIndex >= args.Count)
+        {
+            return "no command id";
+        }
+
+        string verb = args[verbIndex];
+        int commandIndex = string.Equals(verb, "run", StringComparison.Ordinal) ? verbIndex + 1 : verbIndex;
+        while (commandIndex < args.Count &&
+               (string.Equals(args[commandIndex], "--compact-json", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[commandIndex], "--pretty-json", StringComparison.OrdinalIgnoreCase)))
+        {
+            commandIndex++;
+        }
+
         if (commandIndex >= args.Count)
         {
             return "no command id";
@@ -156,7 +190,12 @@ internal static class CliBridge
         => name.StartsWith("ROSCLI_", StringComparison.Ordinal) ||
            name.StartsWith("ROSLYNSKILLS_", StringComparison.Ordinal);
 
-    private static bool TryLoad(ICommandRegistry registry, out object? application, out MethodInfo? runAsync, out string? failure)
+    private static bool TryLoad(
+        ICommandRegistry registry,
+        out object? application,
+        out MethodInfo? runAsync,
+        out MethodInfo? runAsyncWithFormat,
+        out string? failure)
     {
         lock (LoadLock)
         {
@@ -177,7 +216,10 @@ internal static class CliBridge
                         MethodInfo? method = type?.GetMethod(
                             "RunAsync",
                             new[] { typeof(string[]), typeof(TextWriter), typeof(TextWriter), typeof(CancellationToken), typeof(TextReader) });
-                        if (type is null || method is null)
+                        MethodInfo? methodWithFormat = type?.GetMethod(
+                            "RunAsync",
+                            new[] { typeof(string[]), typeof(TextWriter), typeof(TextWriter), typeof(CancellationToken), typeof(TextReader), typeof(bool?) });
+                        if (type is null || (method is null && methodWithFormat is null))
                         {
                             _loadFailure = "CliApplication.RunAsync was not found";
                         }
@@ -185,6 +227,7 @@ internal static class CliBridge
                         {
                             _application = Activator.CreateInstance(type, registry);
                             _runAsync = method;
+                            _runAsyncWithFormat = methodWithFormat;
                         }
                     }
                 }
@@ -196,6 +239,7 @@ internal static class CliBridge
 
             application = _application;
             runAsync = _runAsync;
+            runAsyncWithFormat = _runAsyncWithFormat;
             failure = _application is null ? _loadFailure ?? "CLI bridge unavailable" : null;
             return _application is not null;
         }

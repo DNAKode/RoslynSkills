@@ -145,13 +145,13 @@ internal static class Program
                 continue;
             }
 
-            bool shouldExit = await HandleRequestLineAsync(registry, output, line, shutdownCts.Token).ConfigureAwait(false);
+            (bool shouldExit, bool keepAlive) = await HandleRequestLineAsync(registry, output, line, shutdownCts.Token).ConfigureAwait(false);
             if (shouldExit)
             {
                 return true;
             }
 
-            if (singleRequest)
+            if (singleRequest && !keepAlive)
             {
                 return false;
             }
@@ -852,7 +852,7 @@ internal static class Program
         }
     }
 
-    private static async Task<bool> HandleRequestLineAsync(
+    private static async Task<(bool ShouldExit, bool KeepAlive)> HandleRequestLineAsync(
         ICommandRegistry registry,
         TextWriter writer,
         string line,
@@ -861,6 +861,7 @@ internal static class Program
         Stopwatch stopwatch = Stopwatch.StartNew();
         string requestId = string.Empty;
         string method = string.Empty;
+        bool keepAlive = false;
         Interlocked.Increment(ref ActiveRequestCount);
         bool countedAsActivity = false;
 
@@ -871,6 +872,7 @@ internal static class Program
 
             requestId = GetStringProperty(root, "id") ?? string.Empty;
             method = ResolveMethod(root);
+            keepAlive = GetBoolProperty(root, "keep_alive", defaultValue: false);
             if (string.IsNullOrWhiteSpace(method))
             {
                 await WriteErrorResponseAsync(
@@ -881,7 +883,7 @@ internal static class Program
                     "Request must include 'method' or a top-level 'command_id'.",
                     "host/handshake",
                     stopwatch).ConfigureAwait(false);
-                return false;
+                return (false, keepAlive);
             }
 
             if (!IsAuthorized(root, method))
@@ -894,7 +896,7 @@ internal static class Program
                     "Workspace host request did not include the expected auth token.",
                     "host/handshake",
                     stopwatch).ConfigureAwait(false);
-                return false;
+                return (false, false);
             }
 
             if (!string.Equals(method, WorkspaceHostProtocol.Method.DaemonStatus, StringComparison.Ordinal) &&
@@ -909,11 +911,11 @@ internal static class Program
             {
                 case WorkspaceHostProtocol.Method.Handshake:
                     await HandleHandshakeAsync(writer, requestId, method, stopwatch).ConfigureAwait(false);
-                    return false;
+                    return (false, keepAlive);
 
                 case WorkspaceHostProtocol.Method.DaemonStatus:
                     await HandleDaemonStatusAsync(writer, requestId, method, stopwatch).ConfigureAwait(false);
-                    return false;
+                    return (false, keepAlive);
 
                 case WorkspaceHostProtocol.Method.Shutdown:
                     Log($"shutdown_requested pid={Environment.ProcessId}");
@@ -926,15 +928,15 @@ internal static class Program
                         {
                             shutting_down = true,
                         }).ConfigureAwait(false);
-                    return true;
+                    return (true, false);
 
                 case WorkspaceHostProtocol.Method.CliRun:
                     await HandleCliRunAsync(registry, writer, root, requestId, method, stopwatch, cancellationToken).ConfigureAwait(false);
-                    return false;
+                    return (false, keepAlive);
 
                 case WorkspaceHostProtocol.Method.ToolList:
                     await HandleToolListAsync(registry, writer, requestId, method, stopwatch).ConfigureAwait(false);
-                    return false;
+                    return (false, keepAlive);
 
                 case WorkspaceHostProtocol.Method.ToolCall:
                     await HandleToolCallAsync(
@@ -946,7 +948,7 @@ internal static class Program
                         ResolveCommandId(root, method),
                         stopwatch,
                         cancellationToken).ConfigureAwait(false);
-                    return false;
+                    return (false, keepAlive);
 
                 default:
                     if (WorkspaceMethodCommandMap.TryGetValue(method, out string? workspaceCommandId))
@@ -960,7 +962,7 @@ internal static class Program
                             workspaceCommandId,
                             stopwatch,
                             cancellationToken).ConfigureAwait(false);
-                        return false;
+                        return (false, keepAlive);
                     }
 
                     await WriteErrorResponseAsync(
@@ -971,7 +973,7 @@ internal static class Program
                         $"Unsupported method '{method}'. Supported methods: {string.Join(", ", SupportedMethods())}.",
                         "host/handshake",
                         stopwatch).ConfigureAwait(false);
-                    return false;
+                    return (false, keepAlive);
             }
         }
         catch (JsonException ex)
@@ -984,7 +986,7 @@ internal static class Program
                 $"Request JSON parse failed: {ex.Message}",
                 "host/handshake",
                 stopwatch).ConfigureAwait(false);
-            return false;
+            return (false, keepAlive);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -996,7 +998,7 @@ internal static class Program
                 "Workspace host is shutting down.",
                 "daemon/status",
                 stopwatch).ConfigureAwait(false);
-            return false;
+            return (false, false);
         }
         catch (Exception ex)
         {
@@ -1009,7 +1011,7 @@ internal static class Program
                 ex.Message,
                 "daemon/status",
                 stopwatch).ConfigureAwait(false);
-            return false;
+            return (false, keepAlive);
         }
         finally
         {
@@ -1040,6 +1042,7 @@ internal static class Program
                 "tool.list",
                 "tool.call",
                 "cli.run",
+                "persistent-connection",
                 "workspace.preload",
                 "workspace.status",
                 "workspace.refresh",
@@ -1104,6 +1107,7 @@ internal static class Program
         List<string> args = new();
         string cwd = string.Empty;
         Dictionary<string, string> env = new(StringComparer.Ordinal);
+        bool stdoutRedirected = true;
         if (TryGetProperty(root, "input", out JsonElement input) && input.ValueKind == JsonValueKind.Object)
         {
             if (TryGetProperty(input, "args", out JsonElement argsElement) && argsElement.ValueKind == JsonValueKind.Array)
@@ -1115,6 +1119,7 @@ internal static class Program
             }
 
             cwd = GetStringProperty(input, "cwd") ?? string.Empty;
+            stdoutRedirected = GetBoolProperty(input, "stdout_redirected", defaultValue: true);
             if (TryGetProperty(input, "env", out JsonElement envElement) && envElement.ValueKind == JsonValueKind.Object)
             {
                 foreach (JsonProperty property in envElement.EnumerateObject())
@@ -1127,7 +1132,7 @@ internal static class Program
             }
         }
 
-        CliBridgeResult result = await CliBridge.RunAsync(registry, args, cwd, env, cancellationToken).ConfigureAwait(false);
+        CliBridgeResult result = await CliBridge.RunAsync(registry, args, cwd, env, stdoutRedirected, cancellationToken).ConfigureAwait(false);
         if (!result.Eligible)
         {
             await WriteErrorResponseAsync(
