@@ -7,8 +7,8 @@ using RoslynSkills.Core.Commands;
 namespace RoslynSkills.FastClient;
 
 /// <summary>
-/// <c>roscli-fast</c>: forwards a roscli invocation to the warm daemon of the current repository and prints exactly what
-/// the full CLI would. See the project file for the contract; every doubt falls back to the full CLI.
+/// <c>roscli</c>: forwards a roscli invocation to the warm daemon of the current repository and prints exactly what
+/// <c>roscli-slow</c> (the full managed CLI) would. Anything it cannot serve falls back to <c>roscli-slow</c>.
 /// </summary>
 internal static class Program
 {
@@ -177,7 +177,7 @@ internal static class Program
         string? fullCli = FindFullCli();
         if (fullCli is null)
         {
-            Console.Error.WriteLine("roscli-fast: no daemon answered and the full roscli was not found. Set ROSCLI_FULL_PATH to its location.");
+            Console.Error.WriteLine("roscli: no daemon answered and roscli-slow was not found. Set ROSCLI_FULL_PATH to its location.");
             return 127;
         }
 
@@ -203,8 +203,8 @@ internal static class Program
 
         string self = Path.GetFullPath(Environment.ProcessPath ?? string.Empty);
         string[] names = OperatingSystem.IsWindows()
-            ? new[] { "roscli-full.exe", "roscli.exe", "RoslynSkills.Cli.exe" }
-            : new[] { "roscli-full", "roscli", "RoslynSkills.Cli" };
+            ? new[] { "roscli-slow.exe", "roscli-full.exe", "RoslynSkills.Cli.exe", "roscli.exe" }
+            : new[] { "roscli-slow", "roscli-full", "RoslynSkills.Cli", "roscli" };
         string? selfDirectory = Path.GetDirectoryName(self);
         IEnumerable<string> directories = (selfDirectory is null ? Array.Empty<string>() : new[] { selfDirectory })
             .Concat((Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries));

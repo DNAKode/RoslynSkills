@@ -26,6 +26,10 @@ public sealed class Pass6McpMultiWorktreeTests
                 {
                     string instructions = initResp.RootElement.GetProperty("result").GetProperty("instructions").GetString() ?? string.Empty;
                     Assert.Contains("workspace_path", instructions, StringComparison.Ordinal);
+                    Assert.Contains("roslyn_context", instructions, StringComparison.Ordinal);
+                    Assert.Contains("roslyn_search", instructions, StringComparison.Ordinal);
+                    Assert.Contains("roslyn_diag_snapshot", instructions, StringComparison.Ordinal);
+                    Assert.Contains("command_id", instructions, StringComparison.Ordinal);
                 }
 
                 (JsonDocument listResp, int listBytes) = await SendMcpWithSizeAsync(slimMcp, 2, "tools/list", new { });

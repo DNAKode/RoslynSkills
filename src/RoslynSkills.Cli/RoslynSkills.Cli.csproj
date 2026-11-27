@@ -12,7 +12,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackAsTool>true</PackAsTool>
-    <ToolCommandName>roscli</ToolCommandName>
+    <ToolCommandName>roscli-slow</ToolCommandName>
     <PackageId>DNAKode.RoslynSkills.Cli</PackageId>
     <Authors>DNA Kode</Authors>
     <Description>Roslyn-native agentic coding CLI primitives for C# workflows.</Description>

@@ -60,7 +60,7 @@ public sealed class Pass5CliAndMcpTests
         string root = Path.Combine(Path.GetTempPath(), $"roslynskills-p5-fast-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(root, "Lib"));
         string cliDll = typeof(CliApplication).Assembly.Location;
-        string fastDll = ResolveSiblingDll("RoslynSkills.FastClient", "roscli-fast.dll");
+        string fastDll = ResolveSiblingDll("RoslynSkills.FastClient", "roscli.dll");
 
         try
         {

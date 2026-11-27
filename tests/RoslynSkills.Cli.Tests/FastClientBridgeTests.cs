@@ -141,11 +141,11 @@ public sealed class FastClientBridgeTests
                 }
             }
 
-            // Lifecycle verbs are not served by the bridge: the client hands them to the full CLI.
+            // Lifecycle verbs are not served by the bridge: the client hands them to roscli-slow.
             (int statusExit, _, string statusErr) = await RunAsync(fastDll, root, new[] { "daemon.status" }, daemonMode: "auto",
                 environmentOverrides: new Dictionary<string, string> { ["PATH"] = emptyBin, ["ROSCLI_FULL_PATH"] = Path.Combine(emptyBin, "missing") });
             Assert.Equal(127, statusExit);
-            Assert.Contains("full roscli was not found", statusErr, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("roscli-slow was not found", statusErr, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -196,7 +196,7 @@ public sealed class FastClientBridgeTests
 
     private static string ResolveFastClientDll()
     {
-        string sibling = Path.Combine(AppContext.BaseDirectory, "roscli-fast.dll");
+        string sibling = Path.Combine(AppContext.BaseDirectory, "roscli.dll");
         if (File.Exists(sibling))
         {
             return sibling;
@@ -212,7 +212,7 @@ public sealed class FastClientBridgeTests
             {
                 foreach (string config in configs)
                 {
-                    string candidate = Path.Combine(current.FullName, "src", "RoslynSkills.FastClient", "bin", config, "net10.0", "roscli-fast.dll");
+                    string candidate = Path.Combine(current.FullName, "src", "RoslynSkills.FastClient", "bin", config, "net10.0", "roscli.dll");
                     if (File.Exists(candidate))
                     {
                         return candidate;
@@ -223,7 +223,7 @@ public sealed class FastClientBridgeTests
             current = current.Parent;
         }
 
-        throw new FileNotFoundException("roscli-fast.dll was not built; build RoslynSkills.slnx first.");
+        throw new FileNotFoundException("roscli.dll was not built; build RoslynSkills.slnx first.");
     }
 
     private static async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(

@@ -17,13 +17,13 @@ Why:
 Scoped directory snapshot (brief, multi-project):
 
 ```powershell
-roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
+roscli diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
 File diagnostics (workspace-bound):
 
 ```powershell
-roscli-fast diag.get_file_diagnostics src/MyFile.cs --workspace-path MySolution.slnx --require-workspace true
+roscli diag.get_file_diagnostics src/MyFile.cs --workspace-path MySolution.slnx --require-workspace true
 ```
 
 ## Failure Patterns

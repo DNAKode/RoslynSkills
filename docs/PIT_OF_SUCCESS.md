@@ -8,7 +8,7 @@ Status: active onboarding contract (`0.1.6-preview.33`; empirical comparison in 
 RoslynSkills should make the safest high-value workflow the easiest workflow for agents:
 
 1. use the right lane (**text/overlay first, compound mindspace second, scoped diag third**),
-2. bind the hot solution once (`workspace.use <slnx> --require-solution true [--wait-warmup true]`) and use `roscli-fast` (`ROSCLI_DAEMON=required`),
+2. bind the hot solution once (`workspace.use <slnx> --require-solution true [--wait-warmup true]`) and run `roscli` (`ROSCLI_DAEMON=required`; `roscli` is the NativeAOT fast client that auto-falls back to `roscli-slow`),
 3. collapse search + read + nav + diag chains with `ctx.symbol_context --symbol Type.Member`, syntax-filtered `ctx.search_text --syntax-filter code|declarations|invocations`, and zero-disk `ctx.read_window`,
 4. guard multi-file edits with `expected_sha256` / `expected_file_hashes` on atomic `edit.transaction` (`edit.batch_exact`) and verify with scoped `diag.get_workspace_snapshot --directory-path` before full `dotnet build`/`test`.
 
@@ -21,9 +21,9 @@ Measured against the 33-project `CalcDb.slnx` solution (`0.1.6-preview.33`; see 
 | Channel / Tool | When To Use | Warm Speed & Cost Profile | Guardrail |
 |---|---|---|---|
 | **Built-in `rg` + `read_file`** | Non-C# files (`.md`, `.slnx`, `.csproj`, `.json`), raw error codes/docs, or quick slices when no daemon is bound | `~66–116 ms`; `0` schema/warmup tax | Do not grep common/overloaded C# names (`Execute` `50K` tok, `Kind` `23K` tok) or infer interface callers by text. |
-| **`roscli-fast.exe` + `WorkspaceHost` + Overlay Index** | **Default C# semantic & overlay lane:** `ctx.symbol_context --symbol` (1-call mindspace), `ctx.search_text --syntax-filter code\|declarations\|invocations` (zero-disk trigram/token overlay + batched `queries`), `ctx.read_window` (zero-disk + SHA-256 + batched `windows`), `--symbol`/`--symbols` `nav.*`, `--symbol` `edit.rename_symbol`/`edit.change_signature`, atomic SHA-256 `edit.transaction`, scoped `diag.get_workspace_snapshot` | **`~54–71 ms`** wall (`0.2–17 ms` host exec; `58 ms` overlay search beats `rg` `95 ms`!); compact JSON on redirected stdout (`--pretty-json` opt-in); `0` per-turn schema tax | Bind once (`workspace.use <slnx> --require-solution true`; add `--wait-warmup true` when deterministic warm latency matters), set `ROSCLI_DAEMON=required`, and stop only your own daemon (`daemon.stop`) at closeout. |
-| **`roscli` (.NET CLI) + `WorkspaceHost`** | Fallback when `roscli-fast.exe` is unavailable (or for CLI-only verbs / `--input-stdin`) | `~365–465 ms` warm (`~330 ms` CLR spawn) | Prefer `roscli-fast.exe` for multi-call loops. |
-| **`RoslynSkills.McpServer --mode slim`** | Stdio MCP environments | Direct persistent `WorkspaceHost` pipe (`auto-bind` on first workspace call); **`4.8–15.6 ms` warm** (`roslyn_search` `6.6 ms`, `roslyn_context` `13.3–15.6 ms`, `ctx.read_window` `4.8 ms`); **`6,016 B` (`~1.5K` tok/turn)** across `12` descriptor-driven tools | Use `--mode slim` instead of `--mode full` (`61` complete-schema tools, `90.5 KB`); `--mode full` stays available for backward compatibility. |
+| **`roscli` (NativeAOT) + `WorkspaceHost` + Overlay Index** | **Default C# semantic & overlay lane:** `ctx.symbol_context --symbol` (1-call mindspace), `ctx.search_text --syntax-filter code\|declarations\|invocations` (zero-disk trigram/token overlay + batched `queries`), `ctx.read_window` (zero-disk + SHA-256 + batched `windows`), `--symbol`/`--symbols` `nav.*`, `--symbol` `edit.rename_symbol`/`edit.change_signature`, atomic SHA-256 `edit.transaction`, scoped `diag.get_workspace_snapshot` | **`~54–71 ms`** wall (`0.2–17 ms` host exec; `58 ms` overlay search beats `rg` `95 ms`!); compact JSON on redirected stdout (`--pretty-json` opt-in); `0` per-turn schema tax | Bind once (`workspace.use <slnx> --require-solution true`; add `--wait-warmup true` when deterministic warm latency matters), set `ROSCLI_DAEMON=required`, and stop only your own daemon (`daemon.stop`) at closeout. |
+| **`roscli-slow` (managed .NET CLI) + `WorkspaceHost`** | Automatic fallback invoked by `roscli` when cold or for lifecycle/help/`--input-stdin` commands | `~365–465 ms` warm (`~330 ms` CLR spawn) | Rarely invoked directly once `%LOCALAPPDATA%\RoslynSkills\bin\roscli.exe` is on PATH. |
+| **`RoslynSkills.McpServer --mode slim`** | Stdio MCP environments | Direct persistent `WorkspaceHost` pipe (`auto-bind` on first workspace call); **`4.8–15.6 ms` warm** (`roslyn_search` `6.6 ms`, `roslyn_context` `13.3–15.6 ms`, `ctx.read_window` `4.8 ms`); **`~6 KB` (`~1.5K` tok/turn)** across `12` descriptor-driven tools + inline parameter cheat-sheet in `instructions` (no schema-read turn needed) | Use `--mode slim` instead of `--mode full` (`61` complete-schema tools, `90.5 KB`); pass `workspace_path` in git worktrees. |
 | **External C# LSP (`csharp-ls`, `Roslyn LSP`)** | Interactive IDE viewports only | `Roslyn LSP`: `~515 ms` refs, `0` interface callers (`854z`); `csharp-ls`: `.NET 11` reference breaks & false diagnostics | Never trust LSP results before `projectInitializationComplete`, and do not treat `csharp-ls` diagnostics/refs as truth on multi-TFM `.slnx` repos. |
 | **`dotnet build` / `dotnet test`** | Final verification gate | `~47–233 s` on large solutions | Run `diag.get_workspace_snapshot --directory-path <dir>` (`~104–240 ms`) first so broken compiles fail fast. |
 
@@ -93,12 +93,12 @@ roscli edit.claim release <claim_id>
 Start with `ctx.symbol_context --symbol Type.Member` to get definition source (zero-disk), `file_sha256`, references, interface-aware callers, callees, implementations, and file diagnostics in **1 call** (`~64 ms` CLI / `~14 ms` MCP). Use syntax-filtered `ctx.search_text` and zero-disk `ctx.read_window` on the bound overlay index, `--symbols` for multi-symbol reference/invocation batches, and `--symbol` directly on `edit.rename_symbol`, `edit.change_signature`, and `nav.call_path`:
 
 ```text
-roscli-fast ctx.symbol_context --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --brief true
-roscli-fast ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
-roscli-fast ctx.read_window src/MyProject/File.cs 1 100
-roscli-fast nav.find_references --symbols MyNamespace.DeferredCatalogCommit.Kind,MyNamespace.SchemaWriter.CreateTable --max-results 50
-roscli-fast nav.call_path --source-symbol MyNamespace.App.Entry --target-symbol MyNamespace.Store.Flush
-roscli-fast edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
+roscli ctx.symbol_context --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --brief true
+roscli ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
+roscli ctx.read_window src/MyProject/File.cs 1 100
+roscli nav.find_references --symbols MyNamespace.DeferredCatalogCommit.Kind,MyNamespace.SchemaWriter.CreateTable --max-results 50
+roscli nav.call_path --source-symbol MyNamespace.App.Entry --target-symbol MyNamespace.Store.Flush
+roscli edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
 ```
 
 `nav.call_hierarchy` defaults to `--max-depth 1` (opt in to `--max-depth 2..8` only when multi-hop traversal is needed, since `depth=2` on high-fan-in methods can exceed 100 KB / ~31K tokens); interface-dispatched edges surface `edges[].implemented_member`. Prefer `ctx.symbol_context` over `analyze.impact_slice` on high-frequency names (`Kind`, `Execute`).
@@ -106,9 +106,9 @@ roscli-fast edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name Ne
 ### 3) Safe symbol rename
 
 ```text
-roscli-fast nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
-roscli-fast edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true
-roscli-fast diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true
+roscli nav.find_symbol src/MyProject/Program.cs Process --brief true --max-results 20 --workspace-path MySolution.slnx --require-workspace true
+roscli edit.rename_symbol src/MyProject/Program.cs 42 17 Handle --apply true --workspace-path MySolution.slnx --require-workspace true
+roscli diag.get_file_diagnostics src/MyProject/Program.cs --workspace-path MySolution.slnx --require-workspace true
 ```
 
 ### 4) Create new file in one shot

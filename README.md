@@ -24,7 +24,7 @@ Text-first workflows are fast at first, then degrade on:
 - low-churn calls for agents (`--brief true`, `--symbol Type.Member`, `query.batch`, `nav.find_symbol_batch`)
 
 Canonical pit-of-success guide: [docs/PIT_OF_SUCCESS.md](docs/PIT_OF_SUCCESS.md)  
-Empirical harness & benchmark study (`0.1.6-preview.31`–`0.1.6-preview.33`): [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md) (CLI + NativeAOT `roscli-fast.exe` + `WorkspaceHost` overlay index & mindspace vs. LSP vs. MCP vs. `rg` on the 33-project `CalcDb.slnx` codebase)
+Empirical harness & benchmark study (`0.1.6-preview.31`–`0.1.6-preview.33`): [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md) (NativeAOT `roscli.exe` + `WorkspaceHost` overlay index & mindspace + `RoslynSkills.McpServer --mode slim` vs. LSP vs. `rg` on the 33-project `CalcDb.slnx` codebase)
 
 ## Start in 5 Minutes
 
@@ -60,15 +60,15 @@ roscli daemon.run --repo-root .
 
 2. **Self-managed detached host (`roscli workspace.use` / `roscli daemon.start`):** reuses any live host for the workspace key (guarded by a per-key lock), otherwise launches detached (`CREATE_BREAKAWAY_FROM_JOB` on Windows when allowed; when breakaway is refused, logs a warning with the caller's job flags and process chain to both the response and `<hash>.log` and uses WMI `Win32_Process.Create`, unless `ROSCLI_DAEMON_LAUNCH=nodetach` or `--nodetach` keeps it inside the caller job with `daemon_lifetime: "caller_job"`). Detached hosts are bounded by an idle timeout (default 30 min; `ROSLYNSKILLS_DAEMON_IDLE_TIMEOUT_MINUTES` / `--idle-timeout-minutes`) and a per-user host cap (default 8; `ROSLYNSKILLS_MAX_DAEMON_HOSTS`). Inspect active hosts with `roscli daemon.list` and clean up missing-worktree or all hosts with `roscli daemon.prune [--all]`.
 
-First semantic flow (runs on the preloaded hot workspace + live in-memory overlay index, refreshed from disk before each call; use `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) for `~54–71 ms` warm wall times instead of `~365–465 ms` managed CLI startup):
+First semantic flow (runs on the preloaded hot workspace + live in-memory overlay index, refreshed from disk before each call; `roscli` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli.exe`, NativeAOT) gives `~54–71 ms` warm wall times and automatically falls back to `roscli-slow` (the full managed CLI) when cold or for lifecycle/help/stdin commands):
 
 ```powershell
-roscli-fast ctx.symbol_context --symbol MyNamespace.MyImpl.Handle --brief true
-roscli-fast ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
-roscli-fast ctx.read_window src/MyProject/File.cs 1 100
-roscli-fast nav.find_references --symbols MyNamespace.TypeA.Foo,MyNamespace.TypeB.Bar --max-results 50
-roscli-fast edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
-roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
+roscli ctx.symbol_context --symbol MyNamespace.MyImpl.Handle --brief true
+roscli ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
+roscli ctx.read_window src/MyProject/File.cs 1 100
+roscli nav.find_references --symbols MyNamespace.TypeA.Foo,MyNamespace.TypeB.Bar --max-results 50
+roscli edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
+roscli diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
 ## Best-Results Playbook (For Agents)
@@ -289,7 +289,7 @@ Example `claude-mcp.json`:
 }
 ```
 
-**CLI vs. MCP trade-off (`0.1.6-preview.33`):** With `--mode slim`, `RoslynSkills.McpServer` projects **12** focused tools (`roslyn_search`, `roslyn_context`, `roslyn_nav_symbol`, `roslyn_nav_references`, `roslyn_nav_invocations`, `roslyn_nav_call_hierarchy`, `roslyn_nav_implementations`, `roslyn_diag_snapshot`, `roslyn_edit_rename`, `roslyn_edit_transaction`, `roslyn_edit_code_fix`, `roslyn_run`) from the single `CommandInputSchemaCatalog` at **`6,016 B` (`~1.5K` tokens/turn)** over a direct persistent `WorkspaceHost` pipe (`4.8–15.6 ms` warm on `CalcDb.slnx`, auto-binding on first workspace call). `--mode full` exposes complete property schemas for all `61` registry commands (`90.5 KB`, `0` parameterized schema-less tools) for backward compatibility. In CLI loops, **`roscli-fast.exe` + `WorkspaceHost` + `roslynskills-tight` skill** (`0` per-turn schema tax, compact JSON on redirected stdout, `~54–71 ms` warm) remains the default; see [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md).
+**CLI vs. MCP trade-off:** With `--mode slim`, `RoslynSkills.McpServer` projects **12** focused tools (`roslyn_search`, `roslyn_context`, `roslyn_nav_symbol`, `roslyn_nav_references`, `roslyn_nav_invocations`, `roslyn_nav_call_hierarchy`, `roslyn_nav_implementations`, `roslyn_diag_snapshot`, `roslyn_edit_rename`, `roslyn_edit_transaction`, `roslyn_edit_code_fix`, `roslyn_run`) from the single `CommandInputSchemaCatalog` at **`~6 KB`** over a direct persistent `WorkspaceHost` pipe (`4.8–15.6 ms` warm on `CalcDb.slnx`, auto-binding on first workspace call), and returns a compact inline parameter cheat-sheet in `InitializeResult.instructions` so agents do not need extra schema-read turns before calling tools. `--mode full` exposes complete property schemas for all `61` registry commands (`90.5 KB`, `0` parameterized schema-less tools) for backward compatibility. In CLI loops, **`roscli` (NativeAOT, falling back to `roscli-slow`) + `WorkspaceHost` + `roslynskills-tight` skill** (`0` per-turn schema tax, compact JSON on redirected stdout, `~54–71 ms` warm) remains the default; see [docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md](docs/ROSLYN_HARNESS_INTEGRATION_REPORT.md).
 
 ## Gemini CLI Compatibility (Early Support)
 

@@ -23,27 +23,27 @@ This skill is optimized for low-churn, "just enough Roslyn" workflows.
 
 - **Hybrid routing ("overlay/text first, compound mindspace second, scoped diag third"):**
   - Use `rg` / `read_file` for non-C# files (`.md`, `.slnx`, `.csproj`, `.json`) and quick slices when no daemon is bound (`~66–116 ms`).
-  - Use `roscli` / `roscli-fast` (`0.1.6-preview.33`) on a bound daemon for C# discovery & edits:
+  - Use `roscli` on a bound daemon for C# discovery & edits (`roscli` is the NativeAOT fast client at `~54–71 ms` warm, falling back automatically to managed `roscli-slow` when cold or for lifecycle/help/stdin):
     - **`ctx.symbol_context --symbol Type.Member`** (1-call mindspace: zero-disk def + `file_sha256` + refs + interface-aware callers + callees + impls + file diag in `~64 ms` CLI / `~14 ms` MCP).
     - **`ctx.search_text --syntax-filter code|declarations|invocations --whole-word true`** (zero-disk overlay trigram/token index, `~58 ms` selective, batched `queries`) and **`ctx.read_window`** (zero-disk single/batched windows + `file_sha256`, `0.2 ms` host).
     - `--symbol` / `--symbols` across `nav.*`, `edit.rename_symbol`, `edit.change_signature`, `nav.call_path` (`--source-symbol`/`--target-symbol`), atomic SHA-256 `edit.transaction` / `edit.batch_exact`, and scoped `diag.get_workspace_snapshot --directory-path`.
-- **Fast daemon workflow (`0.1.6-preview.33`):**
+- **Fast daemon workflow:**
   - Bind the solution once: `roscli workspace.use <MySolution.slnx> --require-solution true` (add `--wait-warmup true` to wait for `warmup_state=complete`), then set `ROSCLI_DAEMON=required`.
-  - Prefer `roscli-fast` (`%LOCALAPPDATA%\RoslynSkills\bin\roscli-fast.exe`) over managed `roscli` for `~54–71 ms` warm queries (vs `~365–465 ms` CLR spawn); redirected stdout emits compact JSON automatically (`--pretty-json` opt-in). Stop only your own daemon (`roscli daemon.stop`) when finished.
-- **Channel choice (CLI vs MCP vs LSP):**
-  - Default to `roscli-fast` / `roscli` + this skill (`0` per-turn schema tax). When using MCP, launch `RoslynSkills.McpServer --mode slim` (`12` descriptor-driven tools including `roslyn_search` + `roslyn_context`, `6,016 B` `tools/list`, `4.8–15.6 ms` warm over a persistent `WorkspaceHost` pipe with auto-bind) rather than `--mode full` (`61` tools, `90.5 KB`).
-  - Prefer `roscli-fast` over C# LSP (`csharp-ls` / `Roslyn LSP`) on multi-project `.slnx` repos: `roscli` fails closed (`--require-workspace true`), resolves `--symbol` directly, captures interface callers (`edges[].implemented_member`), and compiles folder diagnostics in `~104–240 ms`.
+  - Redirected stdout emits compact JSON automatically (`--pretty-json` opt-in). Stop only your own daemon (`roscli daemon.stop`) when finished.
+- **Channel choice (MCP vs CLI vs LSP):**
+  - When `roslynskills` MCP (`--mode slim`, `12` tools, `4.8–15.6 ms` warm over a persistent `WorkspaceHost` pipe with auto-bind) is available, call its tools directly using the parameter cheat-sheet in server `instructions` (or project `AGENTS.md`) without spending an extra turn reading individual schema JSON files; pass `workspace_path` in git worktrees. In shell-only loops, default to `roscli` + this skill (`0` per-turn schema tax).
+  - Prefer `roscli` / `roslynskills` MCP over C# LSP (`csharp-ls` / `Roslyn LSP`) on multi-project `.slnx` repos: `roscli` fails closed (`--require-workspace true`), resolves `--symbol` directly, captures interface callers (`edges[].implemented_member`), and compiles folder diagnostics in `~104–240 ms`.
 - Default to `stable` commands; use `advanced`/`experimental` commands intentionally (`nav.call_hierarchy`, `diag.get_workspace_snapshot`).
 - Keep Roslyn calls sequential per workspace (avoid parallel `dotnet` locks).
 - Prefer `--brief true`, small `--max-results` / `--max-diagnostics`; `nav.call_hierarchy` defaults to `--max-depth 1` (opt in to `--max-depth 2..8` only when needed).
-- Filter `ctx.file_outline` with `--member-name-contains <term> --max-members 20` on large files (hot-routed via `roscli-fast.exe` using the cached `SyntaxTree`).
+- Filter `ctx.file_outline` with `--member-name-contains <term> --max-members 20` on large files (hot-routed via `roscli` using the cached `SyntaxTree`).
 - For project code, require a workspace: add `--workspace-path <.sln|.slnx|.csproj|dir> --require-workspace true`.
 - Prefer `.sln`/`.slnx` for repo-wide or hot-workspace context; use `.csproj` only when intentionally project-scoped.
 - Treat `workspace_context.mode=ad_hoc` as "not safe enough" for refactors.
 - Command output always puts the payload directly in top-level `Data` (whether via daemon or in-process); check `Transport.mode` (`daemon` vs `in_process`) for routing info.
 - If using Claude Code's `Bash` tool (common even on Windows), always run RoslynSkills as `bash scripts/roscli ...` (no backslashes, do not call `scripts\roscli.cmd`).
-- Never claim you used RoslynSkills unless you actually ran `roscli` / `roscli-fast` / `scripts/roscli` commands; otherwise state the fallback explicitly.
-- For high-call loops without `roscli-fast`, use cached published wrappers (`ROSCLI_USE_PUBLISHED=1`); after editing roscli itself, force one refresh (`ROSCLI_REFRESH_PUBLISHED=1`).
+- Never claim you used RoslynSkills unless you actually ran `roscli` / `roscli-slow` / `roslynskills` MCP / `scripts/roscli`; otherwise state the fallback explicitly.
+- For high-call loops without NativeAOT `roscli` on PATH, use cached published wrappers (`ROSCLI_USE_PUBLISHED=1`); after editing roscli itself, force one refresh (`ROSCLI_REFRESH_PUBLISHED=1`).
 
 ## Start (2 commands)
 
@@ -79,12 +79,12 @@ Use `ctx.symbol_context --symbol` first, syntax-filtered `ctx.search_text` / zer
 
 ```powershell
 roscli workspace.use MySolution.slnx --require-solution true
-roscli-fast ctx.symbol_context --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --brief true
-roscli-fast ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
-roscli-fast ctx.read_window src/MyProject/File.cs 1 100
-roscli-fast nav.find_references --symbols MyNamespace.DeferredCatalogCommit.Kind,MyNamespace.SchemaWriter.CreateTable --max-results 50
-roscli-fast edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
-roscli-fast diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
+roscli ctx.symbol_context --symbol MyNamespace.ComSqlDatabase.OpenSchemaWriter --brief true
+roscli ctx.search_text --pattern Execute --whole-word true --syntax-filter declarations
+roscli ctx.read_window src/MyProject/File.cs 1 100
+roscli nav.find_references --symbols MyNamespace.DeferredCatalogCommit.Kind,MyNamespace.SchemaWriter.CreateTable --max-results 50
+roscli edit.rename_symbol --symbol MyNamespace.MyType.OldName --new-name NewName --apply true --require-workspace true
+roscli diag.get_workspace_snapshot --directory-path src/MyProject --brief true --include-diagnostics true --require-workspace true
 ```
 
 Note: `ctx.symbol_context` and `nav.call_hierarchy` resolve incoming callers across implemented interface members (`edges[].implemented_member`), and `ctx.read_window` / `ctx.symbol_context` return `file_sha256` for optimistic locking with `edit.transaction --expected-sha256` / `expected_file_hashes`.
