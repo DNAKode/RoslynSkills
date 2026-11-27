@@ -423,6 +423,7 @@ public static class CommandInputSchemaCatalog
             Bool("include_enclosing_outline", "Include enclosing syntax symbol name (default true)."),
             Int("max_chars", "Maximum characters per window.", min: 200),
             Bool("brief", "Compact output."),
+            Str("workspace_path", "Optional worktree root or .sln/.slnx/.csproj path for multi-worktree daemon routing.", isPath: true),
             Str("workspace_handle", "Optional hot workspace handle for zero-disk SourceText lookup."),
         ]);
 
@@ -456,6 +457,7 @@ public static class CommandInputSchemaCatalog
             Int("max_members", "Maximum member declarations returned.", min: 1),
             Str("type_name_contains", "Case-insensitive type-name substring filter."),
             Str("member_name_contains", "Case-insensitive member-name/signature substring filter."),
+            Str("workspace_path", "Optional worktree root or .sln/.slnx/.csproj path for multi-worktree daemon routing.", isPath: true),
             Str("workspace_handle", "Optional hot workspace handle for cached SyntaxTree lookup."),
         ]);
 
@@ -526,6 +528,7 @@ public static class CommandInputSchemaCatalog
                 Obj("input", "Command input object.", req: true),
             ], req: true),
             Bool("continue_on_error", "Continue remaining queries after an error (default true)."),
+            Str("workspace_path", "Optional worktree root or .sln/.slnx/.csproj path for multi-worktree daemon routing.", isPath: true),
             Str("workspace_handle", "Optional hot workspace handle inherited by sub-queries."),
         ]);
 
@@ -842,6 +845,7 @@ public static class CommandInputSchemaCatalog
         Register("workspace.status",
         [
             Str("workspace_handle", "Loaded workspace handle.", req: true),
+            Str("workspace_path", "Optional worktree root or .sln/.slnx/.csproj path for multi-worktree daemon routing.", isPath: true),
             Bool("wait_warmup", "Wait for background warmup to finish before reporting status."),
             Int("wait_warmup_timeout_ms", "Timeout in ms when wait_warmup=true.", min: 100, max: 600_000),
         ]);
@@ -849,15 +853,20 @@ public static class CommandInputSchemaCatalog
         Register("workspace.refresh",
         [
             Str("workspace_handle", "Loaded workspace handle.", req: true),
+            Str("workspace_path", "Optional worktree root or .sln/.slnx/.csproj path for multi-worktree daemon routing.", isPath: true),
             Str("mode", "Refresh mode: auto, incremental, or reload.", enumValues: ["auto", "incremental", "reload"]),
         ]);
 
         Register("workspace.close",
         [
             Str("workspace_handle", "Loaded workspace handle to close.", req: true),
+            Str("workspace_path", "Optional worktree root or .sln/.slnx/.csproj path for multi-worktree daemon routing.", isPath: true),
         ]);
 
-        Register("workspace.list");
+        Register("workspace.list",
+        [
+            Str("workspace_path", "Optional worktree root or .sln/.slnx/.csproj path for multi-worktree daemon routing.", isPath: true),
+        ]);
 
         // Sessions
         Register("session.open",

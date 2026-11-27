@@ -136,7 +136,7 @@ internal static class Program
 
                             string protocolVersion = ResolveProtocolVersion(@params);
                             string instructions = ActiveMode == McpToolMode.Slim
-                                ? "Roslyn-backed C# navigation, mindspace context, search, diagnostics, and edits (slim mode: 12 tools). Use roslyn_search for syntax-aware overlay search (code/comments/strings/declarations/invocations), roslyn_context for one-call symbol mindspace (definition+refs+callers+impls+diag), roslyn_nav_* with symbol/symbols or file_path/line/column, roslyn_diag_snapshot for multi-project diagnostics, roslyn_edit_* for semantic/atomic edits with SHA-256 preconditions, and roslyn_run for any other RoslynSkills command (ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.status)."
+                                ? "Roslyn-backed C# navigation, mindspace context, search, diagnostics, and edits (slim mode: 12 tools). Pass workspace_path (worktree root or .slnx/.sln) when working in a git worktree outside the default CWD. Use roslyn_search for syntax-aware overlay search (code/comments/strings/declarations/invocations), roslyn_context for one-call symbol mindspace (definition+refs+callers+impls+diag), roslyn_nav_* with symbol/symbols or file_path/line/column, roslyn_diag_snapshot for multi-project diagnostics, roslyn_edit_* for semantic/atomic edits with SHA-256 preconditions, and roslyn_run for any other RoslynSkills command (ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.*, daemon.list, daemon.stop)."
                                 : "Roslyn-backed C# navigation, diagnostics, and edits. Tool names map from command ids via roslyn_<command_id_with_underscores>. Resource template invocation is available via roslyn://command/{commandId}.";
                             await WriteInitializeResponseAsync(output, idElement, protocolVersion, instructions).ConfigureAwait(false);
                             break;
@@ -591,6 +591,15 @@ internal static class Program
             return;
         }
 
+        if (HotCommandRouter.IsDaemonManagementCommand(resolvedCommandId))
+        {
+            CommandEnvelope daemonEnvelope = Router is not null
+                ? await Router.RunDaemonManagementCommandAsync(resolvedCommandId, commandInput, CancellationToken.None).ConfigureAwait(false)
+                : await HotCommandRouter.RunDaemonManagementStandaloneAsync(resolvedCommandId, commandInput, CancellationToken.None).ConfigureAwait(false);
+            await WriteToolEnvelopeResultAsync(output, idElement, daemonEnvelope).ConfigureAwait(false);
+            return;
+        }
+
         string lookupCommandId = string.Equals(resolvedCommandId, "workspace.use", StringComparison.OrdinalIgnoreCase)
             ? "workspace.preload"
             : resolvedCommandId;
@@ -869,8 +878,9 @@ internal static class Program
 
         try
         {
+            JsonElement inProcessInput = HotCommandRouter.ResolveRelativePathsAgainstWorkspace(input);
             Stopwatch validateTimer = Stopwatch.StartNew();
-            IReadOnlyList<CommandError> validationErrors = command.Validate(input);
+            IReadOnlyList<CommandError> validationErrors = command.Validate(inProcessInput);
             validateTimer.Stop();
             if (validationErrors.Count > 0)
             {
@@ -892,7 +902,7 @@ internal static class Program
             }
 
             Stopwatch executeTimer = Stopwatch.StartNew();
-            CommandExecutionResult result = await command.ExecuteAsync(input, CancellationToken.None).ConfigureAwait(false);
+            CommandExecutionResult result = await command.ExecuteAsync(inProcessInput, CancellationToken.None).ConfigureAwait(false);
             executeTimer.Stop();
             totalTimer.Stop();
             return new CommandEnvelope(
@@ -1026,7 +1036,7 @@ internal static class Program
 
         JsonObject runGeneric = new()
         {
-            ["command_id"] = new JsonObject { ["type"] = "string", ["description"] = "ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.*" },
+            ["command_id"] = new JsonObject { ["type"] = "string", ["description"] = "ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.*, daemon.list, daemon.stop" },
             ["input"] = new JsonObject { ["type"] = "object" },
         };
 
@@ -1045,21 +1055,21 @@ internal static class Program
                 "Zero-disk overlay search with AST syntax_filter and batched queries.",
                 readOnly: true,
                 "ctx.search_text",
-                ["pattern", "patterns", "syntax_filter", "whole_word", "mode", "file_path", "roots", "max_results", "brief"],
+                ["pattern", "patterns", "syntax_filter", "whole_word", "mode", "file_path", "roots", "workspace_path", "max_results", "brief"],
                 requiredOverride: []),
             SlimTool(
                 "roslyn_context",
                 "One-call symbol mindspace: def + refs + interface callers + impls + diag.",
                 readOnly: true,
                 "ctx.symbol_context",
-                ["symbol", "file_path", "line", "column", "include_definition", "include_references", "include_callers", "include_callees", "include_implementations", "include_diagnostics", "brief"],
+                ["symbol", "file_path", "line", "column", "workspace_path", "include_definition", "include_references", "include_callers", "include_callees", "include_implementations", "include_diagnostics", "brief"],
                 requiredOverride: []),
             SlimTool(
                 "roslyn_nav_symbol",
                 "Go to definition or find symbol_name in file.",
                 readOnly: true,
                 "nav.go_to_definition",
-                ["symbol", "file_path", "line", "column", "brief"],
+                ["symbol", "file_path", "line", "column", "workspace_path", "brief"],
                 requiredOverride: [],
                 extraProps: static p =>
                 {
@@ -1071,28 +1081,28 @@ internal static class Program
                 "Solution-wide references (single symbol or symbols batch).",
                 readOnly: true,
                 "nav.find_references",
-                ["symbol", "symbols", "file_path", "line", "column", "include_declaration", "max_results"],
+                ["symbol", "symbols", "file_path", "line", "column", "workspace_path", "include_declaration", "max_results"],
                 requiredOverride: []),
             SlimTool(
                 "roslyn_nav_invocations",
                 "Call sites and creations (single symbol or symbols batch).",
                 readOnly: true,
                 "nav.find_invocations",
-                ["symbol", "symbols", "file_path", "line", "column", "brief", "max_results", "include_object_creations"],
+                ["symbol", "symbols", "file_path", "line", "column", "workspace_path", "brief", "max_results", "include_object_creations"],
                 requiredOverride: []),
             SlimTool(
                 "roslyn_nav_call_hierarchy",
                 "Call graph (default max_depth=1; interface callers included).",
                 readOnly: true,
                 "nav.call_hierarchy",
-                ["symbol", "file_path", "line", "column", "direction", "max_depth", "max_nodes", "max_edges", "brief"],
+                ["symbol", "file_path", "line", "column", "workspace_path", "direction", "max_depth", "max_nodes", "max_edges", "brief"],
                 requiredOverride: []),
             SlimTool(
                 "roslyn_nav_implementations",
                 "Implementing types/members and derived interfaces.",
                 readOnly: true,
                 "nav.find_implementations",
-                ["symbol", "file_path", "line", "column", "max_results"],
+                ["symbol", "file_path", "line", "column", "workspace_path", "max_results"],
                 requiredOverride: []),
             SlimTool(
                 "roslyn_diag_snapshot",
@@ -1106,14 +1116,14 @@ internal static class Program
                 "Solution-wide rename by symbol or file/line/col (with XML crefs).",
                 readOnly: false,
                 "edit.rename_symbol",
-                ["symbol", "file_path", "line", "column", "new_name", "apply", "max_diagnostics"],
+                ["symbol", "file_path", "line", "column", "workspace_path", "new_name", "apply", "max_diagnostics"],
                 requiredOverride: ["new_name"]),
             SlimTool(
                 "roslyn_edit_transaction",
                 "Atomic multi-file edits with SHA-256 preconditions and diagnostics.",
                 readOnly: false,
                 "edit.transaction",
-                ["operations", "file_path", "expected_sha256", "expected_file_hashes", "apply", "atomic", "include_diagnostics"],
+                ["operations", "file_path", "workspace_path", "expected_sha256", "expected_file_hashes", "apply", "atomic", "include_diagnostics"],
                 requiredOverride: ["operations"],
                 allowedNested: txSlimNested),
             SlimTool(
@@ -1121,7 +1131,7 @@ internal static class Program
                 "Discover or apply Roslyn CodeFixProvider fixes.",
                 readOnly: false,
                 "edit.apply_code_fix",
-                ["file_path", "diagnostic_id", "line", "column", "fix_title", "apply", "max_diagnostics"],
+                ["file_path", "workspace_path", "diagnostic_id", "line", "column", "fix_title", "apply", "max_diagnostics"],
                 requiredOverride: ["file_path"]),
             SlimRawTool("roslyn_run", "Run any RoslynSkills command by command_id.", readOnly: false, runGeneric, "command_id"),
         };

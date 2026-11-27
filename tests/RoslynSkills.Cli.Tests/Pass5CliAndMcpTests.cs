@@ -232,7 +232,7 @@ public sealed class Pass5CliAndMcpTests
                 }
             }
 
-            // 2. Slim mode: 12 tools within <= 6 KB, auto-binds on roslyn_context, serves roslyn_search & SHA-256 tx.
+            // 2. Slim mode: 12 tools within < 8 KB, auto-binds on roslyn_context, serves roslyn_search & SHA-256 tx.
             using Process slimMcp = StartMcpProcess(mcpDll, root, "--mode", "slim");
             try
             {
@@ -242,7 +242,7 @@ public sealed class Pass5CliAndMcpTests
                 {
                     JsonElement tools = listResp.RootElement.GetProperty("result").GetProperty("tools");
                     Assert.Equal(12, tools.GetArrayLength());
-                    Assert.True(listBytes <= 6144, $"Slim tools/list must be <= 6144 bytes, got {listBytes} bytes.");
+                    Assert.True(listBytes < 8192, $"Slim tools/list must be < 8192 bytes, got {listBytes} bytes.");
                 }
 
                 // First call: roslyn_context auto-binds Demo.slnx and returns symbol mindspace + SHA-256!

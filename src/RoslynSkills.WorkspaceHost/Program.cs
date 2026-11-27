@@ -1457,8 +1457,17 @@ internal static class Program
         {
             if (shouldResolveAlias && !TryGetProperty(input, "workspace_handle", out _))
             {
-                string? alias = GetStringProperty(root, "workspace_alias");
-                if (!string.IsNullOrWhiteSpace(alias) && TryResolveAlias(alias, out string? handle))
+                string? handle = GetStringProperty(root, "workspace_handle");
+                if (string.IsNullOrWhiteSpace(handle))
+                {
+                    string? alias = GetStringProperty(root, "workspace_alias");
+                    if (!string.IsNullOrWhiteSpace(alias))
+                    {
+                        TryResolveAlias(alias, out handle);
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(handle))
                 {
                     Dictionary<string, object?> augmentedInput = new(StringComparer.Ordinal);
                     if (input.ValueKind == JsonValueKind.Object)

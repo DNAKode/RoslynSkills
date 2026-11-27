@@ -1364,7 +1364,7 @@ public sealed class SearchTextCommand : IAgentCommand
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(workspacePath))
+        if (scopes.Count == 0 && !string.IsNullOrWhiteSpace(workspacePath))
         {
             string fullPath = Path.GetFullPath(workspacePath);
             if (File.Exists(fullPath))

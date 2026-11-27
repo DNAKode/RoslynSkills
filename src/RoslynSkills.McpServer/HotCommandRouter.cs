@@ -81,6 +81,91 @@ internal sealed class HotCommandRouter : IAsyncDisposable
     public static bool IsWorkspaceLifecycleCommand(string commandId)
         => commandId is "workspace.use" or "workspace.preload" or "workspace.status" or "workspace.refresh" or "workspace.close" or "workspace.list";
 
+    public static bool IsDaemonManagementCommand(string commandId)
+        => string.Equals(commandId, "daemon.list", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(commandId, "daemon.stop", StringComparison.OrdinalIgnoreCase);
+
+    public async Task<CommandEnvelope> RunDaemonManagementCommandAsync(
+        string commandId,
+        JsonElement input,
+        CancellationToken cancellationToken)
+    {
+        Stopwatch totalTimer = Stopwatch.StartNew();
+        JsonElement normalizedInput = NormalizeInputObject(input);
+
+        if (string.Equals(commandId, "daemon.list", StringComparison.OrdinalIgnoreCase))
+        {
+            CommandEnvelope listResult = await _daemonManager.ListAsync(cancellationToken).ConfigureAwait(false);
+            totalTimer.Stop();
+            return listResult with
+            {
+                Transport = new CommandTransportMetadata(
+                    Mode: "mcp",
+                    Timings: new CommandTransportTimings(TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+            };
+        }
+
+        string repoRoot = ResolveCachedRepoRoot(normalizedInput);
+        if (_sessions.TryRemove(repoRoot, out PersistentRepoSession? existingSession))
+        {
+            await existingSession.DisposeAsync().ConfigureAwait(false);
+        }
+
+        _repoRootCache.Clear();
+        WorkspaceHostDaemonEndpoint endpoint = _daemonManager.GetDefaultEndpoint(repoRoot);
+        CommandEnvelope stopResult = await _daemonManager.StopAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        totalTimer.Stop();
+        return stopResult with
+        {
+            Transport = new CommandTransportMetadata(
+                Mode: "mcp",
+                DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
+                Timings: new CommandTransportTimings(TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+        };
+    }
+
+    public static async Task<CommandEnvelope> RunDaemonManagementStandaloneAsync(
+        string commandId,
+        JsonElement input,
+        CancellationToken cancellationToken)
+    {
+        Stopwatch totalTimer = Stopwatch.StartNew();
+        WorkspaceHostDaemonManager daemonManager = new();
+        JsonElement normalizedInput = NormalizeInputObject(input);
+
+        if (string.Equals(commandId, "daemon.list", StringComparison.OrdinalIgnoreCase))
+        {
+            CommandEnvelope listResult = await daemonManager.ListAsync(cancellationToken).ConfigureAwait(false);
+            totalTimer.Stop();
+            return listResult with
+            {
+                Transport = new CommandTransportMetadata(
+                    Mode: "mcp",
+                    Timings: new CommandTransportTimings(TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+            };
+        }
+
+        string repoRoot = ResolveRepoRootUncached(normalizedInput);
+        WorkspaceHostDaemonEndpoint endpoint = daemonManager.GetDefaultEndpoint(repoRoot);
+        CommandEnvelope stopResult = await daemonManager.StopAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        totalTimer.Stop();
+        return stopResult with
+        {
+            Transport = new CommandTransportMetadata(
+                Mode: "mcp",
+                DaemonEndpoint: WorkspaceHostDaemonManager.FormatEndpoint(endpoint),
+                Timings: new CommandTransportTimings(TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))),
+        };
+    }
+
+    public static JsonElement ResolveRelativePathsAgainstWorkspace(JsonElement input)
+    {
+        string? baseDirectory = ResolveBaseDirectoryFromInput(input);
+        return string.IsNullOrWhiteSpace(baseDirectory)
+            ? input
+            : CliApplication.ResolveRelativePathsForDaemon(input, baseDirectory);
+    }
+
     /// <summary>
     /// Executes <paramref name="command"/> directly against <c>WorkspaceHost</c> over a persistent pipe/socket session
     /// and returns a flat <see cref="CommandEnvelope"/> with <c>transport.mode = "mcp"</c>.
@@ -147,26 +232,165 @@ internal sealed class HotCommandRouter : IAsyncDisposable
 
     private string ResolveCachedRepoRoot(JsonElement input)
     {
-        string? explicitPath = GetOptionalString(input, "workspace_path")
-            ?? GetOptionalString(input, "file_path")
-            ?? GetOptionalString(input, "directory_path")
-            ?? GetOptionalString(input, "source_file_path");
-
-        if (string.IsNullOrWhiteSpace(explicitPath))
+        if (!TryExtractRoutingPath(input, includeWorkspacePath: true, out string? explicitPath, out bool isExplicitRepoRoot))
         {
             // Check if any nested object/array has a path; if not, cache by CurrentDirectory.
             string cwd = Environment.CurrentDirectory;
             if (!HasNestedPathProperty(input))
             {
-                return _repoRootCache.GetOrAdd(cwd, _ => CliApplication.InferDaemonRepoRoot(EmptyObject));
+                return _repoRootCache.GetOrAdd(cwd, _ => RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: null));
             }
 
             return CliApplication.InferDaemonRepoRoot(input);
         }
 
-        string fullPath = Path.GetFullPath(explicitPath);
+        string fullPath = Path.GetFullPath(explicitPath!);
+        if (isExplicitRepoRoot)
+        {
+            return _repoRootCache.GetOrAdd("repo:" + fullPath, _ => RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: fullPath));
+        }
+
         string cacheKey = Directory.Exists(fullPath) ? fullPath : (Path.GetDirectoryName(fullPath) ?? fullPath);
-        return _repoRootCache.GetOrAdd(cacheKey, _ => CliApplication.InferDaemonRepoRoot(input));
+        return _repoRootCache.GetOrAdd(cacheKey, _ => RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: null, startPath: fullPath));
+    }
+
+    private static string ResolveRepoRootUncached(JsonElement input)
+    {
+        if (TryExtractRoutingPath(input, includeWorkspacePath: true, out string? explicitPath, out bool isExplicitRepoRoot))
+        {
+            string fullPath = Path.GetFullPath(explicitPath!);
+            return isExplicitRepoRoot
+                ? RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: fullPath)
+                : RepositoryRootDiscovery.ResolveWorkspaceDaemonRoot(explicitRepoRoot: null, startPath: fullPath);
+        }
+
+        return CliApplication.InferDaemonRepoRoot(input);
+    }
+
+    private static bool TryExtractRoutingPath(
+        JsonElement input,
+        bool includeWorkspacePath,
+        out string? path,
+        out bool isExplicitRepoRoot)
+    {
+        isExplicitRepoRoot = false;
+        if (input.ValueKind != JsonValueKind.Object)
+        {
+            path = null;
+            return false;
+        }
+
+        if (includeWorkspacePath)
+        {
+            string? workspacePath = GetOptionalString(input, "workspace_path");
+            if (!string.IsNullOrWhiteSpace(workspacePath))
+            {
+                path = workspacePath;
+                return true;
+            }
+
+            string? repoRoot = GetOptionalString(input, "repo_root");
+            if (!string.IsNullOrWhiteSpace(repoRoot))
+            {
+                path = repoRoot;
+                isExplicitRepoRoot = true;
+                return true;
+            }
+        }
+
+        string? directPath = GetOptionalString(input, "file_path")
+            ?? GetOptionalString(input, "directory_path")
+            ?? GetOptionalString(input, "source_file_path")
+            ?? GetOptionalString(input, "target_file_path");
+        if (!string.IsNullOrWhiteSpace(directPath))
+        {
+            path = directPath;
+            return true;
+        }
+
+        string? firstRoot = GetFirstNonEmptyArrayString(input, "roots");
+        if (!string.IsNullOrWhiteSpace(firstRoot))
+        {
+            path = firstRoot;
+            return true;
+        }
+
+        string? firstFilePath = GetFirstNonEmptyArrayString(input, "file_paths");
+        if (!string.IsNullOrWhiteSpace(firstFilePath))
+        {
+            path = firstFilePath;
+            return true;
+        }
+
+        string? firstOpPath = GetFirstOperationFilePath(input);
+        if (!string.IsNullOrWhiteSpace(firstOpPath))
+        {
+            path = firstOpPath;
+            return true;
+        }
+
+        path = null;
+        return false;
+    }
+
+    private static string? GetFirstNonEmptyArrayString(JsonElement input, string propertyName)
+    {
+        if (input.ValueKind != JsonValueKind.Object ||
+            !input.TryGetProperty(propertyName, out JsonElement prop) ||
+            prop.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (JsonElement item in prop.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                string? raw = item.GetString();
+                if (!string.IsNullOrWhiteSpace(raw))
+                {
+                    return raw.Trim();
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string? GetFirstOperationFilePath(JsonElement input)
+    {
+        if (input.ValueKind != JsonValueKind.Object ||
+            !input.TryGetProperty("operations", out JsonElement opsProp) ||
+            opsProp.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (JsonElement op in opsProp.EnumerateArray())
+        {
+            string? filePath = GetOptionalString(op, "file_path");
+            if (!string.IsNullOrWhiteSpace(filePath))
+            {
+                return filePath;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ResolveBaseDirectoryFromInput(JsonElement input)
+    {
+        string? explicitScope = GetOptionalString(input, "workspace_path")
+            ?? GetOptionalString(input, "repo_root");
+        if (string.IsNullOrWhiteSpace(explicitScope))
+        {
+            return null;
+        }
+
+        string fullPath = Path.GetFullPath(explicitScope);
+        return Directory.Exists(fullPath)
+            ? fullPath
+            : Path.GetDirectoryName(fullPath);
     }
 
     private static bool HasNestedPathProperty(JsonElement element)
@@ -233,7 +457,8 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             session.RefreshConnectionInfo();
         }
 
-        JsonElement resolvedInput = CliApplication.ResolveRelativePathsForDaemon(input);
+        string? baseDirectory = ResolveBaseDirectoryFromInput(input);
+        JsonElement resolvedInput = CliApplication.ResolveRelativePathsForDaemon(input, baseDirectory);
         string? handle = explicitHandle;
         if (string.IsNullOrWhiteSpace(handle) &&
             normalizedCommandId is "workspace.status" or "workspace.refresh" or "workspace.close")
@@ -245,6 +470,13 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             {
                 handle = record.WorkspaceHandle;
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(handle) &&
+            normalizedCommandId is "workspace.status" or "workspace.refresh" or "workspace.close" &&
+            (resolvedInput.ValueKind != JsonValueKind.Object || !resolvedInput.TryGetProperty("workspace_handle", out _)))
+        {
+            resolvedInput = InjectWorkspaceHandle(resolvedInput, handle);
         }
 
         WorkspaceHostRequest request = new(
@@ -273,6 +505,18 @@ internal sealed class HotCommandRouter : IAsyncDisposable
 
         if (response is null)
         {
+            if (normalizedCommandId is "workspace.status" or "workspace.refresh" or "workspace.close" or "workspace.list" &&
+                string.IsNullOrWhiteSpace(explicitHandle))
+            {
+                totalTimer.Stop();
+                return ErrorEnvelope(
+                    requestedCommandId,
+                    WorkspaceHostProtocol.ErrorCode.DaemonUnavailable,
+                    $"No workspace daemon is running for '{session.RepoRoot}' (endpoint '{WorkspaceHostDaemonManager.FormatEndpoint(endpoint)}').",
+                    endpoint,
+                    totalTimer);
+            }
+
             return null;
         }
 
@@ -606,13 +850,14 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             defaultWorkspacePath is not null ||
             defaultDirectoryPath is not null;
 
+        string? baseDirectory = ResolveBaseDirectoryFromInput(input);
         if (!needsAugment)
         {
-            return CliApplication.ResolveRelativePathsForDaemon(input);
+            return CliApplication.ResolveRelativePathsForDaemon(input, baseDirectory);
         }
 
         // Resolve relative paths first (fast no-op when paths are already absolute), then merge extra fields in one UTF-8 write.
-        JsonElement resolved = CliApplication.ResolveRelativePathsForDaemon(input);
+        JsonElement resolved = CliApplication.ResolveRelativePathsForDaemon(input, baseDirectory);
         ArrayBufferWriter<byte> buffer = new(512);
         using (Utf8JsonWriter writer = new(buffer))
         {
@@ -692,13 +937,14 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             }
         }
 
-        // 4. Nearest .csproj/.vbproj walking up from target file_path or directory_path to repoRoot
-        string? anchorPath = GetOptionalString(input, "file_path")
-            ?? GetOptionalString(input, "directory_path")
-            ?? GetOptionalString(input, "source_file_path");
+        // 4. Nearest .csproj/.vbproj walking up from target file_path, directory_path, roots[0], file_paths[0], or operations[0].file_path to repoRoot
+        TryExtractRoutingPath(input, includeWorkspacePath: false, out string? anchorPath, out _);
         if (!string.IsNullOrWhiteSpace(anchorPath))
         {
-            string fullAnchor = Path.GetFullPath(anchorPath);
+            string? baseDirectory = ResolveBaseDirectoryFromInput(input);
+            string fullAnchor = !string.IsNullOrWhiteSpace(baseDirectory) && !Path.IsPathFullyQualified(anchorPath)
+                ? Path.GetFullPath(anchorPath, baseDirectory)
+                : Path.GetFullPath(anchorPath);
             string? dir = Directory.Exists(fullAnchor) ? fullAnchor : Path.GetDirectoryName(fullAnchor);
             string normalizedRepoRoot = Path.GetFullPath(repoRoot);
             while (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
@@ -811,6 +1057,7 @@ internal sealed class HotCommandRouter : IAsyncDisposable
         {
             aliasStore.Remove(alias);
             session.InvalidateAliasCache();
+            _repoRootCache.Clear();
             return;
         }
 
@@ -839,6 +1086,29 @@ internal sealed class HotCommandRouter : IAsyncDisposable
             LastSeenUtc: DateTimeOffset.UtcNow);
         aliasStore.Upsert(alias, record);
         session.InvalidateAliasCache();
+        _repoRootCache.Clear();
+    }
+
+    private static JsonElement InjectWorkspaceHandle(JsonElement input, string workspaceHandle)
+    {
+        ArrayBufferWriter<byte> buffer = new(256);
+        using (Utf8JsonWriter writer = new(buffer))
+        {
+            writer.WriteStartObject();
+            if (input.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty property in input.EnumerateObject())
+                {
+                    property.WriteTo(writer);
+                }
+            }
+
+            writer.WriteString("workspace_handle"u8, workspaceHandle);
+            writer.WriteEndObject();
+        }
+
+        using JsonDocument doc = JsonDocument.Parse(buffer.WrittenMemory);
+        return doc.RootElement.Clone();
     }
 
     private static CommandEnvelope BuildEnvelopeFromHostResponse(

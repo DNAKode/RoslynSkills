@@ -1404,14 +1404,17 @@ Workflow:
         return true;
     }
 
-    public static JsonElement ResolveRelativePathsForDaemon(JsonElement element)
+    public static JsonElement ResolveRelativePathsForDaemon(JsonElement element, string? baseDirectory = null)
     {
         if (!NeedsDaemonPathTransform(element))
         {
             return element;
         }
 
-        object? transformed = TransformPathsForDaemon(element);
+        string? normalizedBase = string.IsNullOrWhiteSpace(baseDirectory)
+            ? null
+            : Path.GetFullPath(baseDirectory);
+        object? transformed = TransformPathsForDaemon(element, normalizedBase);
         return JsonSerializer.SerializeToElement(transformed);
     }
 
@@ -1489,7 +1492,18 @@ Workflow:
                string.Equals(Path.GetFullPath(normalized), raw, StringComparison.Ordinal);
     }
 
-    private static object? TransformPathsForDaemon(JsonElement element)
+    private static string ResolvePathForDaemon(string raw, string? baseDirectory)
+    {
+        string normalized = NormalizeCliPathValue(raw);
+        if (!string.IsNullOrWhiteSpace(baseDirectory) && !Path.IsPathFullyQualified(normalized))
+        {
+            return Path.GetFullPath(normalized, baseDirectory);
+        }
+
+        return Path.GetFullPath(normalized);
+    }
+
+    private static object? TransformPathsForDaemon(JsonElement element, string? baseDirectory)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
@@ -1502,7 +1516,7 @@ Workflow:
                     string? raw = property.Value.GetString();
                     result[property.Name] = string.IsNullOrWhiteSpace(raw)
                         ? raw
-                        : Path.GetFullPath(NormalizeCliPathValue(raw));
+                        : ResolvePathForDaemon(raw, baseDirectory);
                 }
                 else if (string.Equals(property.Name, "expected_file_hashes", StringComparison.Ordinal) &&
                          property.Value.ValueKind == JsonValueKind.Object)
@@ -1512,7 +1526,7 @@ Workflow:
                     {
                         string normalizedKey = string.IsNullOrWhiteSpace(hashEntry.Name)
                             ? hashEntry.Name
-                            : Path.GetFullPath(NormalizeCliPathValue(hashEntry.Name));
+                            : ResolvePathForDaemon(hashEntry.Name, baseDirectory);
                         normalizedHashes[normalizedKey] = hashEntry.Value.Clone();
                     }
 
@@ -1530,7 +1544,7 @@ Workflow:
                             string? raw = item.GetString();
                             roots.Add(string.IsNullOrWhiteSpace(raw)
                                 ? raw
-                                : Path.GetFullPath(NormalizeCliPathValue(raw)));
+                                : ResolvePathForDaemon(raw, baseDirectory));
                         }
                         else
                         {
@@ -1542,7 +1556,7 @@ Workflow:
                 }
                 else
                 {
-                    result[property.Name] = TransformPathsForDaemon(property.Value);
+                    result[property.Name] = TransformPathsForDaemon(property.Value, baseDirectory);
                 }
             }
 
@@ -1554,7 +1568,7 @@ Workflow:
             List<object?> items = new();
             foreach (JsonElement item in element.EnumerateArray())
             {
-                items.Add(TransformPathsForDaemon(item));
+                items.Add(TransformPathsForDaemon(item, baseDirectory));
             }
 
             return items;
@@ -2174,6 +2188,13 @@ Workflow:
                 return true;
             }
 
+            if (TryGetString(element, "repo_root", out string repoRoot) &&
+                !string.IsNullOrWhiteSpace(repoRoot))
+            {
+                targetPath = repoRoot;
+                return true;
+            }
+
             if (TryGetString(element, "file_path", out string filePath) &&
                 !string.IsNullOrWhiteSpace(filePath))
             {
@@ -2192,6 +2213,25 @@ Workflow:
                 !string.IsNullOrWhiteSpace(sourceFilePath))
             {
                 targetPath = sourceFilePath;
+                return true;
+            }
+
+            if (TryGetString(element, "target_file_path", out string targetFilePath) &&
+                !string.IsNullOrWhiteSpace(targetFilePath))
+            {
+                targetPath = targetFilePath;
+                return true;
+            }
+
+            if (TryGetFirstStringArrayElement(element, "roots", out string rootPath))
+            {
+                targetPath = rootPath;
+                return true;
+            }
+
+            if (TryGetFirstStringArrayElement(element, "file_paths", out string firstFilePath))
+            {
+                targetPath = firstFilePath;
                 return true;
             }
 
@@ -2215,6 +2255,29 @@ Workflow:
         }
 
         targetPath = string.Empty;
+        return false;
+    }
+
+    private static bool TryGetFirstStringArrayElement(JsonElement obj, string propertyName, out string value)
+    {
+        if (obj.TryGetProperty(propertyName, out JsonElement prop) &&
+            prop.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in prop.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    string? raw = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        value = raw.Trim();
+                        return true;
+                    }
+                }
+            }
+        }
+
+        value = string.Empty;
         return false;
     }
 
