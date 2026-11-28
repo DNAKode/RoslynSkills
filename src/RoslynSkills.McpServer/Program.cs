@@ -136,7 +136,7 @@ internal static class Program
 
                             string protocolVersion = ResolveProtocolVersion(@params);
                             string instructions = ActiveMode == McpToolMode.Slim
-                                ? "Roslyn-backed C# navigation, mindspace context, search, diagnostics, and edits (slim mode: 12 tools). Auto-binds a warm WorkspaceHost daemon; in git worktrees ALWAYS pass workspace_path (worktree root or .slnx/.sln). Call directly without reading schema JSON files unless rejected. Cheat-sheet: roslyn_context({symbol|file_path,line,column, workspace_path?, brief?}); roslyn_search({pattern, queries?, workspace_path?, syntax_filter?: code|declarations|invocations|identifiers|comments|strings, whole_word?, max_results?, brief?}); roslyn_diag_snapshot({directory_path?, file_paths?, workspace_path?, include_diagnostics?, severity_filter?, brief?, require_workspace?}); roslyn_nav_symbol({symbol|file_path,line,column, symbol_name?, workspace_path?}); roslyn_nav_references({symbol|symbols|file_path,line,column, workspace_path?, max_results?}); roslyn_nav_invocations({symbol|symbols|file_path,line,column, workspace_path?, brief?, max_results?}); roslyn_nav_call_hierarchy({symbol|file_path,line,column, workspace_path?, direction?: incoming|outgoing|both, max_depth?, brief?}); roslyn_nav_implementations({symbol|file_path,line,column, workspace_path?, max_results?}); roslyn_edit_rename({symbol|file_path,line,column, new_name, apply?, workspace_path?}); roslyn_edit_transaction({operations, file_path?, expected_sha256?, expected_file_hashes?, apply?, atomic?, include_diagnostics?, workspace_path?}); roslyn_edit_code_fix({file_path, diagnostic_id?, line?, column?, fix_title?, apply?, workspace_path?}); roslyn_run({command_id, input}) for ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.*, daemon.list, daemon.stop."
+                                ? "Roslyn-backed C# navigation, mindspace context, search, diagnostics, and edits (slim mode: 12 tools). Auto-binds a warm WorkspaceHost daemon; in git worktrees ALWAYS pass workspace_path (worktree root or .slnx/.sln). Call directly without reading schema JSON files unless rejected. Cheat-sheet: roslyn_context({symbol|(file_path,line,column), workspace_path?, brief?}); roslyn_search({pattern|patterns?, mode?: literal|regex, syntax_filter?: code|declarations|invocations|identifiers|comments|strings, whole_word?, file_path?, roots?, workspace_path?, max_results?, brief?}); roslyn_diag_snapshot({directory_path?, file_paths?, workspace_path?, include_diagnostics?, severity_filter?: [\"Error\"|\"Warning\"], brief?, require_workspace?}); roslyn_nav_symbol({symbol|(file_path,line,column)|(file_path,symbol_name), workspace_path?}); roslyn_nav_references({symbol|symbols|(file_path,line,column), workspace_path?, max_results?}); roslyn_nav_invocations({symbol|symbols|(file_path,line,column), workspace_path?, brief?, max_results?}); roslyn_nav_call_hierarchy({symbol|(file_path,line,column), workspace_path?, direction?: incoming|outgoing|both, max_depth?, brief?}); roslyn_nav_implementations({symbol|(file_path,line,column), workspace_path?, max_results?}); roslyn_edit_rename({symbol|(file_path,line,column), new_name, apply?, workspace_path?}); roslyn_edit_transaction({operations, file_path?, expected_sha256?, expected_file_hashes?, apply?, atomic?, include_diagnostics?, workspace_path?}); roslyn_edit_code_fix({file_path, diagnostic_id?, line?, column?, fix_title?, apply?, workspace_path?}); roslyn_run({command_id, input}) for ctx.read_window, ctx.file_outline, edit.change_signature, nav.call_path, analyze.impact_slice, query.batch, workspace.*, daemon.list, daemon.stop."
                                 : "Roslyn-backed C# navigation, diagnostics, and edits. Tool names map from command ids via roslyn_<command_id_with_underscores>. Resource template invocation is available via roslyn://command/{commandId}.";
                             await WriteInitializeResponseAsync(output, idElement, protocolVersion, instructions).ConfigureAwait(false);
                             break;
@@ -625,7 +625,8 @@ internal static class Program
 
     private static async Task WriteToolEnvelopeResultAsync(Stream output, JsonElement idElement, CommandEnvelope envelope)
     {
-        string resultText = BuildToolResultText(envelope);
+        // Emit the full JSON envelope in content[0].text for MCP clients that ignore structuredContent.
+        string resultText = JsonSerializer.Serialize(envelope, JsonOptions);
         await WriteUtf8MessageAsync(output, writer =>
         {
             writer.WriteStartObject();
@@ -942,26 +943,6 @@ internal static class Program
                     Timings: new CommandTransportTimings(
                         TotalMs: Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3))));
         }
-    }
-
-    private static string BuildToolResultText(CommandEnvelope envelope)
-    {
-        if (!string.IsNullOrWhiteSpace(envelope.Summary))
-        {
-            return $"{envelope.CommandId}: {envelope.Summary}";
-        }
-
-        if (envelope.Ok)
-        {
-            return $"{envelope.CommandId}: ok";
-        }
-
-        if (envelope.Errors.Count > 0)
-        {
-            return $"{envelope.CommandId}: {envelope.Errors[0].Code} - {envelope.Errors[0].Message}";
-        }
-
-        return $"{envelope.CommandId}: failed";
     }
 
     private static JsonArray BuildSlimToolList()

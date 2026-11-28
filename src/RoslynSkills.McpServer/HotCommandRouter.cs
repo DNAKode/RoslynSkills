@@ -547,8 +547,12 @@ internal sealed class HotCommandRouter : IAsyncDisposable
 
         (bool hasBinding, string? boundAlias, string? boundHandle, string? boundWorkspacePath) = ResolveBinding(session, input, alias);
 
-        // If no daemon/alias is bound yet, auto-bind on the first semantic workspace-scoped call when a solution/project exists.
-        bool canAutoBind = !command.Descriptor.HotWorkspaceOptional && AutoBindEnabled;
+        // If no daemon/alias is bound yet, auto-bind on the first semantic workspace-scoped call when a solution/project exists,
+        // or on ctx.search_text when workspace_path is explicitly provided.
+        bool canAutoBind = AutoBindEnabled &&
+                           (!command.Descriptor.HotWorkspaceOptional ||
+                            (string.Equals(commandId, "ctx.search_text", StringComparison.Ordinal) &&
+                             HasNonEmptyString(input, "workspace_path")));
         if (!hasBinding || !session.HasLiveConnectionOrManifest())
         {
             if (canAutoBind)

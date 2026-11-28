@@ -261,6 +261,12 @@ public sealed class Pass5CliAndMcpTests
                     serviceSha = data.GetProperty("symbol").GetProperty("file_sha256").GetString()!;
                     Assert.Equal(64, serviceSha.Length);
                     Assert.Contains("Middle", data.GetProperty("callers").GetRawText(), StringComparison.Ordinal);
+
+                    string textJson = ctxResp.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+                    using JsonDocument textDoc = JsonDocument.Parse(textJson);
+                    Assert.True(textDoc.RootElement.GetProperty("ok").GetBoolean(), textJson);
+                    Assert.Equal("ctx.symbol_context", textDoc.RootElement.GetProperty("commandId").GetString());
+                    Assert.Equal(serviceSha, textDoc.RootElement.GetProperty("data").GetProperty("symbol").GetProperty("file_sha256").GetString());
                 }
 
                 // Second call: roslyn_search uses warm overlay index with syntax_filter=declarations.
@@ -275,6 +281,14 @@ public sealed class Pass5CliAndMcpTests
                     JsonElement data = structured.GetProperty("data");
                     Assert.Equal("workspace_overlay_index", data.GetProperty("analysis_scope").GetProperty("text_source").GetString());
                     Assert.True(data.GetProperty("total_matches").GetInt32() >= 1);
+
+                    string textJson = searchResp.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+                    using JsonDocument textDoc = JsonDocument.Parse(textJson);
+                    Assert.True(textDoc.RootElement.GetProperty("ok").GetBoolean(), textJson);
+                    Assert.Equal("ctx.search_text", textDoc.RootElement.GetProperty("commandId").GetString());
+                    Assert.Equal(
+                        data.GetProperty("total_matches").GetInt32(),
+                        textDoc.RootElement.GetProperty("data").GetProperty("total_matches").GetInt32());
                 }
 
                 // Third call: roslyn_edit_rename by --symbol (dry-run).
@@ -346,6 +360,12 @@ public sealed class Pass5CliAndMcpTests
                     JsonElement data = structured.GetProperty("data");
                     Assert.Equal("workspace_overlay_index", data.GetProperty("text_source").GetString());
                     Assert.Contains("return 42;", data.GetProperty("content").GetString());
+
+                    string textJson = readResp.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+                    using JsonDocument textDoc = JsonDocument.Parse(textJson);
+                    Assert.True(textDoc.RootElement.GetProperty("ok").GetBoolean(), textJson);
+                    Assert.Equal("ctx.read_window", textDoc.RootElement.GetProperty("commandId").GetString());
+                    Assert.Contains("return 42;", textDoc.RootElement.GetProperty("data").GetProperty("content").GetString());
                 }
             }
             finally

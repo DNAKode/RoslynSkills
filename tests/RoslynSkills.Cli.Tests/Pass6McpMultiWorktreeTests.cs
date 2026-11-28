@@ -234,6 +234,12 @@ public sealed class Pass6McpMultiWorktreeTests
                     Assert.Equal(endpointB, structured.GetProperty("transport").GetProperty("daemon_endpoint").GetString());
                     Assert.Equal(1, structured.GetProperty("data").GetProperty("files_scanned").GetInt32());
                     Assert.Equal(1, structured.GetProperty("data").GetProperty("analysis_scope").GetProperty("resolved_scope_count").GetInt32());
+
+                    string textJson = searchScopedB.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+                    using JsonDocument textDoc = JsonDocument.Parse(textJson);
+                    Assert.True(textDoc.RootElement.GetProperty("ok").GetBoolean(), textJson);
+                    Assert.Equal(endpointB, textDoc.RootElement.GetProperty("transport").GetProperty("daemon_endpoint").GetString());
+                    Assert.Equal(1, textDoc.RootElement.GetProperty("data").GetProperty("files_scanned").GetInt32());
                 }
 
                 // 5. roslyn_edit_transaction routed solely via operations[0].file_path -> repoA vs wtB.
@@ -423,6 +429,83 @@ public sealed class Pass6McpMultiWorktreeTests
             await StopDaemonSafeAsync(wtB);
             await StopDaemonSafeAsync(repoA);
             TryCleanupTempGitRoot(repoA, wtB, tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task McpServer_SlimMode_RoslynSearchFirstWithWorkspacePath_AutoBindsDaemonAndReturnsJsonContent()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"roslynskills-p6-search-autobind-{Guid.NewGuid():N}");
+        string repoRoot = Path.Combine(tempRoot, "repo");
+        string neutralCwd = Path.Combine(tempRoot, "neutral-cwd");
+        Directory.CreateDirectory(repoRoot);
+        Directory.CreateDirectory(neutralCwd);
+        string mcpDll = ResolveSiblingDll("RoslynSkills.McpServer", "RoslynSkills.McpServer.dll");
+
+        try
+        {
+            await CreateAndCommitSampleRepoAsync(repoRoot, "SearchAutoBindMarker", 303);
+
+            using Process slimMcp = StartMcpProcess(mcpDll, neutralCwd, "--mode", "slim");
+            try
+            {
+                using (await SendMcpAsync(slimMcp, 1, "initialize", new { protocolVersion = "2025-06-18" })) { }
+
+                // Calling roslyn_search FIRST with explicit workspace_path must auto-bind the daemon
+                // and emit the full JSON envelope in both content[0].text and structuredContent.
+                using (JsonDocument searchResp = await SendMcpAsync(slimMcp, 2, "tools/call", new
+                {
+                    name = "roslyn_search",
+                    arguments = new
+                    {
+                        pattern = "SearchAutoBindMarker",
+                        workspace_path = repoRoot,
+                        syntax_filter = "strings",
+                    },
+                }, timeoutSeconds: 180))
+                {
+                    JsonElement result = searchResp.RootElement.GetProperty("result");
+                    JsonElement structured = result.GetProperty("structuredContent");
+                    Assert.True(structured.GetProperty("ok").GetBoolean(), searchResp.RootElement.GetRawText());
+                    Assert.Equal("ctx.search_text", structured.GetProperty("commandId").GetString());
+                    Assert.Equal("mcp", structured.GetProperty("transport").GetProperty("mode").GetString());
+                    Assert.False(string.IsNullOrWhiteSpace(structured.GetProperty("transport").GetProperty("daemon_endpoint").GetString()));
+                    Assert.Equal("workspace_overlay_index", structured.GetProperty("data").GetProperty("analysis_scope").GetProperty("text_source").GetString());
+                    Assert.True(structured.GetProperty("data").GetProperty("total_matches").GetInt32() >= 1);
+
+                    string textJson = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+                    using JsonDocument textDoc = JsonDocument.Parse(textJson);
+                    JsonElement textRoot = textDoc.RootElement;
+                    Assert.True(textRoot.GetProperty("ok").GetBoolean(), textJson);
+                    Assert.Equal("ctx.search_text", textRoot.GetProperty("commandId").GetString());
+                    Assert.Equal(
+                        structured.GetProperty("transport").GetProperty("daemon_endpoint").GetString(),
+                        textRoot.GetProperty("transport").GetProperty("daemon_endpoint").GetString());
+                    Assert.Equal(
+                        structured.GetProperty("data").GetProperty("total_matches").GetInt32(),
+                        textRoot.GetProperty("data").GetProperty("total_matches").GetInt32());
+                }
+
+                using (JsonDocument stopResp = await SendMcpAsync(slimMcp, 3, "tools/call", new
+                {
+                    name = "roslyn_run",
+                    arguments = new { command_id = "daemon.stop", input = new { workspace_path = repoRoot } },
+                }))
+                {
+                    JsonElement structured = stopResp.RootElement.GetProperty("result").GetProperty("structuredContent");
+                    Assert.True(structured.GetProperty("ok").GetBoolean(), stopResp.RootElement.GetRawText());
+                    Assert.True(structured.GetProperty("data").GetProperty("stopped").GetBoolean());
+                }
+            }
+            finally
+            {
+                TryKill(slimMcp);
+            }
+        }
+        finally
+        {
+            await StopDaemonSafeAsync(repoRoot);
+            TryCleanupTempGitRoot(repoRoot, repoRoot, tempRoot);
         }
     }
 
