@@ -807,4 +807,37 @@ public sealed class Pass5CommandsTests
             JsonSerializer.SerializeToElement(new { workspace_handle = workspaceHandle }),
             CancellationToken.None);
     }
+
+    [Fact]
+    public async Task SearchText_ExplicitGeneratedFilePath_ScansNamedFile_WhileDirectoryScanSkipsByDefault()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"roslynskills-p5-gcs-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string genPath = Path.Combine(root, "Dao.g.cs");
+            await File.WriteAllTextAsync(genPath, "public static class Gen { public const int FieldSizeMarker = 1; }\n");
+
+            SearchTextCommand search = new();
+            JsonElement dirData = await ExecuteSearchAsync(search, new
+            {
+                pattern = "FieldSizeMarker",
+                roots = new[] { root },
+            });
+            Assert.Equal(0, dirData.GetProperty("files_scanned").GetInt32());
+            Assert.Equal(0, dirData.GetProperty("total_matches").GetInt32());
+
+            JsonElement fileData = await ExecuteSearchAsync(search, new
+            {
+                pattern = "FieldSizeMarker",
+                file_path = genPath,
+            });
+            Assert.Equal(1, fileData.GetProperty("files_scanned").GetInt32());
+            Assert.Equal(1, fileData.GetProperty("total_matches").GetInt32());
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
 }

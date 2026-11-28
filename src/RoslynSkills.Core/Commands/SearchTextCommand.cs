@@ -388,7 +388,7 @@ public sealed class SearchTextCommand : IAgentCommand
                     break;
                 }
 
-                if (!includeGenerated && CommandFileFilters.IsGeneratedPath(fullPath))
+                if (!scope.is_file && !includeGenerated && CommandFileFilters.IsGeneratedPath(fullPath))
                 {
                     continue;
                 }
